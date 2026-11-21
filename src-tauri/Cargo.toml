@@ -1,6 +1,6 @@
 [package]
 name = "pm4-studio"
-version = "0.1.0"
+version = "0.2.0"
 description = "Reader/writer studio for the CYBDZKJ-BSJ / TCC-TSY-TBY (NFC-PM4) USB RFID reader"
 authors = ["Adrian Bonpin"]
 edition = "2021"
