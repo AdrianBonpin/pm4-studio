@@ -153,6 +153,16 @@ impl Dev {
     /// 57 bytes are split across as many 64-byte reports as needed, which is how
     /// the 1328-byte NTAG write payload gets on the wire.
     fn send(&mut self, cmd: u16, payload: &[u8]) -> Result<(), String> {
+        self.send_full(cmd, payload, false, 5)
+    }
+
+    fn send_full(
+        &mut self,
+        cmd: u16,
+        payload: &[u8],
+        full_checksum: bool,
+        gap_ms: u64,
+    ) -> Result<(), String> {
         let mut frame = Vec::with_capacity(5 + payload.len() + 2);
         frame.push(MAGIC);
         frame.push((cmd >> 8) as u8);
@@ -160,7 +170,12 @@ impl Dev {
         frame.push(((payload.len() >> 8) & 0xFF) as u8);
         frame.push((payload.len() & 0xFF) as u8);
         frame.extend_from_slice(payload);
-        let (c0, c1) = xor_checksum(payload, Some(payload.len() & 0xFF));
+        let ck_len = if full_checksum {
+            payload.len()
+        } else {
+            payload.len() & 0xFF
+        };
+        let (c0, c1) = xor_checksum(payload, Some(ck_len));
         frame.push(c0);
         frame.push(c1);
 
@@ -190,8 +205,8 @@ impl Dev {
                 .write(&buf)
                 .map_err(|e| format!("USB write failed on report {i}: {e}"))?;
             self.reports_out += 1;
-            if frame.len() > REPORT_LEN {
-                sleep(Duration::from_millis(5));
+            if frame.len() > REPORT_LEN && gap_ms > 0 {
+                sleep(Duration::from_millis(gap_ms));
             }
         }
         Ok(())
@@ -324,14 +339,19 @@ fn cmd_info(d: &mut Dev) -> Result<(), String> {
 }
 
 /// `0x0083` then `0x0081`. Returns (tag_type, read_token, pages).
-fn info_and_read(d: &mut Dev, uid: Option<&[u8]>) -> Result<Option<(u32, Vec<u8>, Vec<(u8, u8, Vec<u8>)>)>, String> {
-    let payload = [0x01u8, 0x01, 0x00, 0x00, 0x00, 0x00];
+fn info_and_read_with(
+    d: &mut Dev,
+    uid: Option<&[u8]>,
+    info_arg: Option<[u8; 6]>,
+) -> Result<Option<(u32, Vec<u8>, Vec<(u8, u8, Vec<u8>)>, Vec<u8>, Vec<u8>)>, String> {
+    let payload = info_arg.unwrap_or([0x01u8, 0x01, 0x00, 0x00, 0x00, 0x00]);
     d.send(CMD_NTAG_INFO, &payload)?;
     let info_frames = d.collect(5_500, &|f| {
         f.cmd == CMD_NTAG_INFO && f.payload.len() >= 0x40 && f.checksum_ok
     })?;
     let mut tag_type = None;
     let mut token = None;
+    let mut info_payload = Vec::new();
     for f in &info_frames {
         if f.cmd == CMD_NTAG_INFO && f.payload.len() >= 0x40 && f.checksum_ok {
             let status = u32::from_le_bytes([f.payload[0], f.payload[1], f.payload[2], f.payload[3]]);
@@ -340,6 +360,7 @@ fn info_and_read(d: &mut Dev, uid: Option<&[u8]>) -> Result<Option<(u32, Vec<u8>
             if status == 4 {
                 tag_type = Some(kind);
                 token = Some(f.payload[0x38..0x40].to_vec());
+                info_payload = f.payload.clone();
             }
         }
     }
@@ -375,32 +396,67 @@ fn info_and_read(d: &mut Dev, uid: Option<&[u8]>) -> Result<Option<(u32, Vec<u8>
             (5 + dump.len() + 2).div_ceil(REPORT_LEN),
             u32::from_le_bytes([dump[0], dump[1], dump[2], dump[3]])
         );
-        for page in [0u8, 1, 2, 3, 4, 5] {
-            let off = 4 + page as usize * 4;
-            if dump.len() >= off + 4 {
-                println!(
-                    "  dump page {page:>2}: {}",
-                    hex(&dump[off..off + 4])
-                );
+        // Page table. The body is status(4) + 0x400 page data + 0x100 page
+        // states, so page N data is dump[4 + N*4 .. 8 + N*4].
+        let data_pages = (dump.len().saturating_sub(4) / 4).min(0x100);
+        let states: Option<&[u8]> = if dump.len() >= 0x404 + 0x100 {
+            Some(&dump[0x404..0x504])
+        } else {
+            None
+        };
+        println!("  page table ({data_pages} pages, states {})", if states.is_some() { "present" } else { "absent" });
+        for page in 0..data_pages {
+            let off = 4 + page * 4;
+            let d = &dump[off..off + 4];
+            let st = states.map(|s| s[page]).unwrap_or(0);
+            let interesting = d.iter().any(|&b| b != 0) || st != 0 || page < 12;
+            if interesting {
+                println!("    page {page:>3}: {}  state={st}", hex(d));
             }
         }
-        // Independent cross-checks that do not depend on the write path.
+        let nonempty = (0..data_pages)
+            .filter(|&p| dump[4 + p * 4..8 + p * 4].iter().any(|&b| b != 0))
+            .count();
+        println!("  non-empty pages: {nonempty}");
+
+        // Independent cross-check, using the 7-byte UID the 0x0069 poll returned
+        // and the ISO14443-A cascade BCC rules.
         if let Some(u) = uid {
-            let p0 = &dump[4..8];
-            let bcc0 = 0x88 ^ u[0] ^ u[1] ^ u[2] ^ u[3];
             println!("\n  -- cross-check against the 0x0069 poll UID --");
-            println!("  poll UID      : {}", hex(u));
-            println!("  dump page 0   : {}", hex(p0));
-            let uid_match = p0[0] == u[0] && p0[1] == u[1] && p0[2] == u[2] && p0[3] == bcc0;
-            println!(
-                "  page0[0..3]==UID[0..3] && page0[3]==BCC0(0x{bcc0:02X}) : {}",
-                if uid_match { "MATCH" } else { "MISMATCH" }
-            );
+            println!("  poll UID ({} bytes) : {}", u.len(), hex(u));
+            println!("  dump page 0 : {}", hex(&dump[4..8]));
+            println!("  dump page 1 : {}", hex(&dump[8..12]));
+            println!("  dump page 2 : {}", hex(&dump[12..16]));
+            if u.len() >= 7 {
+                let bcc0 = 0x88 ^ u[0] ^ u[1] ^ u[2];
+                let bcc1 = u[3] ^ u[4] ^ u[5] ^ u[6];
+                let p0 = &dump[4..8];
+                let p1 = &dump[8..12];
+                let p2 = &dump[12..16];
+                let uid_ok = p0[0..3] == u[0..3] && p1[0..4] == u[3..7];
+                println!(
+                    "  UID0..UID2 == page0[0..3] && UID3..UID6 == page1[0..4] : {}",
+                    if uid_ok { "MATCH" } else { "MISMATCH" }
+                );
+                println!(
+                    "  page0[3] == BCC0 (0x88^UID0^UID1^UID2 = 0x{bcc0:02X}) : {}",
+                    if p0[3] == bcc0 { "MATCH" } else { "MISMATCH" }
+                );
+                println!(
+                    "  page2[0] == BCC1 (UID3^UID4^UID5^UID6 = 0x{bcc1:02X}) : {}",
+                    if p2[0] == bcc1 { "MATCH" } else { "MISMATCH" }
+                );
+            }
         }
         let cc = &dump[4 + 3 * 4..4 + 3 * 4 + 4];
         println!("\n  -- cross-check against the NFC Forum Type 2 CC --");
         println!("  dump page 3 (CC): {}  magic 0xE1={}  version 0x10={}  size 0x{:02X}",
             hex(cc), cc[0] == 0xE1, cc[1] == 0x10, cc[2]);
+        if cc[0] == 0xE1 {
+            let user_bytes = cc[2] as usize * 8;
+            println!("  user memory per CC: {user_bytes} bytes ({} pages from page 4)",
+                user_bytes / 4);
+        }
     }
     if !pages.is_empty() {
         println!("  {} streaming 0x0085 page frame(s)", pages.len());
@@ -412,7 +468,20 @@ fn info_and_read(d: &mut Dev, uid: Option<&[u8]>) -> Result<Option<(u32, Vec<u8>
             }
         }
     }
-    Ok(Some((tag_type, token, pages)))
+    Ok(Some((
+        tag_type,
+        token,
+        pages,
+        final_dump.unwrap_or_default(),
+        info_payload,
+    )))
+}
+
+fn info_and_read(
+    d: &mut Dev,
+    uid: Option<&[u8]>,
+) -> Result<Option<(u32, Vec<u8>, Vec<(u8, u8, Vec<u8>)>, Vec<u8>, Vec<u8>)>, String> {
+    info_and_read_with(d, uid, None)
 }
 
 /// Poll `0x0069` until a 13.56 MHz tag latches or the deadline passes. Prints
@@ -521,7 +590,8 @@ fn cmd_read(d: &mut Dev) -> Result<(), String> {
         .find(|f| f.cmd == CMD_HF_POLL && f.payload.len() >= 6)
         .and_then(|f| {
             if f.payload[0] == 0x01 {
-                Some(f.payload[2..6].to_vec())
+                // 0x0069 carries the full 7-byte UID: payload[2..9].
+                Some(f.payload[2..9.min(f.payload.len())].to_vec())
             } else {
                 None
             }
@@ -537,59 +607,115 @@ fn cmd_read(d: &mut Dev) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_write(d: &mut Dev, page: u8, data: [u8; 4]) -> Result<(), String> {
-    println!("== NTAG write (0x0082) — DESTRUCTIVE ==");
-    println!("  target page {page}, bytes {}", hex(&data));
-    wake(d)?;
+fn poll_uid(d: &mut Dev) -> Result<Option<Vec<u8>>, String> {
     d.send(CMD_HF_POLL, &[])?;
-    let uid = d
+    Ok(d
         .collect(900, &|f| f.cmd == CMD_HF_POLL)?
         .into_iter()
         .find(|f| f.cmd == CMD_HF_POLL && f.payload.len() >= 6)
         .and_then(|f| {
             if f.payload[0] == 0x01 {
-                Some(f.payload[2..6].to_vec())
+                // 0x0069 carries the full 7-byte UID: payload[2..9].
+                Some(f.payload[2..9.min(f.payload.len())].to_vec())
             } else {
                 None
             }
-        });
+        }))
+}
 
-    let (tag_type, token, pages) = match info_and_read(d, uid.as_deref())? {
-        Some(v) => v,
-        None => return Err("could not read the tag, so refusing to write blind".into()),
-    };
-    if page < 4 {
-        return Err(format!(
-            "page {page} is not a user page (pages 0-3 are UID/static lock/CC); refusing"
-        ));
+fn page_of(dump: &[u8], page: u8) -> Option<Vec<u8>> {
+    let off = 4 + page as usize * 4;
+    if dump.len() >= off + 4 {
+        Some(dump[off..off + 4].to_vec())
+    } else {
+        None
     }
-    let before: Vec<u8> = pages
-        .iter()
-        .find(|(p, state, _)| *p == page && *state == 1)
-        .map(|(_, _, d)| d.clone())
-        .unwrap_or_default();
-    println!("  page {page} before write: {}", if before.is_empty() { "(not streamed; see dump above)".to_string() } else { hex(&before) });
-    if before == data {
-        return Err("the page already holds those bytes — refusing a pointless write; use another value".into());
-    }
+}
 
-    // 1328-byte payload: token | tag_type | flag | 0x400 page data | 0x100 page states.
+/// The bytes from page 0 to page 11 — UID, CC and the whole NDEF TLV of the tag
+/// that was on this Reader. Used to prove a write to a free page touched nothing
+/// else.
+fn head_of(dump: &[u8]) -> Vec<u8> {
+    let n = 4 + 12 * 4;
+    if dump.len() >= n {
+        dump[4..n].to_vec()
+    } else {
+        Vec::new()
+    }
+}
+
+/// One `0x0082` write of a single page, with the tag's whole current image in the
+/// data table so that no other page can be changed by accident. Only the target
+/// page differs from what was read, and only the target page is marked `2`
+/// ("write this page") in the state table.
+#[derive(Clone)]
+struct WriteVariant {
+    /// Flag dword at payload 12..16.
+    flag: u32,
+    /// Page-state byte written for the target page.
+    state: u8,
+    /// Settle time after the preceding read before the write frame goes out.
+    delay_ms: u64,
+    /// Copy these 32 bytes from the info reply into payload 0x10..0x30, when set.
+    echo_block: Option<usize>,
+    /// Checksum over the whole payload instead of the firmware's `len & 0xFF`.
+    full_checksum: bool,
+    /// Pause between outbound report chunks of a multi-report frame.
+    gap_ms: u64,
+    /// Override for the 6-byte 0x0083 request sent before the write.
+    info_arg: Option<[u8; 6]>,
+}
+
+impl Default for WriteVariant {
+    fn default() -> Self {
+        WriteVariant {
+            flag: 1,
+            state: 2,
+            delay_ms: 400,
+            echo_block: None,
+            full_checksum: false,
+            gap_ms: 5,
+            info_arg: None,
+        }
+    }
+}
+
+fn send_write(
+    d: &mut Dev,
+    v: &WriteVariant,
+    token: &[u8],
+    tag_type: u32,
+    image: &[u8],
+    page: u8,
+    data: &[u8; 4],
+    info_payload: &[u8],
+) -> Result<(), String> {
     let mut payload = vec![0u8; NTAG_WRITE_PAYLOAD];
-    payload[0..8].copy_from_slice(&token);
-    payload[8..12].copy_from_slice(&(tag_type as u32).to_le_bytes());
-    payload[12..16].copy_from_slice(&1u32.to_le_bytes());
-    payload[0x30 + page as usize * 4..0x30 + page as usize * 4 + 4].copy_from_slice(&data);
-    // State 2 = "write this page", matching the upstream client. Pages left at 0
-    // are not part of the request, so no other page should be touched.
-    payload[0x430 + page as usize] = 2;
+    payload[0..8].copy_from_slice(&token[..8]);
+    payload[8..12].copy_from_slice(&tag_type.to_le_bytes());
+    payload[12..16].copy_from_slice(&v.flag.to_le_bytes());
+    if let Some(off) = v.echo_block {
+        if info_payload.len() >= off + 0x20 {
+            payload[0x10..0x30].copy_from_slice(&info_payload[off..off + 0x20]);
+            println!("  echoing info payload[{off}..{}] into 0x10..0x30", off + 0x20);
+        }
+    }
+    let n = image.len().min(0x400);
+    payload[0x30..0x30 + n].copy_from_slice(&image[..n]);
+    payload[0x30 + page as usize * 4..0x30 + page as usize * 4 + 4].copy_from_slice(data);
+    payload[0x430 + page as usize] = v.state;
 
-    d.send(CMD_NTAG_WRITE, &payload)?;
+    d.send_full(CMD_NTAG_WRITE, &payload, v.full_checksum, v.gap_ms)?;
     let frames = d.collect(8_000, &|f| f.cmd == CMD_NTAG_WRITE)?;
     let mut ok_pages = Vec::new();
     let mut err_pages = Vec::new();
+    let mut other_pages = Vec::new();
     for f in &frames {
         if f.cmd == CMD_NTAG_PAGE && f.payload.len() == 6 {
             let (p, state) = (f.payload[0], f.payload[1]);
+            if p != page {
+                other_pages.push(p);
+            }
             if state == 1 {
                 ok_pages.push(p);
             } else if state == 4 {
@@ -597,37 +723,150 @@ fn cmd_write(d: &mut Dev, page: u8, data: [u8; 4]) -> Result<(), String> {
             }
         }
     }
-    println!("  page frames ok={ok_pages:?} err={err_pages:?}");
-    if let Some(f) = frames.iter().find(|f| f.cmd == CMD_NTAG_WRITE) {
-        println!(
-            "  final 0x0082 payload_len={} status_dword={}",
-            f.payload.len(),
-            if f.payload.len() >= 4 {
-                u32::from_le_bytes([f.payload[0], f.payload[1], f.payload[2], f.payload[3]])
-            } else {
-                0
+    println!(
+        "  page frames: ok={ok_pages:?} err={err_pages:?} other_pages={other_pages:?}"
+    );
+    match frames.iter().find(|f| f.cmd == CMD_NTAG_WRITE) {
+        Some(f) => {
+            println!(
+                "  final 0x0082 payload_len={} status_dword={} checksum_ok={}",
+                f.payload.len(),
+                if f.payload.len() >= 4 {
+                    u32::from_le_bytes([f.payload[0], f.payload[1], f.payload[2], f.payload[3]])
+                } else {
+                    0
+                },
+                f.checksum_ok
+            );
+            if f.payload.len() >= 4 + 0x100 {
+                let states = &f.payload[4..4 + 0x100];
+                let set: Vec<(usize, u8)> = states
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, &b)| b != 0)
+                    .map(|(i, &b)| (i, b))
+                    .collect();
+                println!(
+                    "  reply page-state table: {} non-zero entries{}{}",
+                    set.len(),
+                    if set.is_empty() { "" } else { " -> " },
+                    set.iter()
+                        .take(24)
+                        .map(|(p, b)| format!("page {p}=state {b}"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                if f.payload.len() >= 4 + 0x100 + 0x20 {
+                    println!(
+                        "  reply payload[4+0x100..+0x20] = {}",
+                        hex(&f.payload[4 + 0x100..4 + 0x100 + 0x20])
+                    );
+                }
             }
-        );
+        }
+        None => println!("  no final 0x0082 frame arrived"),
     }
+    Ok(())
+}
 
-    // Read back on a fresh session: a new token is issued by 0x0083.
-    println!("\n== read-back ==");
+fn cmd_write(d: &mut Dev, page: u8, data: [u8; 4], v: &WriteVariant) -> Result<(), String> {
+    println!("== NTAG write (0x0082) — WRITES ONE PAGE ==");
+    println!(
+        "  target page {page}, bytes {}; variant flag={} state={} delay={}ms echo_block={:?} full_checksum={} gap={}ms info_arg={:?}",
+        hex(&data), v.flag, v.state, v.delay_ms, v.echo_block, v.full_checksum, v.gap_ms, v.info_arg
+    );
+    wake(d)?;
+    let uid = poll_uid(d)?;
+    let (tag_type, token, _pages, before_dump, info_payload) =
+        match info_and_read_with(d, uid.as_deref(), v.info_arg)? {
+            Some(v) => v,
+            None => return Err("could not read the tag, so refusing to write blind".into()),
+        };
+    if page < 4 {
+        return Err(format!(
+            "page {page} is not a user page (pages 0-3 hold UID/BCC/static lock/CC); refusing"
+        ));
+    }
+    let before = page_of(&before_dump, page)
+        .ok_or_else(|| format!("page {page} is not present in the read-back dump"))?;
+    println!("  page {page} before write : {}", hex(&before));
+    if before == data {
+        return Err("the page already holds those bytes — pick a different value".into());
+    }
+    let head_before = head_of(&before_dump);
+
+    sleep(Duration::from_millis(v.delay_ms));
+    println!("\n-- write --");
+    send_write(
+        d,
+        v,
+        &token,
+        tag_type,
+        &before_dump[4..],
+        page,
+        &data,
+        &info_payload,
+    )?;
+
+    println!("\n-- read-back after write --");
+    sleep(Duration::from_millis(400));
+    wake(d)?;
+    let (tag_type2, token2, _p2, after_dump, info_payload2) =
+        match info_and_read(d, uid.as_deref())? {
+            Some(v) => v,
+            None => return Err("read-back failed after the write".into()),
+        };
+    let after = page_of(&after_dump, page).unwrap_or_default();
+    println!("  page {page} after write  : {}", hex(&after));
+    let observed = after == data;
+    let head_intact = head_of(&after_dump) == head_before;
+    println!(
+        "  write observed on a later read : {}",
+        if observed { "YES" } else { "NO" }
+    );
+    println!(
+        "  pages 0-11 (UID/CC/NDEF) unchanged : {}",
+        if head_intact { "yes" } else { "NO — CONTENT CHANGED" }
+    );
+
+    // Restore: put the page back to the bytes it held before, so the tag is left
+    // exactly as it was found.
+    println!("\n-- restore page {page} to {} --", hex(&before));
+    let restore: [u8; 4] = [before[0], before[1], before[2], before[3]];
+    send_write(
+        d,
+        v,
+        &token2,
+        tag_type2,
+        &after_dump[4..],
+        page,
+        &restore,
+        &info_payload2,
+    )?;
+
+    println!("\n-- read-back after restore --");
     sleep(Duration::from_millis(400));
     wake(d)?;
     match info_and_read(d, uid.as_deref())? {
-        Some((_, _, after_pages)) => {
-            let after = after_pages
-                .iter()
-                .find(|(p, state, _)| *p == page && *state == 1)
-                .map(|(_, _, d)| d.clone());
-            match after {
-                Some(a) if a == data => println!("\n  RESULT: page {page} now reads {} — write OBSERVED", hex(&a)),
-                Some(a) => println!("\n  RESULT: page {page} reads {} — write NOT observed", hex(&a)),
-                None => println!("\n  RESULT: page {page} was not streamed on read-back; check the dump above"),
-            }
+        Some((_, _, _, final_dump, _)) => {
+            let final_page = page_of(&final_dump, page).unwrap_or_default();
+            println!("  page {page} finally        : {}", hex(&final_page));
+            println!(
+                "  page restored to original : {}",
+                if final_page == before { "YES" } else { "NO" }
+            );
+            println!(
+                "  pages 0-11 (UID/CC/NDEF) unchanged : {}",
+                if head_of(&final_dump) == head_before { "yes" } else { "NO — CONTENT CHANGED" }
+            );
         }
-        None => println!("\n  RESULT: read-back failed"),
+        None => println!("  final read-back failed"),
     }
+    println!(
+        "\n  RESULT: write {} ; tag left {}",
+        if observed { "OBSERVED on a later read" } else { "NOT observed" },
+        if observed { "as found" } else { "in an unknown state — re-read it" }
+    );
     Ok(())
 }
 
@@ -681,7 +920,52 @@ fn main() {
             for i in 0..4 {
                 data[i] = u8::from_str_radix(&raw[i * 2..i * 2 + 2], 16).unwrap();
             }
-            cmd_write(&mut d, page, data)
+            let mut v = WriteVariant::default();
+            let mut i = 3;
+            while i < args.len() {
+                match args[i].as_str() {
+                    "--flag" => {
+                        v.flag = args.get(i + 1).and_then(|x| x.parse().ok()).unwrap_or(1);
+                        i += 2;
+                    }
+                    "--state" => {
+                        v.state = args.get(i + 1).and_then(|x| x.parse().ok()).unwrap_or(2);
+                        i += 2;
+                    }
+                    "--delay-ms" => {
+                        v.delay_ms = args.get(i + 1).and_then(|x| x.parse().ok()).unwrap_or(400);
+                        i += 2;
+                    }
+                    "--echo-block" => {
+                        v.echo_block = args.get(i + 1).and_then(|x| x.parse().ok());
+                        i += 2;
+                    }
+                    "--full-checksum" => {
+                        v.full_checksum = true;
+                        i += 1;
+                    }
+                    "--gap-ms" => {
+                        v.gap_ms = args.get(i + 1).and_then(|x| x.parse().ok()).unwrap_or(5);
+                        i += 2;
+                    }
+                    "--info-arg" => {
+                        let raw: String = args
+                            .get(i + 1)
+                            .map(|x| x.chars().filter(|c| c.is_ascii_hexdigit()).collect())
+                            .unwrap_or_default();
+                        if raw.len() == 12 {
+                            let mut b = [0u8; 6];
+                            for k in 0..6 {
+                                b[k] = u8::from_str_radix(&raw[k * 2..k * 2 + 2], 16).unwrap();
+                            }
+                            v.info_arg = Some(b);
+                        }
+                        i += 2;
+                    }
+                    _ => i += 1,
+                }
+            }
+            cmd_write(&mut d, page, data, &v)
         }
         other => {
             eprintln!("unknown subcommand: {other}");
