@@ -55,13 +55,61 @@ _Avoid_: serial, id, identity
 
 **Clone**:
 Copying one Tag's Identity onto a Blank, producing a Tag that presents the same
-Identity as the source.
+Identity as the source. A Clone is confirmed by comparing an Identity.
 _Avoid_: copy, duplicate, backup, backup tag
+
+**Copy**:
+Moving a whole NDEF message from one 13.56 MHz Tag to another. Confirmed by
+comparing the decoded Records in order, not the bytes, because a Tag may
+legitimately re-encode a message it accepts.
+_Avoid_: clone, duplicate, transfer, backup
+
+**Outcome**:
+What one operation did, as a closed typed value. The single input to both the
+visible message and the audible signal, so the two can never disagree.
+_Avoid_: result, status, response, event
+
+**Signal**:
+The audible report of one Outcome: one, two or three chirps, or their absence.
+Made of chirps, and never the only report of anything.
+_Avoid_: beep, chirp, tone, alarm, sound
+
+**Toast**:
+The transient on-screen report of one Outcome, in the corner the user chose.
+Announces an event, never a condition.
+_Avoid_: notification, alert, banner, snackbar, popup
+
+**Quiet level**:
+The three-way audible-feedback preference: off, errors and warnings only, all.
+_Avoid_: beep toggle, mute, volume
+
+**Writability**:
+Whether a 125 kHz Tag will accept a write. Not observable by reading and not
+exposed by the protocol; discoverable only by attempting a write.
+_Avoid_: blankness, lock state, write protection
+
+**UID length**:
+The byte in the 13.56 MHz poll reply that states how many bytes of the UID buffer
+are real, and therefore what the UID is. Distinct from the UID itself.
+_Avoid_: UID size, uid_len, width
+
+**Collection**:
+One of the Library's two kinds of saved thing: Snapshots or Drafts. They share a
+page and a layout, never a list.
+_Avoid_: tab, section, category, type
+
+**Diagnostics**:
+The read-only inspection surface in Settings: the capability limits and the
+indicator test. The 13.56 MHz memory-dump mode is named Memory, so that "look in
+Diagnostics" has exactly one destination.
+_Avoid_: tools, debug, advanced, inspect
 
 **Reset**:
 Blanking a Tag's Identity so it carries no assigned value. Reset does **not**
-restore a factory configuration, and does **not** unlock a locked Tag.
-_Avoid_: wipe, erase, format, factory reset, restore
+restore a factory configuration, and does **not** unlock a locked Tag. It is also
+the only way to find out whether a Tag will accept a write: no cheaper test
+exists, so the first Reset is the test.
+_Avoid_: wipe, erase, format, factory reset, restore, blank (as a verb)
 
 **Erase**:
 Clearing a 13.56 MHz Tag's NDEF content by writing an empty NDEF TLV (`03 00 FE`)
@@ -98,14 +146,20 @@ _Avoid_: phase, stage, milestone, epic
 
 ## Relationships
 
-- A **Snapshot** holds one **Identity** (125 kHz) or one **UID** plus one **NDEF message** (13.56 MHz)
+- A **Snapshot** holds one **Identity** (125 kHz) or one **UID** plus one **NDEF message** (13.56 MHz), never both
+- A **Snapshot**'s 13.56 MHz half carries its **Records**, so a saved read is reviewable with no Reader attached
 - A **Draft** holds zero or more **Records**
+- A **Collection** holds either **Snapshots** or **Drafts**, never both in one list
 - A **Clone** consumes one **Blank** and the **Identity** from one **Snapshot**
+- A **Copy** consumes one 13.56 MHz Tag's **NDEF message** and replaces another Tag's
 - A **Reset** consumes one non-**Blank** Tag and leaves a **Blank**
 - An **Erase** leaves a **Tag** present with no **Records**; it is not a **Reset**
   and does not make the Tag **Blank**
 - A **Frame** carries exactly one **Command**
 - A **Slice** may be gated on a **Spike**
+- An **Outcome** reports one operation and produces exactly one **Toast** and at most one **Signal**
+- A **Signal** is made of one to three chirps
+- A **Quiet level** governs which **Signals** are emitted
 
 ## Flagged ambiguities
 
@@ -118,7 +172,22 @@ _Avoid_: phase, stage, milestone, epic
 - "record" was used for both a library entry and an NDEF record. Resolved: a
   library entry is a **Snapshot**; an NDEF record is a **Record**.
 - "clone" was used for both copying an Identity and copying an NDEF message.
-  Resolved: **Clone** is reserved for Identity copying on 125 kHz; copying an
-  NDEF message between 13.56 MHz Tags is **Copy** and is out of scope for now.
+  Resolved: **Clone** is Identity copying on 125 kHz; **Copy** is whole-message
+  copying on 13.56 MHz. Both are in scope, and the distinction survives because
+  the two verify differently.
 - "blank" was used as both a noun for a product you buy and a state a Tag is in.
-  Resolved: **Blank** is a state.
+  Resolved: **Blank** is a state. It is never a verb — the operation is **Reset**.
+- "diagnostics" meant both the 13.56 MHz memory-dump mode and the Settings group
+  holding the capability limits. Resolved: the mode is **Memory**; the Settings
+  group is **Diagnostics**.
+- "beep", "notification" and "alert" were used interchangeably for three
+  different things. Resolved: a **Signal** is audible, a **Toast** is on screen,
+  and an **Outcome** is neither — it is what both are derived from.
+- "provisional" appeared in the interface for a decoded 13.56 MHz reading whose
+  byte offsets had never been measured. Resolved: the offsets are now measured
+  against two tag families, so the interface no longer claims provisionality and
+  the word must not be reused for a claim that is still a guess.
+- a **UID** was previously taken at a fixed width that padded a short UID with
+  zeros, which made a MIFARE Classic 1K read as a seven-byte NTAG215. Resolved:
+  the reply states its own **UID length**, and no surface names a family it has
+  not resolved.
