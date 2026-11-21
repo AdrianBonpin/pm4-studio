@@ -516,6 +516,12 @@ the interface, so that removing a confirmation fails a test instead of passing r
       invoke boundary, not by mocking internal modules.
 - [ ] The suite still runs as one command, with no browser download.
 
+**Corrected 2026-11-22, during implementation.** Seven gates exist, not eight. Draft
+delete removes a Draft on the first click with no confirmation and no way back, so there
+was nothing to dismiss and nothing to prove — the count above was wrong, and the harness
+could not have caught the absence of a gate that was never there. Ticket 06 adds that
+confirmation and its proof, which is what makes this section's count true.
+
 ## Deliberately not addressed
 
 Recorded so that their absence reads as a decision rather than an oversight. Each is

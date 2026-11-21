@@ -22,7 +22,15 @@ proves wiring rather than fidelity.
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/4
 **Status:** ready
 
-- [ ] Each of the eight gates has a proof that dismissing it leaves the target untouched.
+**Finding (2026-11-22, during implementation).** The eighth gate does not exist. The
+Draft delete control removes a Draft on the first click, with no confirmation and no
+way back, so there was nothing to dismiss and nothing to prove. The implementer
+reported this rather than inventing a gate to satisfy the count. Ticket 06 adds the
+confirmation; this ticket proves the seven gates that are actually in the app.
+
+- [ ] Each of the seven gates that exist today has a proof that dismissing it leaves
+      the target untouched. (Draft delete had no confirmation to dismiss — see ticket 06,
+      which adds one.)
 - [ ] Each of the eight gates has a proof that confirming performs the action.
 - [ ] Removing a confirmation from its control fails at least one test.
 - [ ] Components render with no Reader attached and no backend running.

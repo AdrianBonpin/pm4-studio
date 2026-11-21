@@ -15,6 +15,7 @@
 | 03 One serialisation domain for the library file | None | Overlapping saves queue and both land instead of last-rename-wins |
 | 04 Bump the schema version and migrate v1 on open | 03 | A v1 file becomes v2 intact; an older build refuses a v2 file rather than stripping Drafts |
 | 05 Restrict the raw console to commands that cannot alter a tag | 01 | Release refuses writes and anything unlisted; debug builds keep full range |
+| 06 Confirm a Draft delete before removing it | 01 | Draft delete stops being a one-click loss; the eighth gate gets its dismiss proof |
 
 **Initial frontier:** `01`, `03`
 
@@ -32,5 +33,14 @@
 - These tickets fix defects against requirements already stated in the spec. They add
   no capability, and the spec's own "Deliberately not addressed" list stays unticketed.
 - Stories 57–61 map to tickets 02, 03, 04, 05 and 01 respectively.
+
+## Correction (2026-11-22)
+
+Spec D5 claims eight destructive gates are unproven. There are seven: **Draft delete has
+no confirmation at all** — its trash control removes a Draft on the first click. Ticket
+01 therefore proves seven gates, and ticket 06 adds the missing confirmation so that
+D5's count becomes true. This is the only ticket added after the breakdown was approved,
+and it was added on explicit user direction rather than by an implementer deciding to
+widen scope.
 - Ticket 01 is a prefactor: it changes no shipped behaviour, and it exists so that four
   following tickets can prove what they ship.
