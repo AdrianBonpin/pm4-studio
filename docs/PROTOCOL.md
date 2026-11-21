@@ -103,6 +103,17 @@ IN   55 00 51 00 01 01 FE 01
 OUT  55 00 55 00 00 FF 00
 ```
 
+### `0x0055` — beep
+
+Fire-and-forget. The buzzer sounds but the firmware sends **no reply**, so a
+missing acknowledgement is not a failure — do not wait for one, and do not treat
+silence as "unsupported" (a trap worth recording: an earlier build did exactly
+that and wrongly reported the command as unimplemented).
+
+```
+OUT  55 00 55 00 00 FF 00
+```
+
 ### `0x0069` — 13.56 MHz poll (ISO14443-A)
 
 ```

@@ -344,7 +344,7 @@ export default function App() {
                       <div className="min-w-0">
                         <p className="text-xs text-text">Clone to a blank tag</p>
                         <p className="truncate text-[11px] text-text-muted">
-                          Writes {lfCard.id} to the 125 kHz tag on the reader.
+                          Writes {lfCard.id} onto the tag on the reader.
                         </p>
                       </div>
                       {!writeArmed && (
@@ -365,8 +365,9 @@ export default function App() {
                     {writeArmed && (
                       <div className="mt-3 flex flex-col gap-2">
                         <p className="rounded-md border border-warn/30 bg-warn/10 px-2 py-1.5 text-[11px] leading-relaxed text-warn">
-                          Put ONE blank 125 kHz tag on the reader now. This overwrites it
-                          permanently — never do this with your original badge.
+                          <strong className="font-semibold">Swap the tag first.</strong> Take the
+                          badge you just scanned OFF the reader and put a blank one on. The write
+                          is permanent, and writing to your original badge can lock it.
                         </p>
                         <div className="flex gap-2">
                           <Button

@@ -222,8 +222,14 @@ impl Reader {
         Ok(())
     }
 
+    /// Beeper. Fire-and-forget: the firmware does NOT acknowledge 0x0055, but
+    /// it audibly chirps. Verified on hardware. Only one frame is sent and no
+    /// reply is awaited, which is why a missing ack must not be treated as a
+    /// failure.
     pub fn beep(&self) -> Result<(), String> {
-        self.transact(CMD_BEEP, &[], None, 800)?;
+        // Drop queued frames first so a stale reply is never mistaken for an ack.
+        self.drain();
+        self.write_raw(&make_frame(CMD_BEEP, &[]))?;
         Ok(())
     }
 
@@ -287,8 +293,40 @@ impl Reader {
     }
 
     /// Wake, write, then read the tag back so callers can verify the result.
+    ///
+    /// Fails closed on two conditions:
+    ///  1. The tag on the reader cannot be read at all. We refuse to write blind,
+    ///     because we would not know whether we were about to overwrite the
+    ///     user's original badge.
+    ///  2. The tag already reads as the id being written — that is almost
+    ///     certainly the ORIGINAL badge left in place, and writing to it has
+    ///     been observed to lock a T5577 permanently.
     pub fn lf_write_verified(&self, customer: u8, data32: u32) -> Result<Option<LfCard>, String> {
-        self.wake()?;
+        let mut current: Option<LfCard> = None;
+        for attempt in 0..10 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            self.wake().ok();
+            if let Some(c) = self.lf_read_once()? {
+                current = Some(c);
+                break;
+            }
+        }
+        let current = current.ok_or_else(|| {
+            "could not read the tag on the reader, so refusing to write blind. \
+             Put a blank 125 kHz tag on the reader and try again."
+                .to_string()
+        })?;
+
+        if current.customer == customer && current.data32 == data32 {
+            return Err(format!(
+                "the tag on the reader already reads as {} — that looks like the original \
+                 badge. Take it off and put a blank tag on instead.",
+                current.id
+            ));
+        }
+
         self.lf_write(customer, data32)?;
         for _ in 0..8 {
             self.wake().ok();
