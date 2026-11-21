@@ -375,6 +375,27 @@ fn library_rename(app: AppHandle, id: String, name: String) -> Result<LibraryVie
     Ok(loaded_view(&store, library))
 }
 
+/// Write the name and note a user gave one Snapshot. Both are user copy, so
+/// they are only trimmed, and one call writes both or neither: a cancelled
+/// edit never reaches the store.
+#[tauri::command]
+fn library_edit(
+    app: AppHandle,
+    id: String,
+    name: String,
+    note: String,
+) -> Result<LibraryView, String> {
+    let store = library_store(&app)?;
+    let mut library = match load_writable(&store) {
+        Ok(library) => library,
+        Err(refused) => return Ok(refused),
+    };
+    if library.edit(&id, &name, &note) {
+        commit(&store, &library)?;
+    }
+    Ok(loaded_view(&store, library))
+}
+
 /// Delete one Snapshot. Permanent, as the spec requires.
 #[tauri::command]
 fn library_delete(app: AppHandle, id: String) -> Result<LibraryView, String> {
@@ -482,6 +503,7 @@ pub fn run() {
             library_load,
             library_save_lf,
             library_rename,
+            library_edit,
             library_delete,
             library_migrate_legacy
         ])
