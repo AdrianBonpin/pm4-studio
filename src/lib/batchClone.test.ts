@@ -190,6 +190,16 @@ describe("a refusal does not abort the run", () => {
   });
 });
 
+describe("the guard is checked per attempt, never once per run", () => {
+  it("refuses an unreadable tag even after a verified attempt", () => {
+    let run = startBatch(SOURCE);
+    run = recordAttempt(run, verified());
+    run = recordAttempt(run, attempt("refused", { message: "could not read the tag" }));
+    expect(run.attempts.map((a) => a.outcome)).toEqual(["verified", "refused"]);
+    expect(runConfirmedCopies(run)).toBe(1);
+  });
+});
+
 describe("each attempt reports itself", () => {
   it("gives every outcome its own wording and tone", () => {
     const notices = {

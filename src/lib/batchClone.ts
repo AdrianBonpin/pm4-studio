@@ -260,7 +260,7 @@ export function summarySentence(run: BatchRun): string {
   if (counts.attempts === 0) {
     return "No attempts yet. Put a blank on the reader and write it.";
   }
-  const parts = [`${counts.attempts} ${counts.attempts === 1 ? "attempt" : "attempts"}`];
+  const lead = `${counts.attempts} ${counts.attempts === 1 ? "attempt" : "attempts"}`;
   const kinds: string[] = [];
   if (counts.verified > 0) kinds.push(`${counts.verified} verified`);
   if (counts.skipped > 0) kinds.push(`${counts.skipped} skipped`);
@@ -268,5 +268,5 @@ export function summarySentence(run: BatchRun): string {
   if (counts.refused > 0) kinds.push(`${counts.refused} refused`);
   if (counts.failed > 0) kinds.push(`${counts.failed} failed`);
   const list = kinds.length > 0 ? `: ${kinds.join(", ")}` : "";
-  return `${parts[0]}${list}. ${confirmedCopiesLabel(runConfirmedCopies(run))} made by this run.`;
+  return `${lead}${list}. ${confirmedCopiesLabel(runConfirmedCopies(run))} made by this run.`;
 }

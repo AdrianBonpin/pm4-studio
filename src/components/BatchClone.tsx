@@ -98,7 +98,6 @@ export function BatchClone({ source, connected, onChirp, onExit, onDeviceError }
         <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
           <Field label="Facility / card" value={`${source.facility} / ${source.card}`} />
           <Field label="data32" value={`0x${source.data32.toString(16).padStart(8, "0").toUpperCase()}`} />
-          <Field label="Source" value="read once" tone="muted" />
         </div>
         <p className="max-w-prose text-xs leading-relaxed text-text-muted">
           This identity was read once. Every attempt below writes it, so the original tag does
@@ -136,7 +135,7 @@ export function BatchClone({ source, connected, onChirp, onExit, onDeviceError }
       <p className="max-w-prose text-xs leading-relaxed text-text-muted">{FRESH_TAG_PER_ATTEMPT}</p>
 
       <p className="text-xs text-text-muted">
-        Reading polls pause while this run is open, so the reader answers attempts and nothing
+        Polls are paused for the length of this run, so the reader answers attempts and nothing
         else.
       </p>
 
@@ -173,12 +172,10 @@ export function BatchClone({ source, connected, onChirp, onExit, onDeviceError }
                   {attempt.readback && (
                     <span className="text-text-muted">{attempt.readback.id}</span>
                   )}
+                  {attempt.countProblem && (
+                    <span className="text-warn">{attempt.countProblem}</span>
+                  )}
                 </span>
-                {attempt.message && (
-                  <span className="text-xs leading-relaxed text-text-muted">
-                    {attempt.message}
-                  </span>
-                )}
               </li>
             ))}
           </ol>

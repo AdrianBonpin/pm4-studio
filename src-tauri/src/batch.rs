@@ -405,7 +405,6 @@ mod tests {
     }
 
     /// The guard allowed a write, judged from a Tag that read as something else.
-    #[allow(dead_code)]
     fn a_blank() -> BatchAttempt {
         BatchAttempt::Refused {
             decision: WriteDecision::Proceed,
@@ -590,6 +589,19 @@ mod tests {
         assert_eq!(next.outcome, BatchOutcome::Write(WriteOutcome::Verified));
         assert_eq!(run.confirmed_copies(), 1);
         assert_eq!(run.attempts().len(), 2, "a refusal is reported, not dropped");
+    }
+
+    #[test]
+    fn an_unreadable_tag_after_a_verified_attempt_is_still_refused() {
+        // The guard is checked per attempt, never once for the batch: a Tag that
+        // reads perfectly well for attempt 1 says nothing about attempt 2, and an
+        // empty or unreadable field after a success is refused, not written.
+        let mut run = BatchRun::new(target());
+        run.record_attempt(&transmitted(Some(written_card())));
+        let second = run.record_attempt(&nothing_readable());
+        assert_eq!(second.outcome, BatchOutcome::Write(WriteOutcome::Refused));
+        assert_eq!(run.counts().refused, 1);
+        assert_eq!(run.confirmed_copies(), 1, "the refusal did not undo the copy");
     }
 
     #[test]
