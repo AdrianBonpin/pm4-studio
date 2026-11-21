@@ -59,9 +59,14 @@ export default function App() {
 
   return (
     <div className="flex h-svh flex-col overflow-hidden bg-canvas text-text select-none">
-      {/* macOS "Overlay" title bar: in-flow strip the window can be dragged by. */}
+      {/* macOS "Overlay" title bar: in-flow strip the window can be dragged by.
+          The bottom border closes the window frame under the traffic lights. */}
       {isTauri() && isMacOS() && (
-        <div data-tauri-drag-region aria-hidden className="h-9 shrink-0 bg-canvas" />
+        <div
+          data-tauri-drag-region
+          aria-hidden
+          className="h-9 shrink-0 border-b border-border bg-canvas"
+        />
       )}
 
       <div className="flex min-h-0 flex-1">
