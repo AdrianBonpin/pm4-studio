@@ -6,10 +6,12 @@ import {
   report,
   severityOf,
   signalFor,
+  signalOf,
   type Outcome,
   type OutcomeKind,
   type Severity,
 } from "./outcome";
+import { ATTENTION_LED_HOLD_MS, chirpSequenceForOutcome } from "./chirpSequence";
 import { subscribeSignals, type SignalSymbol } from "./signal";
 import { toastStore } from "./toastStore";
 import { BUILD_REFUSAL_LABEL } from "./consoleRefusal";
@@ -86,6 +88,16 @@ const BLANK: BlankResult = {
   blanked: true,
   stillIdentifies: null,
   message: null,
+};
+
+/** A Reset the tag refused: the re-read still found an Identity (ADR 0007). */
+const WILL_NOT_ACCEPT: BlankResult = {
+  customer: 0x55,
+  data32: 0x0084_8212,
+  outcome: "willNotAcceptWrites",
+  blanked: false,
+  stillIdentifies: "55 00 84 82 12",
+  message: "the tag still reads as 55 00 84 82 12 after the blanking write",
 };
 
 const ERASE: EraseResult = {
@@ -286,6 +298,63 @@ describe("a Reset the tag would not accept", () => {
     expect(outcome.detail).toContain("cannot tell which kind");
     expect(outcome.detail).toContain("Nothing was written");
   });
+
+  it("is classified apart from a failure and from an unknown", () => {
+    // The three call for different next actions, so the discriminators differ:
+    // the write was sent, it did not take, and the tag's state is known.
+    const refusedWrites = outcomes.blank(WILL_NOT_ACCEPT);
+    const failed = outcomes.blank({ ...WILL_NOT_ACCEPT, outcome: "failed", message: "no" });
+    const unknown = outcomes.blank({ ...WILL_NOT_ACCEPT, outcome: "unverified", message: "no" });
+
+    expect(refusedWrites.kind).toBe("reset-refused");
+    expect(failed.kind).toBe("failed");
+    expect(unknown.kind).toBe("unverified");
+    expect(refusedWrites.kind).not.toBe(failed.kind);
+    expect(refusedWrites.kind).not.toBe(unknown.kind);
+    // ...and never as a blank or as a copy.
+    expect(refusedWrites.kind).not.toBe("blanked");
+    expect(refusedWrites.kind).not.toBe("verified");
+  });
+
+  it("keeps the blanking copy's words rather than inventing its own", () => {
+    expect(outcomes.blank(WILL_NOT_ACCEPT).message).toBe(blankNotice(WILL_NOT_ACCEPT).text);
+    expect(outcomes.blank(WILL_NOT_ACCEPT).message).toContain("will not accept writes");
+    expect(outcomes.blank(WILL_NOT_ACCEPT).message).toMatch(/already (been )?written/i);
+    expect(outcomes.blank(WILL_NOT_ACCEPT).message).toMatch(/never writable/i);
+  });
+
+  it("emits the attention symbol, with the LED held on for two seconds", () => {
+    // The signal machinery is ticket 04's; this ticket's job is to reach it.
+    const outcome = outcomes.blank(WILL_NOT_ACCEPT);
+    expect(signalOf(outcome)).toBe("attention");
+
+    const sequence = chirpSequenceForOutcome(outcome);
+    expect(sequence.chirps).toBe(3);
+    expect(sequence.holdLedMs).toBe(ATTENTION_LED_HOLD_MS);
+    expect(sequence.holdLedMs).toBe(2_000);
+  });
+
+  it("reports a refusal through the seam, on both channels", () => {
+    const { symbols, stop } = hearSignals();
+
+    report(outcomes.blank(WILL_NOT_ACCEPT));
+
+    const [toast] = toastStore.getState().toasts;
+    expect(toast?.message).toContain("will not accept writes");
+    expect(toast?.severity).toBe("error");
+    expect(symbols).toEqual(["attention"]);
+    stop();
+  });
+
+  it("never counts a confirmed copy for any outcome of the operation", () => {
+    // Reset places nothing, so no outcome of it may raise a Snapshot's count —
+    // and the refusal may not be worded as though it did.
+    for (const result of [BLANK, WILL_NOT_ACCEPT]) {
+      const outcome = outcomes.blank(result);
+      expect(outcome.message).not.toMatch(/confirmed cop(y|ies)/i);
+      expect(outcome.kind).not.toBe("verified");
+    }
+  });
 });
 
 describe("a refusal about the build and a refusal about the tag", () => {
@@ -412,6 +481,7 @@ describe("every outcome the vocabulary can build", () => {
     outcomes.nothingLatched("hf-read"),
     outcomes.write("batch", writeResult("verified")),
     outcomes.blank(BLANK),
+    outcomes.blank(WILL_NOT_ACCEPT),
     outcomes.erase(ERASE),
     outcomes.resetRefused("because"),
     outcomes.refusedByBuild({ kind: "refusedByBuild", cmd: "0x0073", message: "no" }),

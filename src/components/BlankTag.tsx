@@ -7,9 +7,11 @@ import { useLfPoller } from "../hooks/useReader";
 import { describeDeviceFailure } from "../lib/readerIdentity";
 import {
   BLANK_OUTCOME_HINT,
+  blankCheckNotice,
   blankConfirmation,
   blankNotice,
 } from "../lib/blankTag";
+import { outcomes, report } from "../lib/outcome";
 import { NOTICE_TONE_CLASS, type WriteNotice } from "../lib/writeOutcome";
 import type { BlankResult, LfCard } from "../types";
 
@@ -34,6 +36,14 @@ interface BlankTagProps {
  * because neither is reachable over this protocol. The outcome is "blanked" and
  * not "verified": a blanked Tag reads as empty, and an empty reading is the
  * expected result rather than a failed check.
+ *
+ * Reset is also the only writability test this Reader can offer, and the
+ * confirmation says so before the write (ADR 0007). The component decides
+ * neither the wording nor the classification: Rust judges the re-read, this panel
+ * reports the one outcome through the seam, and the message and the signal both
+ * come from there. So a re-read that still finds an Identity reports "this tag
+ * will not accept writes" and sounds attention, while a never-written Tag still
+ * blanks and is reported as blanked rather than as verified.
  */
 export function BlankTag({ connected, onChirp, onDeviceError }: BlankTagProps) {
   const [step, setStep] = useState<Step>("idle");
@@ -75,11 +85,17 @@ export function BlankTag({ connected, onChirp, onDeviceError }: BlankTagProps) {
         });
         setResult(res);
         setNotice(blankNotice(res));
-        if (res.blanked) onChirp();
+        // One outcome for the whole attempt: the message and the sound both come
+        // from the classification Rust returned, so a tag that read back its own
+        // Identity reports "will not accept writes" and sounds the attention
+        // signal (three chirps, LED held on) without this component deciding
+        // either.
+        report(outcomes.blank(res));
       } catch (e) {
         // A wedged or absent Reader is reported with its remedy, not a bare
         // timeout, and never as a blank.
         setNotice({ tone: "err", text: describeDeviceFailure(e) });
+        report(outcomes.readerFailure(e));
       } finally {
         setBusy(false);
         setStep("done");
@@ -92,20 +108,9 @@ export function BlankTag({ connected, onChirp, onDeviceError }: BlankTagProps) {
     setBusy(true);
     try {
       const read = await invoke<LfCard | null>("lf_poll");
-      setCheck(
-        read
-          ? {
-              tone: "warn",
-              text: `This tag still reads as ${read.id}, so it was not blanked. Nothing else about it was changed.`,
-            }
-          : {
-              tone: "ok",
-              text:
-                "No Identity read. That is the expected result for a blanked tag — though an empty " +
-                "reader looks the same, so re-seat the tag on the reader and check again if you " +
-                "want to be sure.",
-            },
-      );
+      // A re-read that still finds an Identity is the same finding the write's own
+      // read-back produces, so it is worded by the same module rather than here.
+      setCheck(blankCheckNotice(read));
     } catch (e) {
       setCheck({ tone: "err", text: describeDeviceFailure(e) });
     } finally {
