@@ -200,6 +200,7 @@ export default function App() {
                   mode={hfMode}
                   onModeChange={setHfMode}
                   onPoll={reader.pollHfOnce}
+                  library={library}
                   onOpenDraft={openDraft}
                 />
               )}

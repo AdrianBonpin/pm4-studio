@@ -5,10 +5,13 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Segmented } from "../components/ui/Segmented";
 import { Section } from "../components/Section";
+import { HfSnapshotReview } from "../components/HfSnapshotReview";
+import { WriteDraftToTag } from "../components/WriteDraftToTag";
 import { LibraryProblemBanner } from "../components/LibraryProblemBanner";
 import { MigrationWarning } from "../components/MigrationWarning";
 import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
 import { claimPendingDraft, pendingDraft } from "../lib/draftHandoff";
+import { snapshotRecords } from "../lib/hfSnapshot";
 import { describeDeviceFailure } from "../lib/readerIdentity";
 import {
   EMPTY_LIBRARY_DETAIL,
@@ -391,23 +394,17 @@ function SnapshotDetail({
           </button>
         </div>
         <p className="text-xs leading-relaxed text-text-muted">{snapshotDetail(snapshot)}</p>
-        {snapshot.identity && (
-          <p className="text-xs text-text-muted" title={CONFIRMED_COPIES_HINT}>
-            <span className="border-b border-dotted border-text-muted/40">
-              {confirmedCopiesLabel(snapshot.writeCount)}
-            </span>
-          </p>
-        )}
-        {/* Records are a 13.56 MHz message's, so a 125 kHz Snapshot has no such
-            area. A 13.56 MHz one has it and states its absence: nothing is still
-            arriving from a library file that has already been read. Ticket 09
-            fills it when saving a read keeps the Records. */}
-        {snapshot.kind === "HF" && (
-          <div className="flex flex-col gap-1">
-            <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">Records</span>
-            <span className="text-sm text-text">none</span>
-          </div>
-        )}
+        {/* A confirmed copy is a copy whichever band it landed on: a 13.56 MHz
+            Snapshot's Records written to another Tag raise the same count. */}
+        <p className="text-xs text-text-muted" title={CONFIRMED_COPIES_HINT}>
+          <span className="border-b border-dotted border-text-muted/40">
+            {confirmedCopiesLabel(snapshot.writeCount)}
+          </span>
+        </p>
+        {/* Everything a 13.56 MHz read kept, reviewable here with no Reader.
+            A 125 kHz Snapshot has no such area, and this component renders
+            nothing for one. */}
+        <HfSnapshotReview snapshot={snapshot} />
       </div>
 
       {confirming ? (
@@ -497,12 +494,27 @@ function SnapshotDetail({
               </>
             ) : (
               <>
-                {/* Not hidden, stated: the app does not write a 13.56 MHz
-                    Snapshot back to a Tag yet, and says so rather than leaving a
-                    reader to wonder where the control went. */}
-                <p className="text-xs leading-relaxed text-text-muted">
-                  Writing a 13.56 MHz Snapshot back to a Tag is not supported by this build.
-                </p>
+                {/* Writing a Snapshot's Records is the same operation writing a
+                    Draft is — one NDEF message, one confirmation naming what it
+                    replaces, one read-back — so it is the same control. What
+                    differs is provenance: a verified write counts a confirmed
+                    copy on this Snapshot, and a write that is not verified counts
+                    nothing. */}
+                {(snapshotRecords(snapshot)?.length ?? 0) > 0 ? (
+                  <WriteDraftToTag
+                    records={snapshotRecords(snapshot) ?? []}
+                    connected={connected}
+                    snapshotId={snapshot.id}
+                    subject="Snapshot"
+                    onCountChanged={() => void reload()}
+                  />
+                ) : (
+                  <p className="text-xs leading-relaxed text-text-muted">
+                    {snapshotRecords(snapshot) === null
+                      ? "This Snapshot records no list of Records, so there is no message to write back. It is not an empty message: nothing was read."
+                      : "This Snapshot's Tag carried no Records, so there is no message to write back."}
+                  </p>
+                )}
                 <div>
                   <Button
                     variant="danger"

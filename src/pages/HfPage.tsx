@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { Check } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
+import { CopyMessage } from "../components/CopyMessage";
 import { useDraftsState } from "../components/DraftsProvider";
 import { EraseNdef } from "../components/EraseNdef";
 import { MemoryDumpPanel } from "../components/MemoryDumpPanel";
@@ -11,23 +13,22 @@ import { Field, Readout, Section } from "../components/Section";
 import { variantsNote } from "../lib/cardType";
 import { HF_MODES, type HfMode } from "../lib/hfWorkspace";
 import {
-  decodeHfPayload,
   hexBytes,
   ndefField,
   type HfRawOnlyReason,
   type HfReading,
 } from "../lib/hfDecoder";
 import {
-  assembleHfRead,
   hfReadOutcome,
-  readsMessage,
+  readHfOnce,
   type HfMessage,
   type HfMessageState,
   type HfRead,
-  type HfRecordsAttempt,
 } from "../lib/hfRead";
-import { report, outcomes } from "../lib/outcome";
 import { draftNameFromRead } from "../lib/drafts";
+import { hfSnapshotSave } from "../lib/hfSnapshot";
+import { report, outcomes, type Outcome } from "../lib/outcome";
+import type { LibraryState } from "../hooks/useLibrary";
 import type { TagRecordsRead } from "../lib/tagRecords";
 import type { HfCard } from "../types";
 
@@ -41,6 +42,8 @@ interface HfPageProps {
    */
   mode: HfMode;
   onModeChange: (mode: HfMode) => void;
+  /** Snapshots live in a file, so keeping a read is a call into the Rust store. */
+  library: LibraryState;
   /**
    * Open a Draft in Library's Drafts collection. The shell owns the
    * destination, so it is told which Draft to show rather than navigating from
@@ -52,9 +55,10 @@ interface HfPageProps {
 /**
  * The action a readout with Records offers: turn this message into a Draft.
  *
- * It is passed to the message half rather than sitting in the panel's header,
- * because it belongs to the Records: a header action would be there on a readout
- * whose Records could not be fetched, where there is nothing to copy.
+ * It is handed to the message half rather than sitting in the panel's header
+ * beside Save to library, because it belongs to the Records: a header action
+ * would be there on a readout whose Records could not be fetched, where there is
+ * nothing to copy.
  */
 interface DraftAction {
   readonly busy: boolean;
@@ -208,15 +212,15 @@ function RecordsTable({ message }: { message: HfMessage }) {
  *
  * `draft` is offered only where there are Records: on a readout whose message
  * could not be read, or which holds none, there is nothing to copy, so the action
- * is absent rather than disabled. An absent control is the honest rendering of
- * an operation with no subject.
+ * is absent rather than disabled. An absent control is the honest rendering of an
+ * operation with no subject.
  */
 function MessageSection({ message, draft }: { message: HfMessage; draft: DraftAction }) {
   if (message.state === "records") {
     return (
       <div className="flex flex-col gap-3">
         <RecordsTable message={message} />
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <div className="flex flex-col items-start gap-1">
           <Button
             variant="secondary"
             disabled={draft.busy || draft.locked !== null}
@@ -341,22 +345,37 @@ function HfReadout({ read, draft }: { read: HfRead; draft: DraftAction }) {
  * there is something to copy, it writes nothing to the Tag, and it reports its
  * own outcome like every other operation.
  */
-export function HfPage({ connected, onPoll, mode, onModeChange, onOpenDraft }: HfPageProps) {
+export function HfPage({
+  connected,
+  onPoll,
+  mode,
+  onModeChange,
+  library,
+  onOpenDraft,
+}: HfPageProps) {
   const drafts = useDraftsState();
   const [busy, setBusy] = useState(false);
   const [drafting, setDrafting] = useState(false);
   const [read, setRead] = useState<HfRead | null>(null);
   const [polled, setPolled] = useState(false);
+  /** What keeping this read in the library came to. */
+  const [saveNote, setSaveNote] = useState<SaveNote | null>(null);
+  const [saving, setSaving] = useState(false);
   /** The memory dump the Memory mode shows: the read's own dump, or one taken
    *  there, without rewriting the reading on the Read mode. */
   const [dumpRead, setDumpRead] = useState<TagRecordsRead | null>(null);
 
   const readTag = async () => {
     setBusy(true);
+    // A new read is a new thing to save, so the last read's save line goes.
+    setSaveNote(null);
     try {
-      let card: HfCard | null;
+      let result: HfRead;
       try {
-        card = await onPoll();
+        // One read, in the order the work happens: poll, then the message read
+        // the poll makes possible (`readHfOnce` owns that sequence so Copy's two
+        // reads cannot drift from this one).
+        result = await readHfOnce({ poll: onPoll, records: recordsRead });
       } catch (error) {
         // The Reader itself failed; that is the whole outcome and there is no
         // reading to show beside it.
@@ -365,27 +384,6 @@ export function HfPage({ connected, onPoll, mode, onModeChange, onOpenDraft }: H
         return;
       }
       setPolled(true);
-
-      const reading = card === null ? null : decodeHfPayload(card.payload);
-      let attempt: HfRecordsAttempt = { state: "not-attempted" };
-
-      // A message read only happens for a Tag it can describe: a decoded reply
-      // and a family with an NFC Forum tag type. Offering it otherwise would be
-      // offering a transaction that cannot work.
-      if (reading !== null && readsMessage(reading)) {
-        try {
-          attempt = {
-            state: "read",
-            read: await invoke<TagRecordsRead>("ntag_records_read", {
-              capturedAt: new Date().toISOString(),
-            }),
-          };
-        } catch (error) {
-          attempt = { state: "failed", reason: reasonOf(error) };
-        }
-      }
-
-      const result = assembleHfRead(reading, attempt);
       setRead(result);
       // Keep the dump panel on the same read, so the bytes and the readout are
       // one transaction's evidence rather than two that might disagree.
@@ -397,6 +395,32 @@ export function HfPage({ connected, onPoll, mode, onModeChange, onOpenDraft }: H
   };
 
   /**
+   * Keep this read, in one action.
+   *
+   * The save is its own operation with its own outcome: a read can succeed and
+   * the file still refuse to be written, and neither answer is the other. What
+   * is saved is the whole reading — identity, family, capacity, NDEF status, the
+   * raw reply and the Records in order — because a Snapshot is the record of one
+   * read and half a record would be a different claim (`lib/hfSnapshot`).
+   */
+  const saveToLibrary = async () => {
+    if (read === null) return;
+    const request = hfSnapshotSave(read);
+    if (request === null) return;
+    setSaving(true);
+    const result = await library.saveHf(request);
+    setSaving(false);
+    // The store's own answer, or the call's failure — never silence, and never
+    // the same line for a repeat read and a refused file.
+    const answer =
+      result === null
+        ? outcomes.librarySaveFailed(library.error ?? "")
+        : outcomes.librarySaved(result);
+    report(answer);
+    setSaveNote(noteOf(answer));
+  };
+
+  /**
    * The message on the readout becomes a Draft, and the user lands in it.
    *
    * One press, one Draft: the Records go over as they were read, in the Tag's
@@ -405,10 +429,10 @@ export function HfPage({ connected, onPoll, mode, onModeChange, onOpenDraft }: H
    * or writes the Tag — the Draft is this machine's own file — so the action
    * cannot modify the Tag it came from.
    *
-   * It reports its own outcome, like any other operation, because the press is
-   * one: a success sounds the same done chirp everything else does, and a library
-   * file that would not take the Draft is reported as the failure it is rather
-   * than as a silent no-op.
+   * It reports its own outcome, like every other operation on this page, because
+   * the press is one: a success sounds the same done chirp everything else does,
+   * and a library file that would not take the Draft is reported as the failure
+   * it is rather than as a silent no-op.
    */
   const editAsDraft = async () => {
     const half = read?.message;
@@ -432,6 +456,8 @@ export function HfPage({ connected, onPoll, mode, onModeChange, onOpenDraft }: H
     }
   };
 
+  const savable = read !== null && hfSnapshotSave(read) !== null;
+
   // The library file's own state, in the action's terms: a Draft cannot be
   // written to a file that will not be written, and the control says so.
   const draftLocked =
@@ -453,9 +479,27 @@ export function HfPage({ connected, onPoll, mode, onModeChange, onOpenDraft }: H
           title="Read a tag"
           hint="13.56 MHz ISO14443-A. One action: poll the Tag, then read its NDEF message."
           actions={
-            <Button variant="primary" disabled={!connected || busy} onClick={() => void readTag()}>
-              {busy ? "Reading…" : "Read tag"}
-            </Button>
+            <>
+              <Button
+                variant="secondary"
+                disabled={!savable || saving || busy}
+                title={
+                  savable
+                    ? undefined
+                    : "Nothing decoded has been read yet, so there is no Tag to save."
+                }
+                onClick={() => void saveToLibrary()}
+              >
+                {saving ? "Saving…" : "Save to library"}
+              </Button>
+              <Button
+                variant="primary"
+                disabled={!connected || busy}
+                onClick={() => void readTag()}
+              >
+                {busy ? "Reading…" : "Read tag"}
+              </Button>
+            </>
           }
         >
           {read === null ? (
@@ -466,13 +510,13 @@ export function HfPage({ connected, onPoll, mode, onModeChange, onOpenDraft }: H
               draft={{ busy: drafting, locked: draftLocked, run: () => void editAsDraft() }}
             />
           )}
+          <SaveNoteLine note={saveNote} />
         </Section>
       )}
 
       {mode === "write" && <WriteDraftMode connected={connected} />}
 
-      {/* Copy's panel arrives here in ticket 15, between Write and Erase: the
-          switch already holds the slot, so nothing else about the page moves. */}
+      {mode === "copy" && <CopyMessage connected={connected} onPoll={onPoll} />}
 
       {mode === "erase" && <EraseNdef connected={connected} />}
 
@@ -483,7 +527,51 @@ export function HfPage({ connected, onPoll, mode, onModeChange, onOpenDraft }: H
   );
 }
 
-/** A failure's own words, so the readout quotes it rather than summarising it. */
-function reasonOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+/** The message read that follows a poll: the one `0x0081` transaction, once. */
+function recordsRead(): Promise<TagRecordsRead> {
+  return invoke<TagRecordsRead>("ntag_records_read", {
+    capturedAt: new Date().toISOString(),
+  });
+}
+
+/** What a save came to, in the one place the page styles it. */
+interface SaveNote {
+  tone: "ok" | "muted" | "err";
+  text: string;
+}
+
+const NOTE_TONE = {
+  ok: "text-ok",
+  muted: "text-text-muted",
+  err: "text-err",
+} as const;
+
+/**
+ * The save's own outcome, read from the outcome rather than written again: the
+ * kind decides the tone, so the line beside the readout and the message in the
+ * corner cannot disagree about what happened.
+ */
+function noteOf(outcome: Outcome): SaveNote {
+  switch (outcome.kind) {
+    case "saved":
+      return { tone: "ok", text: outcome.message };
+    case "already-saved":
+      return { tone: "muted", text: outcome.message };
+    default:
+      return {
+        tone: "err",
+        text: outcome.detail === undefined ? outcome.message : `${outcome.message} ${outcome.detail}`,
+      };
+  }
+}
+
+/** What keeping this read in the library came to. A repeat is not a fault. */
+function SaveNoteLine({ note }: { note: SaveNote | null }) {
+  if (!note) return null;
+  return (
+    <p className={`mt-3 flex items-center gap-1 text-xs ${NOTE_TONE[note.tone]}`}>
+      {note.tone === "ok" && <Check size={12} />}
+      {note.text}
+    </p>
+  );
 }

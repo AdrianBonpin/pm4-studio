@@ -34,12 +34,14 @@ import { decodeNdefMessage, recordByteLength, recordProblem } from "./ndef";
 import { recordKindLabel, recordSummary, type DraftRecord } from "./drafts";
 import {
   capacityForReading,
+  decodeHfPayload,
   ndefStatusFor,
   uidMatchesMemory,
   type HfReading,
   type NdefStatus,
 } from "./hfDecoder";
 import { loadTagRecords, type TagLoad, type TagLoadKind, type TagRecordsRead } from "./tagRecords";
+import type { HfCard } from "../types";
 import { hexToBytes } from "./tagWrite";
 import { outcomes, type Outcome } from "./outcome";
 
@@ -155,6 +157,44 @@ export interface HfRead {
  */
 export function readsMessage(reading: HfReading): boolean {
   return reading.state === "decoded" && reading.cardType.nfcForumTagType !== null;
+}
+
+/**
+ * One read's two device transactions, as functions, so the sequencing lives here
+ * rather than in each caller.
+ *
+ * `poll` is the `0x0069` poll and may throw when the Reader itself fails — that
+ * failure is the caller's to report, because it is the Reader and not the Tag.
+ * `records` is the `0x0081` memory read that follows a decodable poll of a family
+ * that can carry a message; it is only called for such a Tag, and its failure is
+ * folded into the read as a missing message rather than thrown.
+ */
+export interface HfReadSource {
+  readonly poll: () => Promise<HfCard | null>;
+  readonly records: () => Promise<TagRecordsRead>;
+}
+
+/**
+ * Take one read: poll, then read the message the poll makes possible.
+ *
+ * Every panel that reads a 13.56 MHz Tag — Read, Copy's source and destination —
+ * goes through this, so no two of them can disagree about the order, about when
+ * the message read is offered, or about what a failed one means.
+ */
+export async function readHfOnce(source: HfReadSource): Promise<HfRead> {
+  const card = await source.poll();
+  const reading = card === null ? null : decodeHfPayload(card.payload);
+  let attempt: HfRecordsAttempt = { state: "not-attempted" };
+
+  if (reading !== null && readsMessage(reading)) {
+    try {
+      attempt = { state: "read", read: await source.records() };
+    } catch (error) {
+      attempt = { state: "failed", reason: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  return assembleHfRead(reading, attempt);
 }
 
 /**

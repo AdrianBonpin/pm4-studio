@@ -7,12 +7,10 @@
  * alphabet — read what is there, then write, then copy a whole message, then
  * erase, then look at the raw bytes when none of the four explained the Tag.
  *
- * `copy` already has its slot: it is in the union and in `HF_MODE_ORDER` between
- * Write and Erase. Ticket 15 builds its panel, which leaves `NOT_BUILT` and joins
- * the switch where the order already puts it — one pill more in the same row, and
- * nothing about the page's frame moves. A mode offered before its panel exists
- * would be a control that does nothing, which is why the switch renders
- * `HF_MODES` and not `HF_MODE_ORDER`.
+ * Copy took the slot the order already gave it: the fifth pill joined the same
+ * row when its panel arrived, and nothing about the page's frame moved. A mode is
+ * only ever offered with a panel behind it, so the switch renders `HF_MODES`,
+ * which is the order filtered to the modes this build has.
  */
 
 /** Every mode the workspace will have. */
@@ -45,15 +43,8 @@ export const HF_MODE_LABEL: Record<HfMode, string> = {
   memory: "Memory",
 };
 
-/**
- * Modes whose panel this build does not have yet.
- *
- * One entry, removed by ticket 15. It exists so the slot Copy will occupy is
- * decided here once, rather than discovered by relaying out the switch later.
- */
-const NOT_BUILT: ReadonlySet<HfMode> = new Set<HfMode>(["copy"]);
-
-/** The modes the switch shows today, in `HF_MODE_ORDER`'s order. */
-export const HF_MODES: readonly HfModeOption[] = HF_MODE_ORDER.filter(
-  (id) => !NOT_BUILT.has(id),
-).map((id) => ({ id, label: HF_MODE_LABEL[id] }));
+/** The modes the switch shows, in `HF_MODE_ORDER`'s order: all of them. */
+export const HF_MODES: readonly HfModeOption[] = HF_MODE_ORDER.map((id) => ({
+  id,
+  label: HF_MODE_LABEL[id],
+}));

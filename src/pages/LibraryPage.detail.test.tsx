@@ -6,8 +6,10 @@ import { fakeBackend, renderUi } from "../test/dom";
 import { SNAPSHOT, libraryState, libraryView } from "../test/libraryState";
 import { EMPTY_LIBRARY_TITLE } from "../lib/library";
 import type { LibraryState } from "../hooks/useLibrary";
+import type { DraftRecord } from "../lib/drafts";
 import type { Snapshot, SnapshotDraft } from "../lib/library";
-import type { WriteResult } from "../types";
+import { draftMessageHex, type NdefPreview, type NdefWriteResult } from "../lib/tagWrite";
+import type { NdefTagSnapshot, WriteResult } from "../types";
 
 /**
  * Library's Snapshots collection is a master-detail surface.
@@ -30,7 +32,12 @@ import type { WriteResult } from "../types";
  * sizes in the verification slice.
  */
 
-/** A 13.56 MHz Snapshot: a UID and the raw bytes, with no Identity. */
+/** A 13.56 MHz Snapshot as ticket 09 saves one: the whole read, Records included. */
+const HF_RECORDS: DraftRecord[] = [
+  { kind: "text", fields: { language: "en", text: "Bay three" } },
+  { kind: "url", fields: { url: "https://devgo.studio" } },
+];
+
 const HF_SNAPSHOT: Snapshot = {
   id: "04 A2 2B 3A 5C 6D 80",
   name: "Office door",
@@ -38,7 +45,36 @@ const HF_SNAPSHOT: Snapshot = {
   kind: "HF",
   capturedAt: new Date().toISOString(),
   writeCount: 0,
-  hf: { uid: "04 A2 2B 3A 5C 6D 80", raw: "00 01 02" },
+  hf: {
+    uid: "04 A2 2B 3A 5C 6D 80",
+    raw: "01 01 04 43 8A 01 22 09 03 1D 00 20 07 44 00 00 02 00 00",
+    atqa: "44 00",
+    sak: "00",
+    cardType: "NTAG215",
+    capacityBytes: 504,
+    ndefFormatted: true,
+    records: HF_RECORDS,
+  },
+};
+
+/** A Snapshot written before schema 3 kept any of it: the uid and the raw reply. */
+const LEGACY_HF_SNAPSHOT: Snapshot = {
+  id: "04 A2 2B 3A 5C 6D 81",
+  name: "Old gate",
+  note: "",
+  kind: "HF",
+  capturedAt: new Date().toISOString(),
+  writeCount: 0,
+  hf: { uid: "04 A2 2B 3A 5C 6D 81", raw: "01 01 04 43 8A 01 22 09" },
+};
+
+/** A Tag that was read and held nothing: an empty list, which is not "not read". */
+const EMPTY_HF_SNAPSHOT: Snapshot = {
+  ...HF_SNAPSHOT,
+  id: "04 A2 2B 3A 5C 6D 82",
+  name: "Empty tag",
+  writeCount: 0,
+  hf: { ...HF_SNAPSHOT.hf!, uid: "04 A2 2B 3A 5C 6D 82", records: [] },
 };
 
 /** A write the reader confirmed by reading the tag back. */
@@ -256,35 +292,183 @@ describe("writing a Snapshot back to a tag", () => {
       expect(onChirp).toHaveBeenCalled();
     });
     expect(reload).toHaveBeenCalled();
-    expect(within(pane()).getByText(/^Verified/)).toBeTruthy();
+    expect(pane().textContent).toContain("Verified");
   });
 
-  it("offers no write for a 13.56 MHz Snapshot", () => {
-    render([HF_SNAPSHOT]);
+  it("offers no write for a Snapshot whose Records were never recorded", () => {
+    render([LEGACY_HF_SNAPSHOT]);
 
-    expect(within(pane()).queryByRole("button", { name: "Write to tag" })).toBeNull();
+    // Not hidden and not offered: there is no message to write, and the pane
+    // says why rather than leaving a reader to wonder where the control went.
+    expect(screen.queryByRole("button", { name: "Check tag" })).toBeNull();
+    expect(within(pane()).getByText(/no message to write back/i)).toBeTruthy();
+  });
+
+  it("offers no write for a Snapshot whose Tag held no Records", () => {
+    render([EMPTY_HF_SNAPSHOT]);
+
+    expect(screen.queryByRole("button", { name: "Check tag" })).toBeNull();
+    expect(within(pane()).getByText(/carried no Records/i)).toBeTruthy();
   });
 });
 
 /**
- * Records belong to a 13.56 MHz message. A 125 kHz Snapshot has no such thing,
- * so it has no such area; a 13.56 MHz Snapshot has the area and, until saving a
- * read fills it, says the Records are absent rather than that they are loading —
- * a library on disk is not going to finish arriving.
+ * A 13.56 MHz Snapshot is written back through exactly the gate a Draft uses:
+ * check the tag, name what the write replaces, confirm, then read back. What
+ * differs is provenance — the write names the Snapshot, so a verified write can
+ * count a confirmed copy on it — and nothing else.
  */
-describe("Records in the detail pane", () => {
+describe("writing a saved 13.56 MHz Snapshot back to a tag", () => {
+  const TAG: NdefTagSnapshot = {
+    uid: "04 A2 24 5A 6C 71 80",
+    reportedTagType: 0x02,
+    capacityBytes: 504,
+    userPages: 126,
+    existing: {
+      state: "message",
+      messageHex: "D1 01 05 55 03 67 6F 6F 67 00 FE",
+      bytes: 10,
+      reason: null,
+    },
+  };
+
+  const PREVIEW: NdefPreview = {
+    tag: TAG,
+    requiredBytes: draftMessageHex(HF_RECORDS).split(" ").length,
+    capacityBytes: TAG.capacityBytes,
+    fits: true,
+    refusal: null,
+  };
+
+  function written(outcome: NdefWriteResult["outcome"], copies: number | null): NdefWriteResult {
+    return {
+      outcome,
+      message: outcome === "verified" ? null : "the read-back did not match",
+      before: TAG,
+      after: { ...TAG, existing: { state: "message", messageHex: null, bytes: 20, reason: null } },
+      capacityBytes: TAG.capacityBytes,
+      requiredBytes: PREVIEW.requiredBytes,
+      wrotePages: [4],
+      acceptedPages: [4],
+      confirmedCopies: copies,
+      countChanged: copies === 1,
+      countProblem: null,
+    };
+  }
+
+  it("checks the tag, confirms, then writes the Snapshot's message and counts it", async () => {
+    const backend = fakeBackend({
+      hf_ndef_preview: () => PREVIEW,
+      hf_ndef_write: () => written("verified", 1),
+    });
+    const reload = vi.fn(async () => {});
+    const { user } = renderUi(
+      <LibraryPage connected library={state([HF_SNAPSHOT], { reload })} onChirp={() => {}} />,
+    );
+
+    // Reading the tag is the first half: nothing is written by it.
+    await user.click(within(pane()).getByRole("button", { name: "Check tag" }));
+    await screen.findByText("Replace the message on the tag with this Snapshot?");
+    expect(backend.callsTo("hf_ndef_write")).toHaveLength(0);
+    expect(backend.callsTo("hf_ndef_preview")[0]?.args).toEqual({
+      messageHex: draftMessageHex(HF_RECORDS),
+    });
+
+    await user.click(within(pane()).getByRole("button", { name: "Write to tag" }));
+    await waitFor(() => {
+      expect(backend.callsTo("hf_ndef_write")).toHaveLength(1);
+    });
+    // The write names the Snapshot it came from, so the backend can count the
+    // copy on the Snapshot and on nothing else.
+    expect(backend.callsTo("hf_ndef_write")[0]?.args).toEqual({
+      messageHex: draftMessageHex(HF_RECORDS),
+      snapshotId: HF_SNAPSHOT.id,
+    });
+    await waitFor(() => {
+      expect(reload).toHaveBeenCalled();
+    });
+    expect(pane().textContent).toContain("Verified");
+  });
+
+  it("does not count a copy the read-back could not confirm", async () => {
+    fakeBackend({
+      hf_ndef_preview: () => PREVIEW,
+      hf_ndef_write: () => written("unverified", 0),
+    });
+    const reload = vi.fn(async () => {});
+    const { user } = renderUi(
+      <LibraryPage connected library={state([HF_SNAPSHOT], { reload })} onChirp={() => {}} />,
+    );
+
+    await user.click(within(pane()).getByRole("button", { name: "Check tag" }));
+    await screen.findByText("Replace the message on the tag with this Snapshot?");
+    await user.click(within(pane()).getByRole("button", { name: "Write to tag" }));
+
+    await waitFor(() => {
+      expect(pane().textContent).toContain("Unconfirmed");
+    });
+    // A count that did not move leaves the list as it was; the write is reported
+    // as unknown, never as success.
+    expect(reload).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * A saved 13.56 MHz Snapshot is reviewable with no Reader attached: what the
+ * read found, in the pane, months later.
+ *
+ * The three answers stay three answers. Records this build never recorded are
+ * *not recorded* — never `none`, which would claim the Tag held nothing. A Tag
+ * that was read and held nothing is `none`. A list is the Tag's own order.
+ */
+describe("a saved 13.56 MHz Snapshot with no Reader attached", () => {
   it("shows no Records area at all for a 125 kHz Snapshot", () => {
     render([SNAPSHOT]);
 
     expect(within(pane()).queryByText("Records")).toBeNull();
   });
 
-  it("says none, never loading, for a 13.56 MHz Snapshot", () => {
+  it("shows the whole read: card type, capacity, NDEF, ATQA, SAK and the raw reply", () => {
     render([HF_SNAPSHOT]);
+
+    const text = pane().textContent ?? "";
+    expect(text).toContain("NTAG215");
+    expect(text).toContain("504 bytes");
+    expect(text).toContain("44 00");
+    expect(text).toContain("yes");
+    expect(text).toContain(HF_SNAPSHOT.hf!.raw);
+    expect(within(pane()).queryByText(/loading/i)).toBeNull();
+  });
+
+  it("lists the Records in the order the Tag held them", () => {
+    render([HF_SNAPSHOT]);
+
+    const rows = [...pane().querySelectorAll("[data-record]")];
+    expect(rows).toHaveLength(2);
+    expect(rows[0]?.textContent).toContain("1");
+    expect(rows[0]?.textContent).toContain("Text");
+    expect(rows[0]?.textContent).toContain("Bay three");
+    expect(rows[1]?.textContent).toContain("2");
+    expect(rows[1]?.textContent).toContain("URL");
+    expect(rows[1]?.textContent).toContain("https://devgo.studio");
+  });
+
+  it("says none for a Tag that was read and held nothing", () => {
+    render([EMPTY_HF_SNAPSHOT]);
 
     expect(within(pane()).getByText("Records")).toBeTruthy();
     expect(within(pane()).getByText("none")).toBeTruthy();
-    expect(within(pane()).queryByText(/loading/i)).toBeNull();
+  });
+
+  it("says not recorded for a Snapshot written before the fields existed", () => {
+    render([LEGACY_HF_SNAPSHOT]);
+
+    // Never filled with a plausible value: not a card family, not a capacity,
+    // not a NDEF answer, and not an empty list.
+    expect(within(pane()).getAllByText("not recorded").length).toBeGreaterThanOrEqual(5);
+    expect(within(pane()).queryByText("none")).toBeNull();
+    expect(pane().textContent).not.toContain("0 bytes");
+    expect(pane().textContent).not.toContain("NTAG");
   });
 });
 

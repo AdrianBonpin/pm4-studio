@@ -69,6 +69,45 @@ describe("snapshotDetail", () => {
     );
   });
 
+  it("states the band and the recorded family for a 13.56 MHz Snapshot", () => {
+    const saved: Snapshot = {
+      id: "04 A2 2B 3A 5C 6D 80",
+      name: "Office door",
+      note: "",
+      kind: "HF",
+      capturedAt: "2026-11-21T09:30:00.000Z",
+      writeCount: 0,
+      hf: {
+        uid: "04 A2 2B 3A 5C 6D 80",
+        raw: "01 01 04 43 8A 01 22 09",
+        atqa: "44 00",
+        sak: "00",
+        cardType: "NTAG215",
+        capacityBytes: 504,
+        ndefFormatted: true,
+        records: [],
+      },
+    };
+    expect(snapshotDetail(saved, Date.parse("2026-11-21T09:30:00.000Z"))).toBe(
+      "13.56 MHz · NTAG215 · just now",
+    );
+  });
+
+  it("never invents a family for a Snapshot that recorded none", () => {
+    const legacy: Snapshot = {
+      id: "04 A2 2B 3A 5C 6D 81",
+      name: "",
+      note: "",
+      kind: "HF",
+      capturedAt: "2026-11-21T09:30:00.000Z",
+      writeCount: 0,
+      hf: { uid: "04 A2 2B 3A 5C 6D 81", raw: "01 01 04 43 8A 01 22 09" },
+    };
+    expect(snapshotDetail(legacy, Date.parse("2026-11-21T09:30:00.000Z"))).toBe(
+      "13.56 MHz · just now",
+    );
+  });
+
   it("states the band for a Snapshot with no identity to decode", () => {
     const rawOnly: Snapshot = {
       id: "raw-1",

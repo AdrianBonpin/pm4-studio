@@ -4,6 +4,7 @@ import { screen, waitFor } from "@testing-library/react";
 import { HfPage } from "./HfPage";
 import { DraftsProvider } from "../components/DraftsProvider";
 import { fakeBackend, renderUi, type CommandAnswer } from "../test/dom";import { MESSAGE, NTAG_CAPTURE, NTAG_UID, recordsRead } from "../test/hfState";
+import { libraryState } from "../test/libraryState";
 import { encodeRecords } from "../lib/ndef";
 import { ndefToRecord } from "../lib/ndef";
 import { subscribeSignals, type SignalSymbol } from "../lib/signal";
@@ -78,6 +79,7 @@ async function readTag(
         mode="read"
         onModeChange={() => {}}
         onPoll={async () => NTAG_CAPTURE}
+        library={libraryState()}
         onOpenDraft={onOpenDraft}
       />
     </DraftsProvider>,

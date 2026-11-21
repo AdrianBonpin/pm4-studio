@@ -39,6 +39,7 @@ import type {
   RefusalCause,
   WriteResult,
 } from "../types";
+import type { SaveResult } from "./library";
 import { attemptNotice } from "./batchClone";
 import { blankNotice, WILL_NOT_ACCEPT_WRITES } from "./blankTag";
 import { describeClearReport, type ClearReport } from "./clearData";
@@ -58,7 +59,9 @@ export type Severity = "info" | "success" | "warning" | "error";
 export type OutcomeOperation =
   | "read"
   | "hf-read"
+  | "library"
   | "write"
+  | "copy"
   | "reset"
   | "clone"
   | "batch"
@@ -87,6 +90,15 @@ export type OutcomeKind =
   | "read-incomplete"
   /** There was no Tag in the field. Nothing happened, and that is not an error. */
   | "nothing-latched"
+  /** A read was kept in the library: the Snapshot is on disk. */
+  | "saved"
+  /**
+   * The read was already in the library, so nothing was added. Informational
+   * and silent: a repeat read is not a fault, and it did not change anything.
+   * It is still said, because a save that vanishes without a word looks like a
+   * save that failed.
+   */
+  | "already-saved"
   /** A write whose read-back proved it. */
   | "verified"
   /** A Reset that left no Identity on the Tag. */
@@ -150,6 +162,8 @@ export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
   "read",
   "read-incomplete",
   "nothing-latched",
+  "saved",
+  "already-saved",
   "verified",
   "blanked",
   "drafted",
@@ -178,6 +192,8 @@ const SEVERITY_OF: Record<OutcomeKind, Severity> = {
   read: "success",
   "read-incomplete": "warning",
   "nothing-latched": "info",
+  saved: "success",
+  "already-saved": "info",
   verified: "success",
   blanked: "success",
   drafted: "success",
@@ -366,12 +382,12 @@ export const outcomes = {
    * The field was empty. Silent, and still on screen: silence means nothing
    * happened, not that the app has nothing to say (ADR 0009).
    */
-  nothingLatched(operation: "read" | "hf-read"): Outcome {
+  nothingLatched(operation: "read" | "hf-read" | "copy", detail?: string): Outcome {
     return make(
       "nothing-latched",
       operation,
       "No tag in the field.",
-      { detail: "Hold a tag against the Reader and try again." },
+      { detail: detail ?? "Hold a tag against the Reader and try again." },
     );
   },
 
@@ -458,6 +474,44 @@ export const outcomes = {
     return make(attemptKind(result), "batch", attemptNotice(result).text);
   },
 
+  /**
+   * What keeping a read in the library came to, in the words both the readout
+   * and the Library show. The store answered with what it did — added, already
+   * there, or refused with the file's own problem — so a repeat read and an
+   * unwritable file cannot look like the same silence.
+   *
+   * A duplicate is informational rather than a fault: nothing failed, and
+   * nothing was added twice.
+   */
+  librarySaved(result: SaveResult): Outcome {
+    if (result.outcome === "refused") {
+      return make(
+        "refused",
+        "library",
+        result.library.problem?.message ?? "The library could not be saved.",
+      );
+    }
+    const name = result.snapshot?.name ?? "the read";
+    if (result.outcome === "duplicate") {
+      return make("already-saved", "library", `Already in the library as ${name}.`);
+    }
+    return make("saved", "library", `Saved to the library as ${name}.`);
+  },
+
+  /**
+   * A save that never reached the store — the call itself failed, so nothing is
+   * known about the file. Its own words are kept as the detail rather than
+   * summarised into a cause nobody established.
+   */
+  librarySaveFailed(detail: string): Outcome {
+    const trimmed = detail.trim();
+    return make(
+      "failed",
+      "library",
+      "The read could not be saved to the library.",
+      trimmed === "" ? {} : { detail: trimmed },
+    );
+  },
   /** What became of one Reset, in the blanking copy's own words. */
   blank(result: BlankResult): Outcome {
     const kind: Record<BlankResult["outcome"], OutcomeKind> = {
@@ -483,6 +537,26 @@ export const outcomes = {
       failed: "failed",
     };
     return make(kind[result.outcome], "erase", eraseNotice(result).text);
+  },
+
+  /**
+   * What became of one Copy — a whole NDEF message moved onto another Tag.
+   *
+   * The words are decided by `lib/hfCopy.ts`'s guard, which is the one place that
+   * knows which condition fired and how the read-back compared; this factory only
+   * turns its decision into the outcome that both channels read. Copy is its own
+   * operation and its own name: it is verified by comparing a whole message, never
+   * by comparing an Identity, so it is never a Clone.
+   *
+   * `verified` is one `done` chirp, `unverified` is `needs-you`, and a refusal is
+   * `attention` — the severity table decides that, not a call site.
+   */
+  copy(
+    kind: "verified" | "unverified" | "refused" | "failed",
+    message: string,
+    detail?: string,
+  ): Outcome {
+    return make(kind, "copy", message, detail === undefined ? {} : { detail });
   },
 
   /**

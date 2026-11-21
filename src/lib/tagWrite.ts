@@ -53,6 +53,22 @@ export interface NdefWriteResult {
   wrotePages: number[];
   /** Pages the firmware reported writing. */
   acceptedPages: number[];
+  /**
+   * Confirmed copies of the Snapshot these Records came from, after the write.
+   * `null` when the write named no Snapshot — a Draft is attached to no Tag, so
+   * it has no count — or when the library holds no Snapshot under that id.
+   */
+  confirmedCopies?: number | null;
+  /**
+   * True only when the confirmed-copy count actually rose, which is exactly one
+   * verified write of a Snapshot's Records. False for a Draft and for every
+   * outcome that is not a confirmed copy, so a caller reloads the library only
+   * when there is something new to read.
+   */
+  countChanged?: boolean;
+  /** Set when the copy count could not be written to the library file. The Tag
+   *  was written either way, so this never fails the write. */
+  countProblem?: string | null;
 }
 
 /** A Draft's Records as the one NDEF message they encode to, in hex. */

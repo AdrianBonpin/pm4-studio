@@ -3,9 +3,9 @@ import { useState } from "react";
 import { afterEach, describe, expect, it } from "vitest";
 import { screen, within } from "@testing-library/react";
 import { HfPage } from "./HfPage";
-import { Segmented } from "../components/ui/Segmented";
 import { DraftsProvider } from "../components/DraftsProvider";
 import { fakeBackend, renderUi, type Backend } from "../test/dom";
+import { libraryState } from "../test/libraryState";
 import { NTAG_CAPTURE, NTAG_UID, recordsRead } from "../test/hfState";
 import { ERASE_ACTION_LABEL, eraseConfirmation, type NdefErasePreview } from "../lib/eraseTag";
 import { draftMessageHex, type NdefPreview, type NdefWriteResult } from "../lib/tagWrite";
@@ -17,8 +17,8 @@ import type { EraseResult, HfCard, NdefTagSnapshot } from "../types";
 /**
  * Ticket 14 — 13.56 MHz is a mode-switched workspace.
  *
- * Read, Write, Erase and Memory, in that order, one visible at a time and each one
- * click from the others. The page is mounted as the shell mounts it: inside the
+ * Read, Write, Copy, Erase and Memory, in that order, one visible at a time and
+ * each one click from the others. The page is mounted as the shell mounts it: inside the
  * Drafts provider, with the chosen mode held above the page so it survives a
  * visit to another destination. Only the Tauri boundary is faked.
  *
@@ -135,6 +135,7 @@ function mount({ drafts = [], card = NTAG_CAPTURE, answers = {} }: MountOptions 
         mode={mode}
         onModeChange={setMode}
         onPoll={async () => card}
+        library={libraryState()}
         onOpenDraft={() => {}}
       />
     );
@@ -159,12 +160,13 @@ function modeButton(mode: HfMode) {
 }
 
 describe("the 13.56 MHz workspace's shape", () => {
-  it("offers Read, Write, Erase and Memory in that order, on Read to begin with", () => {
+  it("offers Read, Write, Copy, Erase and Memory in that order, on Read to begin with", () => {
     mount({ drafts: [DRAFT] });
 
     expect(within(modeSwitch()).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Read",
       "Write",
+      "Copy",
       "Erase",
       "Memory",
     ]);
@@ -174,6 +176,7 @@ describe("the 13.56 MHz workspace's shape", () => {
     expect(screen.getByText("Read a tag")).toBeTruthy();
     expect(screen.queryByText("Memory dump")).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Draft to write" })).toBeNull();
+    expect(screen.queryByText("Copy a message to another tag")).toBeNull();
     expect(screen.queryByText("Erase a tag's content")).toBeNull();
   });
 
@@ -192,46 +195,32 @@ describe("the 13.56 MHz workspace's shape", () => {
     expect(screen.getByRole("combobox", { name: "Draft to write" })).toBeTruthy();
     expect(screen.queryByText("Memory dump")).toBeNull();
 
+    await ui.user.click(modeButton("copy"));
+    expect(screen.getByText("Copy a message to another tag")).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "Draft to write" })).toBeNull();
+
     await ui.user.click(modeButton("read"));
     expect(screen.getByText("Read a tag")).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "Draft to write" })).toBeNull();
   });
 
-  it("takes a fifth mode in the same row, without relayout", () => {
+  it("takes the fifth mode in the same row, without relayout", () => {
     mount({ drafts: [DRAFT] });
 
     // The switch is the shell's Segmented: a single row that counts its options
-    // and wraps neither the row nor a label.
+    // and wraps neither the row nor a label. Copy's arrival added one pill and
+    // moved nothing else about the page.
     expect(modeSwitch().className).not.toMatch(/flex-wrap|grid/);
+    expect(within(modeSwitch()).getAllByRole("button")).toHaveLength(HF_MODE_ORDER.length);
     for (const button of within(modeSwitch()).getAllByRole("button")) {
       expect(button.className).toContain("whitespace-nowrap");
     }
-
-    // Copy's slot is decided in `HF_MODE_ORDER`; when ticket 15 gives it a panel
-    // the row gains one pill and nothing else about the page moves.
-    renderUi(
-      <Segmented
-        label="Five modes"
-        value="read"
-        options={HF_MODE_ORDER.map((id) => ({ value: id, label: HF_MODE_LABEL[id] }))}
-        onChange={() => {}}
-      />,
-    );
-    const five = screen.getByRole("group", { name: "Five modes" });
-    expect(within(five).getAllByRole("button").map((b) => b.textContent)).toEqual([
-      "Read",
-      "Write",
-      "Copy",
-      "Erase",
-      "Memory",
-    ]);
-    expect(five.className).not.toMatch(/flex-wrap|grid/);
   });
 
   it("switches modes without reporting an outcome", async () => {
     const { ui, signals } = mount({ drafts: [DRAFT] });
 
-    for (const mode of ["erase", "memory", "write", "read"] as const) {
+    for (const mode of ["erase", "memory", "write", "copy", "read"] as const) {
       await ui.user.click(modeButton(mode));
     }
 
@@ -244,7 +233,7 @@ describe("the password panel", () => {
   it("is not on the page in any mode", async () => {
     const { ui } = mount({ drafts: [DRAFT] });
 
-    for (const mode of ["read", "write", "erase", "memory"] as const) {
+    for (const mode of ["read", "write", "copy", "erase", "memory"] as const) {
       await ui.user.click(modeButton(mode));
       expect(screen.queryByText("Password protection")).toBeNull();
       expect(screen.queryByRole("button", { name: /password/i })).toBeNull();

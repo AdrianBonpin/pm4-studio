@@ -67,7 +67,7 @@ async function upToConfirmation() {
     hf_ndef_preview: () => PREVIEW,
     hf_ndef_write: () => WRITTEN,
   });
-  const { user } = renderUi(<WriteDraftToTag draft={DRAFT} connected />);
+  const { user } = renderUi(<WriteDraftToTag records={DRAFT.records} connected />);
 
   await user.click(screen.getByRole("button", { name: "Check tag" }));
   await screen.findByText("Replace the message on the tag with this Draft?");
@@ -99,6 +99,11 @@ describe("writing a Draft to a Tag", () => {
       expect(backend.callsTo("hf_ndef_write")).toHaveLength(1);
     });
     // The one NDEF message the Draft encodes to, which is what was confirmed.
-    expect(backend.callsTo("hf_ndef_write")[0]?.args).toEqual({ messageHex: MESSAGE_HEX });
+    // A Draft names no Snapshot: it is attached to no Tag, so the write has no
+    // copy to count and says so explicitly.
+    expect(backend.callsTo("hf_ndef_write")[0]?.args).toEqual({
+      messageHex: MESSAGE_HEX,
+      snapshotId: null,
+    });
   });
 });

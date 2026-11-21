@@ -338,6 +338,32 @@ fn record_write_count(
     }
 }
 
+/// Apply one write outcome to the Snapshot a 13.56 MHz write came from.
+///
+/// The counting rule is `WriteOutcome::counts_as_confirmed_copy`'s, applied by
+/// the store, so this hands over the outcome it observed and nothing else. The
+/// Tag is written either way, so a library that cannot be written to is reported
+/// next to the write, never raised instead of it.
+fn record_snapshot_write_count(
+    app: &AppHandle,
+    id: &str,
+    outcome: write_outcome::WriteOutcome,
+) -> (WriteCountOutcome, Option<String>) {
+    let store = match library_store(app) {
+        Ok(store) => store,
+        Err(e) => return (WriteCountOutcome::NoSnapshot, Some(e)),
+    };
+    // Read, count and write as one step, so a count recorded now cannot replace
+    // a Draft or a Snapshot another part of the app saved a moment ago.
+    match store.update(|library| library.record_snapshot_write(id, outcome)) {
+        Ok((_, record)) => (record, None),
+        Err(SaveError::Refused(problem)) => {
+            (WriteCountOutcome::NoSnapshot, Some(problem.message()))
+        }
+        Err(e) => (WriteCountOutcome::NoSnapshot, Some(save_message(e))),
+    }
+}
+
 /// Write an Identity onto the 125 kHz tag currently on the reader.
 ///
 /// The Identity is validated before any device access, and the write itself is
@@ -569,7 +595,12 @@ impl From<NdefPreview> for NdefPreviewView {
     }
 }
 
-/// What one Draft write did, in the shape the webview reads it.
+/// What one write of a message to a 13.56 MHz Tag did, in the shape the webview
+/// reads it.
+///
+/// Writing a Draft and writing a Snapshot's Records produce this same value:
+/// they are one operation with different provenance, and both are counted by the
+/// same rule.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NdefWriteView {
@@ -587,6 +618,19 @@ pub struct NdefWriteView {
     pub wrote_pages: Vec<usize>,
     /// Pages the firmware reported writing.
     pub accepted_pages: Vec<usize>,
+    /// Confirmed copies of the Snapshot these Records came from, after the
+    /// write. `None` when the write named no Snapshot (a Draft), or when the
+    /// library holds none under that id. A Draft owns no count: it is attached
+    /// to no Tag, so there is nothing to be honest about.
+    pub confirmed_copies: Option<u32>,
+    /// True only when the count actually rose — one verified write of a
+    /// Snapshot's Records. False for a Draft, for a Snapshot the library does
+    /// not hold, and for every outcome that is not a confirmed copy, so a caller
+    /// reloads the list only when there is something new in it.
+    pub count_changed: bool,
+    /// Set when the count could not be written to the library file. The Tag was
+    /// written either way, so this never fails the write.
+    pub count_problem: Option<String>,
 }
 
 impl From<NdefWrite> for NdefWriteView {
@@ -600,6 +644,10 @@ impl From<NdefWrite> for NdefWriteView {
             required_bytes: write.required_bytes,
             wrote_pages: write.wrote_pages,
             accepted_pages: write.accepted_pages,
+            // Filled in by the command when the write named a Snapshot.
+            confirmed_copies: None,
+            count_changed: false,
+            count_problem: None,
         }
     }
 }
@@ -728,24 +776,48 @@ fn hf_ndef_preview(
     with_reader(&state, |r| Ok(ntag::preview(r, &message).into()))
 }
 
-/// Write a Draft's Records to the 13.56 MHz Tag on the Reader as one complete
-/// NDEF message, then read it back.
+/// Write a message to the 13.56 MHz Tag on the Reader as one complete NDEF
+/// message, then read it back.
 ///
-/// Nothing is sent for an empty Draft or a message the Tag cannot hold, and a
-/// Tag that cannot be read first is not written at all. The write itself is one
+/// The message is a Draft's Records or a Snapshot's, encoded by the webview's
+/// one NDEF codec — this command does not care which, because writing either is
+/// the same operation and goes through the same confirmation. `snapshot_id` is
+/// the difference: when the Records came from a Snapshot, it names the Snapshot
+/// so a confirmed copy can be counted against it. A Draft names none and has no
+/// count, because it is attached to no Tag.
+///
+/// Nothing is sent for an empty message or one the Tag cannot hold, and a Tag
+/// that cannot be read first is not written at all. The write itself is one
 /// 21-report frame carrying the Tag's whole image, with only the pages the
 /// message occupies marked for writing — so the UID, lock bytes and Capability
 /// Container cannot be touched (see `ntag::plan_write`).
 ///
 /// The outcome is the same vocabulary the 125 kHz path uses: only `verified`, a
-/// read-back that matches what was written, is a write that landed.
+/// read-back that matches what was written, is a write that landed — and only
+/// then does the Snapshot's confirmed-copy count rise.
 #[tauri::command]
 fn hf_ndef_write(
+    app: AppHandle,
     state: State<'_, AppState>,
     message_hex: String,
+    snapshot_id: Option<String>,
 ) -> Result<NdefWriteView, String> {
     let message = message_bytes(&message_hex)?;
-    with_reader(&state, |r| Ok(ntag::write_message(r, &message).into()))
+    let written = with_reader(&state, |r| Ok(ntag::write_message(r, &message)))?;
+    // The outcome is read before the value is turned into its view, because the
+    // counting rule is the enum's and not a wire string's.
+    let outcome = written.outcome;
+    let mut view = NdefWriteView::from(written);
+    if let Some(id) = snapshot_id.as_deref() {
+        let (record, problem) = record_snapshot_write_count(&app, id, outcome);
+        view.count_changed = problem.is_none() && record.incremented();
+        view.confirmed_copies = match problem {
+            None => record.confirmed_copies(),
+            Some(_) => None,
+        };
+        view.count_problem = problem;
+    }
+    Ok(view)
 }
 
 /// What can be determined about the password protection of the Tag on the
@@ -1344,6 +1416,42 @@ fn library_save_lf(
     }
 }
 
+/// Save a 13.56 MHz read as a Snapshot, keeping everything the read found.
+///
+/// The caller hands over the read's own fields — the UID, the raw reply, the
+/// ATQA and SAK, the family they resolved to, the capacity, the NDEF status and
+/// the Records in order — so this command adds no interpretation of its own. A
+/// read already in the library (the same UID) is reported as a duplicate instead
+/// of being stored twice, and a file this build must not write to is reported as
+/// refused rather than raised.
+#[tauri::command]
+fn library_save_hf(
+    app: AppHandle,
+    hf: library::HfFields,
+    captured_at: String,
+) -> Result<SaveResult, String> {
+    let store = library_store(&app)?;
+    match change_library(&store, |library| library.add_hf(hf, &captured_at))? {
+        Changed::Refused(problem) => Ok(SaveResult {
+            outcome: "refused",
+            library: refused_view(&store, problem),
+            snapshot: None,
+        }),
+        Changed::Done { library, result } => match result {
+            InsertOutcome::Duplicate(existing) => Ok(SaveResult {
+                outcome: "duplicate",
+                library: loaded_view(&store, library),
+                snapshot: Some(existing),
+            }),
+            InsertOutcome::Added(added) => Ok(SaveResult {
+                outcome: "added",
+                library: loaded_view(&store, library),
+                snapshot: Some(added),
+            }),
+        },
+    }
+}
+
 /// Rename one Snapshot. The name is user copy, so it is only trimmed.
 #[tauri::command]
 fn library_rename(app: AppHandle, id: String, name: String) -> Result<LibraryView, String> {
@@ -1723,6 +1831,7 @@ pub fn run() {
             send_cmd,
             library_load,
             library_save_lf,
+            library_save_hf,
             library_rename,
             library_edit,
             library_delete,
