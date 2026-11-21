@@ -1,11 +1,17 @@
 import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { BookmarkPlus, Trash2 } from "lucide-react";
+import { BookmarkPlus, Check, Copy, Pencil, Trash2, X } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { CloneWizard } from "../components/CloneWizard";
 import { Field, Readout, Section } from "../components/Section";
 import { useLfPoller } from "../hooks/useReader";
-import { hex, loadSavedTags, persistSavedTags } from "../lib/storage";
+import {
+  formatSavedAt,
+  hex,
+  loadSavedTags,
+  nextDefaultName,
+  persistSavedTags,
+} from "../lib/storage";
 import type { SavedTag } from "../lib/storage";
 import type { LfCard, WriteResult } from "../types";
 
@@ -19,6 +25,10 @@ export function LfPage({ connected, onChirp }: LfPageProps) {
   const [current, setCurrent] = useState<LfCard | null>(null);
   const [saved, setSaved] = useState<SavedTag[]>(() => loadSavedTags());
 
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [draftName, setDraftName] = useState("");
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+
   const [target, setTarget] = useState<SavedTag | null>(null);
   const [writeBusy, setWriteBusy] = useState(false);
   const [writeResult, setWriteResult] = useState<WriteResult | null>(null);
@@ -30,30 +40,46 @@ export function LfPage({ connected, onChirp }: LfPageProps) {
     onChirp();
   });
 
+  const commit = (next: SavedTag[]) => {
+    setSaved(next);
+    persistSavedTags(next);
+  };
+
   const save = useCallback(
     (card: LfCard) => {
       if (saved.some((t) => t.id === card.id)) return;
-      const next: SavedTag[] = [
+      commit([
         {
           id: card.id,
           customer: card.customer,
           data32: card.data32,
-          note: `facility ${card.facility} · card ${card.card}`,
+          name: nextDefaultName(saved),
           savedAt: new Date().toISOString(),
         },
         ...saved,
-      ];
-      setSaved(next);
-      persistSavedTags(next);
+      ]);
     },
     [saved],
   );
 
+  const rename = (id: string, name: string) => {
+    commit(saved.map((t) => (t.id === id ? { ...t, name: name.trim() } : t)));
+    setEditingId(null);
+  };
+
   const remove = (id: string) => {
-    const next = saved.filter((t) => t.id !== id);
-    setSaved(next);
-    persistSavedTags(next);
+    commit(saved.filter((t) => t.id !== id));
     if (target?.id === id) setTarget(null);
+  };
+
+  const copyId = async (id: string) => {
+    try {
+      await navigator.clipboard.writeText(id);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId((c) => (c === id ? null : c)), 1200);
+    } catch {
+      // Clipboard can be unavailable; the id is visible anyway.
+    }
   };
 
   const writeSaved = async () => {
@@ -128,40 +154,116 @@ export function LfPage({ connected, onChirp }: LfPageProps) {
 
       <Section
         title="Library"
-        hint="Saved reads you can write to blanks later."
-        actions={<span className="font-mono text-xs text-text-muted">{saved.length}</span>}
+        hint={
+          saved.length === 0
+            ? "Saved reads you can write to blanks later."
+            : `${saved.length} saved ${saved.length === 1 ? "badge" : "badges"} — click a name to rename.`
+        }
       >
         {saved.length === 0 ? (
-          <p className="text-sm text-text-muted">Nothing saved yet. Read a badge and save it.</p>
+          <div className="flex flex-col items-start gap-3 border border-dashed border-border px-4 py-6">
+            <p className="text-sm text-text-muted">
+              Nothing saved yet. Read a badge, then choose <span className="text-text">Save to library</span>.
+            </p>
+          </div>
         ) : (
           <ul className="flex flex-col divide-y divide-border">
-            {saved.map((t) => (
-              <li key={t.id} className="flex items-center justify-between gap-4 py-3 first:pt-0">
-                <div className="min-w-0">
-                  <p className="font-mono text-sm text-text">{t.id}</p>
-                  <p className="text-[11px] text-text-muted">{t.note}</p>
-                </div>
-                <div className="flex shrink-0 items-center gap-2">
-                  <Button
-                    variant={target?.id === t.id ? "primary" : "secondary"}
-                    onClick={() => {
-                      setTarget(target?.id === t.id ? null : t);
-                      setWriteResult(null);
-                      setWriteErr(null);
-                    }}
-                  >
-                    {target?.id === t.id ? "Selected" : "Write"}
-                  </Button>
-                  <button
-                    aria-label={`Delete ${t.id}`}
-                    onClick={() => remove(t.id)}
-                    className="cursor-pointer text-text-muted transition-colors hover:text-err"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </li>
-            ))}
+            {saved.map((t) => {
+              const editing = editingId === t.id;
+              const selected = target?.id === t.id;
+              return (
+                <li
+                  key={t.id}
+                  className={`flex items-start justify-between gap-4 py-3 first:pt-0 ${
+                    selected ? "bg-surface/40" : ""
+                  }`}
+                >
+                  <div className="min-w-0 flex-1">
+                    {editing ? (
+                      <div className="flex items-center gap-1.5">
+                        <input
+                          autoFocus
+                          value={draftName}
+                          onChange={(e) => setDraftName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") rename(t.id, draftName);
+                            if (e.key === "Escape") setEditingId(null);
+                          }}
+                          onBlur={() => rename(t.id, draftName)}
+                          placeholder={t.id}
+                          className="w-full max-w-64 rounded-md border border-accent bg-canvas px-2 py-1 text-sm text-text outline-none"
+                        />
+                        <button
+                          aria-label="Save name"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => rename(t.id, draftName)}
+                          className="cursor-pointer text-ok"
+                        >
+                          <Check size={14} />
+                        </button>
+                        <button
+                          aria-label="Cancel rename"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => setEditingId(null)}
+                          className="cursor-pointer text-text-muted hover:text-text"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          setEditingId(t.id);
+                          setDraftName(t.name);
+                        }}
+                        className="group flex cursor-pointer items-center gap-1.5 text-left"
+                      >
+                        <span className="truncate text-sm text-text">
+                          {t.name || t.id}
+                        </span>
+                        <Pencil
+                          size={11}
+                          className="shrink-0 text-text-muted opacity-0 transition-opacity group-hover:opacity-100"
+                        />
+                      </button>
+                    )}
+
+                    <p className="mt-1 font-mono text-xs text-accent-muted">{t.id}</p>
+                    <p className="mt-0.5 text-[11px] text-text-muted">
+                      facility {(t.data32 >> 16) & 0xff} · card {t.data32 & 0xffff} ·{" "}
+                      {formatSavedAt(t.savedAt)}
+                    </p>
+                  </div>
+
+                  <div className="flex shrink-0 items-center gap-1">
+                    <button
+                      aria-label={`Copy ${t.id}`}
+                      onClick={() => void copyId(t.id)}
+                      className="cursor-pointer rounded-md p-1.5 text-text-muted transition-colors hover:bg-surface-raised hover:text-text"
+                    >
+                      {copiedId === t.id ? <Check size={13} className="text-ok" /> : <Copy size={13} />}
+                    </button>
+                    <button
+                      aria-label={`Delete ${t.name || t.id}`}
+                      onClick={() => remove(t.id)}
+                      className="cursor-pointer rounded-md p-1.5 text-text-muted transition-colors hover:bg-surface-raised hover:text-err"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                    <Button
+                      variant={selected ? "primary" : "secondary"}
+                      onClick={() => {
+                        setTarget(selected ? null : t);
+                        setWriteResult(null);
+                        setWriteErr(null);
+                      }}
+                    >
+                      {selected ? "Selected" : "Write"}
+                    </Button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
 
@@ -173,7 +275,11 @@ export function LfPage({ connected, onChirp }: LfPageProps) {
               The write is permanent.
             </p>
             <div className="flex gap-2">
-              <Button variant="primary" disabled={!connected || writeBusy} onClick={() => void writeSaved()}>
+              <Button
+                variant="primary"
+                disabled={!connected || writeBusy}
+                onClick={() => void writeSaved()}
+              >
                 {writeBusy ? "Writing…" : "Write to tag"}
               </Button>
               <Button variant="ghost" disabled={writeBusy} onClick={() => setTarget(null)}>
