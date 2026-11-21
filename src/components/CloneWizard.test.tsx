@@ -67,7 +67,7 @@ async function upToConfirmation() {
     lf_write: () => WRITTEN,
   });
   const { user, container } = renderUi(
-    <CloneWizard connected onChirp={() => {}} onDeviceError={() => {}} />,
+    <CloneWizard connected onDeviceError={() => {}} />,
   );
 
   await user.click(screen.getByRole("button", { name: "Start clone" }));

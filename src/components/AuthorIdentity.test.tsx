@@ -66,7 +66,6 @@ async function upToConfirmation() {
   const { user, container } = renderUi(
     <AuthorIdentity
       connected
-      onChirp={() => {}}
       library={libraryState()}
       onDeviceError={() => {}}
     />,

@@ -106,7 +106,7 @@ function renderPage(
   const backend = fakeBackend(answers);
   const store = libraryState(library);
   const ui = renderUi(
-    <LfPage connected onChirp={() => {}} library={store} onDeviceError={() => {}} />,
+    <LfPage connected library={store} onDeviceError={() => {}} />,
   );
   return { backend, store, ...ui };
 }

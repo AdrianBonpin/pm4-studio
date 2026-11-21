@@ -44,12 +44,6 @@ const LABELS = ["Tap source", "Read source", "Tap blank", "Confirm", "Writing"];
 interface CloneWizardProps {
   connected: boolean;
   onSaved?: (card: LfCard) => void;
-  /**
-   * Accepted and unused: the shell's legacy chirp callback. Every sound this
-   * flow makes now comes from the outcome seam, and the prop is deleted with the
-   * rest of them in ticket 17.
-   */
-  onChirp?: () => void;
   /** Surfaces a dead or wedged Reader in the shell's notice strip. */
   onDeviceError?: (message: string) => void;
 }

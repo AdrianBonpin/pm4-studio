@@ -46,11 +46,10 @@ function writeResult(
 }
 
 function Harness({ timers }: { timers?: SignalTimers }) {
-  const { quietLevel, setQuietLevel, chirp } = useBeep({ timers });
+  const { quietLevel, setQuietLevel } = useBeep({ timers });
   return (
     <div>
       <span data-testid="level">{quietLevel}</span>
-      <button onClick={() => void chirp()}>chirp</button>
       <button onClick={() => setQuietLevel("off")}>level off</button>
       <button onClick={() => setQuietLevel("errors-and-warnings")}>level errors</button>
       <button onClick={() => setQuietLevel("all")}>level all</button>
@@ -75,47 +74,6 @@ afterEach(() => {
   toastStore.clear();
 });
 
-describe("the legacy chirp", () => {
-  it("still beeps when the quiet level hears everything", async () => {
-    const backend = fakeBackend({ beep: () => null });
-    const { user } = renderUi(<Harness />);
-
-    await user.click(screen.getByRole("button", { name: "chirp" }));
-
-    await waitFor(() => {
-      expect(backend.callsTo("beep")).toHaveLength(1);
-    });
-  });
-
-  it("is silent when the quiet level is off, and keeps the level stored", async () => {
-    localStorage.setItem(QUIET_LEVEL_KEY, "off");
-    const backend = fakeBackend({ beep: () => null });
-    const { user } = renderUi(<Harness />);
-
-    await user.click(screen.getByRole("button", { name: "chirp" }));
-    await user.click(screen.getByRole("button", { name: "level off" }));
-    await waitFor(() => {
-      expect(localStorage.getItem(QUIET_LEVEL_KEY)).toBe("off");
-    });
-
-    expect(backend.callsTo("beep")).toHaveLength(0);
-  });
-
-  it("cannot turn an operation into a failure when the beeper does not answer", async () => {
-    const backend = fakeBackend({
-      beep: () => {
-        throw new Error("the beeper did not answer");
-      },
-    });
-    const { user } = renderUi(<Harness />);
-
-    // The click resolves: the rejection is swallowed, as it always was.
-    await expect(user.click(screen.getByRole("button", { name: "chirp" }))).resolves.toBeUndefined();
-    await waitFor(() => {
-      expect(backend.callsTo("beep")).toHaveLength(1);
-    });
-  });
-});
 
 describe("a reported outcome", () => {
   it("sounds one chirp for a completed operation", async () => {

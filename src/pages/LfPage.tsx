@@ -10,6 +10,7 @@ import { Field, Readout, Section } from "../components/Section";
 import { useLfPoller } from "../hooks/useReader";
 import { useSessionMode } from "../hooks/useSessionMode";
 import { hex } from "../lib/library";
+import { outcomes, report } from "../lib/outcome";
 import type { LibraryState } from "../hooks/useLibrary";
 import type { LfCard } from "../types";
 
@@ -40,7 +41,6 @@ const MODE_KEY = "lf";
 
 interface LfPageProps {
   connected: boolean;
-  onChirp: () => void;
   /** Snapshots live in a file, so saving is a call into the Rust store. */
   library: LibraryState;
   /** Surfaces a dead or wedged Reader in the shell's notice strip. */
@@ -75,7 +75,7 @@ interface LfPageProps {
  * the Reader a moment ago, and carrying one across a mode switch — or worse,
  * across a page — would be the stale consent ADR 0001 exists to prevent.
  */
-export function LfPage({ connected, onChirp, library, onDeviceError }: LfPageProps) {
+export function LfPage({ connected, library, onDeviceError }: LfPageProps) {
   const [mode, setMode] = useSessionMode<LfMode>(MODE_KEY, FIRST_MODE);
 
   return (
@@ -88,38 +88,27 @@ export function LfPage({ connected, onChirp, library, onDeviceError }: LfPagePro
       />
 
       {mode === "read" && (
-        <ReadMode
-          connected={connected}
-          onChirp={onChirp}
-          library={library}
-          onDeviceError={onDeviceError}
-        />
+        <ReadMode connected={connected} library={library} onDeviceError={onDeviceError} />
       )}
 
       {mode === "write" && (
         <AuthorIdentity
           connected={connected}
-          onChirp={onChirp}
           library={library}
           onDeviceError={onDeviceError}
         />
       )}
 
       {mode === "reset" && (
-        <BlankTag connected={connected} onChirp={onChirp} onDeviceError={onDeviceError} />
+        <BlankTag connected={connected} onDeviceError={onDeviceError} />
       )}
 
       {mode === "clone" && (
-        <CloneMode
-          connected={connected}
-          onChirp={onChirp}
-          library={library}
-          onDeviceError={onDeviceError}
-        />
+        <CloneMode connected={connected} library={library} onDeviceError={onDeviceError} />
       )}
 
       {mode === "batch" && (
-        <BatchMode connected={connected} onChirp={onChirp} onDeviceError={onDeviceError} />
+        <BatchMode connected={connected} onDeviceError={onDeviceError} />
       )}
     </div>
   );
@@ -138,7 +127,7 @@ export function LfPage({ connected, onChirp, library, onDeviceError }: LfPagePro
  * Snapshot and says what happened to it. The note is this panel's own, so a save
  * from the Clone flow cannot appear under a different read.
  */
-function ReadMode({ connected, onChirp, library, onDeviceError }: LfPageProps) {
+function ReadMode({ connected, library, onDeviceError }: LfPageProps) {
   const [reading, setReading] = useState(false);
   const [current, setCurrent] = useState<LfCard | null>(null);
   const { note, save } = useLibrarySave(library);
@@ -149,7 +138,10 @@ function ReadMode({ connected, onChirp, library, onDeviceError }: LfPageProps) {
     (card) => {
       setCurrent(card);
       setReading(false);
-      onChirp();
+      // The reading is the operation the user started: one latched Tag, one
+      // outcome, one message and one sound. The messages the Reader answers
+      // while it is merely being polled report nothing.
+      report(outcomes.tagRead("read", card.id));
     },
     onDeviceError,
   );
@@ -209,7 +201,7 @@ function ReadMode({ connected, onChirp, library, onDeviceError }: LfPageProps) {
  * and its note is shown here rather than inside the wizard, which has no
  * business knowing what a Snapshot is.
  */
-function CloneMode({ connected, onChirp, library, onDeviceError }: LfPageProps) {
+function CloneMode({ connected, library, onDeviceError }: LfPageProps) {
   const { note, save } = useLibrarySave(library);
 
   return (
@@ -219,7 +211,6 @@ function CloneMode({ connected, onChirp, library, onDeviceError }: LfPageProps) 
     >
       <CloneWizard
         connected={connected}
-        onChirp={onChirp}
         onSaved={save}
         onDeviceError={onDeviceError}
       />
@@ -234,9 +225,10 @@ type SaveNote = { tone: "ok" | "muted" | "err"; text: string };
  * Keep one read in the library, and what that came to.
  *
  * The store answers with what it did — added, already there, or refused with the
- * file's own problem — and that answer is the note, so a repeat read and a
- * failed write never look like the same silence. Each panel gets its own
- * instance, because the note belongs to the read that was saved.
+ * file's own problem — and that answer is both the note and the outcome, so a
+ * repeat read and a save that failed never look like the same silence, and the
+ * line on the page cannot disagree with the message in the corner. Each panel
+ * gets its own instance, because the note belongs to the read that was saved.
  */
 function useLibrarySave(library: LibraryState): {
   note: SaveNote | null;
@@ -252,8 +244,14 @@ function useLibrarySave(library: LibraryState): {
           tone: "err",
           text: library.error ?? "The read could not be saved to the library.",
         });
+        report(outcomes.librarySaveFailed(library.error ?? ""));
         return;
       }
+      // The store's own answer is the outcome, and the note beside the readout
+      // is read from it, so the line on the page and the message in the corner
+      // cannot say different things about the same save.
+      const answer = outcomes.librarySaved(result);
+      report(answer);
       const name = result.snapshot ? result.snapshot.name : card.id;
       if (result.outcome === "duplicate") {
         setNote({ tone: "muted", text: `Already in the library as ${name}.` });

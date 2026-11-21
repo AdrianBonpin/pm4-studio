@@ -13,6 +13,7 @@ import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
 import { claimPendingDraft, pendingDraft } from "../lib/draftHandoff";
 import { snapshotRecords } from "../lib/hfSnapshot";
 import { describeDeviceFailure } from "../lib/readerIdentity";
+import { outcomes, report } from "../lib/outcome";
 import {
   EMPTY_LIBRARY_DETAIL,
   EMPTY_LIBRARY_TITLE,
@@ -37,7 +38,6 @@ import type { WriteResult } from "../types";
 interface LibraryPageProps {
   connected: boolean;
   library: LibraryState;
-  onChirp: () => void;
 }
 
 /** Library's two kinds of saved thing, in the order the switch shows them. */
@@ -66,7 +66,7 @@ type Collection = "snapshots" | "drafts";
  * arrival like that opens on the Drafts collection and on that Draft — the one
  * place in this app where one page's action decides another page's first frame.
  */
-export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
+export function LibraryPage({ connected, library }: LibraryPageProps) {
   /**
    * The Draft a reading just produced, if this page is being opened for one.
    *
@@ -266,7 +266,6 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
                 locked={Boolean(problem)}
                 onEdit={(draft) => void edit(selected.id, draft)}
                 onDelete={() => deleteSnapshot(selected.id)}
-                onChirp={onChirp}
                 reload={reload}
               />
             ) : (
@@ -302,7 +301,6 @@ interface SnapshotDetailProps {
   /** Save this draft of the name and note. The caller owns the store. */
   onEdit: (draft: SnapshotDraft) => void;
   onDelete: () => void;
-  onChirp: () => void;
   reload: () => Promise<void>;
 }
 
@@ -320,7 +318,6 @@ function SnapshotDetail({
   locked,
   onEdit,
   onDelete,
-  onChirp,
   reload,
 }: SnapshotDetailProps) {
   const [draft, setDraft] = useState<SnapshotDraft>(() => draftOf(snapshot));
@@ -363,11 +360,16 @@ function SnapshotDetail({
         data32: snapshot.identity.data32,
       });
       setWriteResult(res);
+      // One write, one outcome: the same factory the two write paths use, in the
+      // write vocabulary's own words, whatever it came to. A verified write is
+      // heard as done, an unconfirmed one as needs-you, a refusal as attention —
+      // none of that is decided here.
+      report(outcomes.write("write", res));
       // Only a confirmed copy changes the count, so only then is the list stale.
-      if (res.verified) onChirp();
       if (res.confirmedCopies !== null) void reload();
     } catch (e) {
       setWriteErr(describeDeviceFailure(e));
+      report(outcomes.readerFailure(e));
     } finally {
       setWriteBusy(false);
     }

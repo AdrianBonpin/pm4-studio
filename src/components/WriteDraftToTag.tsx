@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Button } from "./ui/Button";
 import { Section } from "./Section";
 import { beginDeviceOperation } from "../lib/deviceLock";
+import { outcomes, report } from "../lib/outcome";
 import type { DraftRecord } from "../lib/drafts";
 import { NdefError } from "../lib/ndef";
 import {
@@ -121,10 +122,17 @@ export function WriteDraftToTag({
       });
       setResult(written);
       setPreview(null);
+      // The write is the operation the user confirmed, so it reports itself. One
+      // outcome in `lib/tagWrite`'s own words, so the notice beside the result and
+      // the message in the corner cannot disagree about what landed.
+      report(outcomes.ndefWrite(written));
       // Only a count that actually moved makes the library stale.
       if (written.countChanged) onCountChanged?.();
     } catch (e) {
       setError(String(e));
+      // A Reader that could not send the write is its own news, with its own
+      // remedy — never a write that did not land.
+      report(outcomes.readerFailure(e));
     } finally {
       release();
       setPhase("idle");

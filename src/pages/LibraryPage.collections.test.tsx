@@ -44,7 +44,7 @@ function renderLibrary(drafts: Draft[] = [DRAFT]) {
   });
   const ui = renderUi(
     <DraftsProvider>
-      <LibraryPage connected={false} library={libraryState()} onChirp={() => {}} />
+      <LibraryPage connected={false} library={libraryState()} />
     </DraftsProvider>,
   );
   return { backend, ui };

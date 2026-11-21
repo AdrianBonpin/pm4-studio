@@ -9,12 +9,6 @@ import type { LfCard } from "../types";
 
 interface BatchModeProps {
   connected: boolean;
-  /**
-   * Accepted and unused: the shell's legacy chirp callback. The source read now
-   * reports itself through the outcome seam, and the prop is deleted with the
-   * rest of them in ticket 17.
-   */
-  onChirp?: () => void;
   /** Surfaces a dead or wedged Reader in the shell's notice strip. */
   onDeviceError?: (message: string) => void;
 }
