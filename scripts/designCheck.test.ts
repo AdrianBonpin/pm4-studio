@@ -1,5 +1,6 @@
-import { readFileSync } from "node:fs";
-import { dirname, resolve } from "node:path";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
@@ -29,6 +30,11 @@ import {
  * answers as that boundary. What the real run produces is reported in the ticket,
  * not asserted here, because an assertion on today's violation count would fail
  * the first time somebody fixes a component.
+ *
+ * Since ticket 19 the check is a gate, so the properties held here are the ones a
+ * gate needs: a violation exits non-zero, an unexplained suppression fails, a
+ * detector that cannot run fails instead of passing, and the repository's ordinary
+ * verification command is wired to run all of it.
  */
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -146,10 +152,15 @@ describe("the report", () => {
     expect(forward.indexOf("src/a.tsx:9")).toBeLessThan(forward.indexOf("src/b.tsx:4"));
   });
 
-  it("says the check is advisory while the redesign is in progress", () => {
+  it("says a violation fails the build", () => {
     const report = buildReport({ findings: [finding()], allowList: [], root: repoRoot });
+    const text = renderReport(report);
 
-    expect(renderReport(report)).toContain("advisory");
+    // The report is the text a person reads when the gate stops them, so it has
+    // to say that this is a gate rather than a note.
+    expect(text).toContain("gate");
+    expect(text).toContain("fail the build");
+    expect(text).not.toContain("advisory");
   });
 });
 
@@ -240,6 +251,21 @@ describe("the detector boundary", () => {
 
     expect(result.ok).toBe(false);
   });
+
+  it("fails when the launcher is not on disk, instead of reporting a pass", () => {
+    // No injected spawn: this starts the real process, which is the case a
+    // deleted or mis-updated vendored tree actually produces. A launcher that is
+    // not there must never read as a clean run.
+    const result = runDetector({
+      launcher: resolve(repoRoot, "scripts/impeccable-launcher-that-is-not-here"),
+      target: "src/",
+      cwd: repoRoot,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.failure).toContain("cannot run");
+  });
 });
 
 describe("parseFindings", () => {
@@ -254,16 +280,15 @@ describe("the exit code", () => {
   const dirty = buildReport({ findings: [finding()], allowList: [], root: repoRoot });
 
   it("passes a clean tree", () => {
-    expect(exitCodeFor(clean, { blocking: false })).toBe(0);
-    expect(exitCodeFor(clean, { blocking: true })).toBe(0);
+    expect(exitCodeFor(clean)).toBe(0);
   });
 
-  it("reports violations without failing the build while advisory", () => {
-    expect(exitCodeFor(dirty, { blocking: false })).toBe(0);
-    expect(exitCodeFor(dirty, { blocking: true })).toBe(1);
+  it("fails a tree with a violation", () => {
+    // The whole point of the gate: one un-suppressed finding stops the run.
+    expect(exitCodeFor(dirty)).toBe(1);
   });
 
-  it("fails a broken allow-list at any stage", () => {
+  it("fails a broken allow-list", () => {
     const broken = buildReport({
       findings: [],
       allowList: [],
@@ -271,7 +296,7 @@ describe("the exit code", () => {
       problems: ["allow-list entry design-system-font has no reason"],
     });
 
-    expect(exitCodeFor(broken, { blocking: false })).toBe(1);
+    expect(exitCodeFor(broken)).toBe(1);
   });
 });
 
@@ -315,12 +340,33 @@ describe("the check", () => {
     expect(result.stdout).toContain("0 design rule violations");
   });
 
-  it("reports violations without failing the build while advisory", () => {
+  it("fails when the interface breaks a design rule", () => {
     const result = runCheck({ ...options, spawn: engine({ findings: [finding()] }) });
 
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
     expect(result.stdout).toContain("1 design rule violation");
     expect(result.stdout).toContain("src/components/Example.tsx:12");
+  });
+
+  it("fails when the checked-in allow-list carries a suppression with no reason", () => {
+    // The file is read through the same path the command uses, so this holds the
+    // wiring and not only the parser: a reasonless entry reaches the exit code.
+    const root = mkdtempSync(join(tmpdir(), "design-check-"));
+    try {
+      writeFileSync(join(root, "allow.json"), JSON.stringify({ rules: [{ id: "side-tab" }] }));
+
+      const result = runCheck({
+        root,
+        launcher: "/bin/true",
+        allowListPath: "allow.json",
+        spawn: engine(),
+      });
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toContain("no reason");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("fails when an allow-list entry names a rule the detector does not have", () => {
@@ -388,5 +434,55 @@ describe("the agent-facing pointers", () => {
     // changes a rule.
     expect(agents()).not.toContain("craft-floor.md");
     expect(agents()).not.toContain("reference/");
+  });
+});
+
+/**
+ * The package scripts, read as data.
+ *
+ * The gate's value is where it runs, not what it prints: a `design:check` nobody
+ * calls is a check run by hand. These tests read the manifest a person's command
+ * line reads and follow the `bun run <script>` calls it makes, so moving the gate
+ * into a script that the ordinary command no longer reaches fails here.
+ */
+function scripts(): Record<string, string> {
+  const manifest = JSON.parse(readFileSync(resolve(repoRoot, "package.json"), "utf8")) as {
+    scripts?: Record<string, string>;
+  };
+  return manifest.scripts ?? {};
+}
+
+/** Every script reachable from `name`, following the `bun run <script>` calls it makes. */
+function reachableScripts(name: string, seen = new Set<string>()): Set<string> {
+  if (seen.has(name)) return seen;
+  seen.add(name);
+
+  const command = scripts()[name] ?? "";
+  for (const match of command.matchAll(/bun run ([\w:-]+)/g)) {
+    reachableScripts(match[1], seen);
+  }
+  return seen;
+}
+
+describe("the ordinary verification command", () => {
+  it("runs the design gate, so a violation fails the build", () => {
+    expect(
+      [...reachableScripts("build")],
+      "`bun run build` no longer reaches `design:check`; a violation would not fail the build",
+    ).toContain("design:check");
+  });
+
+  it("has one command that runs types, tests, the gate and the Rust tests", () => {
+    const verify = reachableScripts("verify");
+
+    expect([...verify]).toEqual(expect.arrayContaining(["typecheck", "test", "design:check"]));
+    // The Rust tests are a shell command rather than a bun script, so the last
+    // step is named rather than expanded.
+    expect([...verify]).toContain("verify:rust");
+    expect(scripts()["verify:rust"]).toContain("cargo test");
+  });
+
+  it("is the command the agent instructions tell a person to run", () => {
+    expect(readFileSync(resolve(repoRoot, "AGENTS.md"), "utf8")).toContain("bun run verify");
   });
 });

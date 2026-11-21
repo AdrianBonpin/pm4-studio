@@ -13,7 +13,10 @@
  *    configuration error, not a pass: an unexplained suppression is how a rule
  *    set dies.
  * 2. **The refusal to call a missing detector a pass.** A tool that is not there
- *    exits non-zero and says so, on every stage, advisory or blocking.
+ *    exits non-zero and says so. The same is true of a finding: since the studio
+ *    redesign landed this is a gate, so one un-suppressed violation fails the
+ *    build. There is no stage flag to leave off — a check that can be advisory
+ *    again is a check that can be skipped again.
  *
  * The rules themselves are the vendor's and are not restated here. They live in
  * the vendored skill and are versioned with it, so the two cannot drift.
@@ -240,8 +243,8 @@ export function renderReport(report: Report, notes: readonly string[] = []): str
   lines.push("");
   lines.push(
     report.violations.length > 0
-      ? "advisory while the studio redesign is in progress: this check reports these violations but does not fail the build."
-      : "advisory while the studio redesign is in progress: a clean run here is not yet a gate.",
+      ? "this check is a gate: the violations above fail the build. Fix them, or record in scripts/design-allow-list.json why this project's visual world overrides the rule."
+      : "this check is a gate: any violation in a later run fails the build.",
   );
 
   return lines.join("\n");
@@ -250,15 +253,13 @@ export function renderReport(report: Report, notes: readonly string[] = []): str
 /**
  * The exit code for one report.
  *
- * `blocking` is false for now and becomes true once the redesign has landed and
- * the remaining violations are cleared; violations are then a failure. A
- * configuration problem fails at every stage, because a check that cannot
- * describe its own suppressions is not a check.
+ * A configuration problem fails, because a check that cannot describe its own
+ * suppressions is not a check. A violation fails too: that is the gate. The
+ * redesign is finished and this is a wall, so there is deliberately no argument
+ * that could turn the second refusal off.
  */
-export function exitCodeFor(report: Report, { blocking }: { blocking: boolean }): number {
-  if (report.problems.length > 0) return 1;
-  if (blocking && report.violations.length > 0) return 1;
-  return 0;
+export function exitCodeFor(report: Report): number {
+  return report.problems.length > 0 || report.violations.length > 0 ? 1 : 0;
 }
 
 /** What the engine exits with when it found something. */
@@ -435,20 +436,13 @@ export interface CheckResult {
 }
 
 /**
- * Whether a violation fails the run.
- *
- * False while the studio redesign is in progress: the check reports, and the
- * ordinary build is untouched. Ticket 19 turns this into a wall once the
- * interface has been brought up to the rules, and this is the one line it flips.
- */
-const BLOCKING = false;
-
-/**
  * The whole check: the rule catalog, the allow-list, the scan, the report.
  *
  * Order matters. The catalog and the allow-list are checked before the scan, so a
  * repository whose suppressions no longer match the vendored rules fails instead
- * of quietly passing with a stale reason on file.
+ * of quietly passing with a stale reason on file. A violation then fails the run:
+ * this is the gate, and `bun run build` and `bun run verify` both run it rather
+ * than leaving it as a command to remember.
  */
 export function runCheck({
   root,
@@ -497,7 +491,7 @@ export function runCheck({
 
   const report = buildReport({ findings: scan.findings, allowList: entries, root, problems });
   return {
-    exitCode: exitCodeFor(report, { blocking: BLOCKING }),
+    exitCode: exitCodeFor(report),
     stdout: renderReport(report, scan.notes),
     stderr: "",
   };

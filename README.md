@@ -69,6 +69,16 @@ bun run tauri:dev      # dev with hot reload
 bun run tauri:build    # .app + .dmg in src-tauri/target/release/bundle/
 ```
 
+Before claiming a change works, run the whole verification battery:
+
+```sh
+bun run verify         # design gate, types, tests, Rust tests
+```
+
+`bun run build` runs the design check first, so a design-rule violation fails the
+build and `verify` alike. The Rust tests are the slow step; `bun run design:check`,
+`bun run typecheck` and `bun run test` are the fast ones to run while iterating.
+
 Headless transport check (read-only, safe with a badge on the reader):
 
 ```sh
