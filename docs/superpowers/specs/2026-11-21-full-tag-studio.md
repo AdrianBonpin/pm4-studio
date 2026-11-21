@@ -335,3 +335,206 @@ Five ambiguities were resolved during this work and are recorded there:
 | What sets the T5577 lock bit, and whether a blanking write can trigger it | Protocol research plus careful hardware probes on sacrificial Blanks | Blanking is offered as anything other than destructive-with-warning. |
 | How to distinguish two identical Blank tags across batch attempts | Engineering, during the LF Slice | Batch mode claims per-attempt certainty. Until then, results are per-attempt and require re-seating. |
 | Meaning of the constant `C8 42` in the 125 kHz read payload | Optional protocol research | Nothing. Recorded for completeness. |
+
+---
+
+# Post-Implementation Defects (2026-11-22)
+
+This section is additive. Everything above it stands as approved and is not reopened.
+It records five defects found after all twenty-two tickets were implemented, each
+against a requirement already stated in this document, and the three decisions that
+were needed before they could be fixed. It authorises no new capability.
+
+The defects are grouped by what they cost: two throw away user work, one destroys it
+permanently through a downgrade, one bypasses the safety model, and one leaves the
+safety model unproven. Stories continue from 56 so the set stays contiguous. They are
+labelled inline as `Story 57` onwards rather than numbered as list items, because each
+is followed immediately by the criteria it has to satisfy.
+
+**ADRs in force after this section:** `0001` fail-closed writes, `0002` HF write gate
+(now cleared by hardware evidence), `0003` blanked is its own outcome, `0004` batch
+clone skips and counts once, `0005` a new persisted key bumps the schema version,
+`0006` the raw console is read-only in release builds.
+
+## D1 — A Draft edit can be lost by quitting
+
+**Violates.** Story 36: *"As a user, I want Drafts to persist between sessions, so
+that work is not lost when I close the app."*
+
+**Defect.** Edits are applied to the view immediately and written to disk after a
+350 ms quiet period. Anything still queued is flushed when the page unmounts, which
+covers navigating away but not closing the window: closing the window is not an
+unmount, so a queued write dies with the process. A user who types and quits within
+the delay loses the edit, and nothing told them a save was pending.
+
+**Decision.** No new ADR. The requirement already exists; the flush trigger does not.
+
+**Story 57.** As a user, I want anything I have typed to be on disk before the window
+closes, so that quitting the app never costs me the last edit.
+
+- [ ] An edit followed by window close inside the quiet period is persisted.
+- [ ] Quitting never writes a stale or partial Draft.
+- [ ] Navigating away still flushes, exactly as it does today.
+- [ ] The Draft reads back identically on the next launch.
+- [ ] If the final save cannot be written, the window does not close silently — the
+      problem is reported and the user chooses whether to quit anyway.
+
+## D2 — Two save paths serialise against different locks
+
+**Violates.** The data constraint: *"Library writes are atomic; a crash mid-write
+must not corrupt the file."* Atomicity per write is upheld — both paths stage and
+rename the whole file, so no interleaved bytes are possible. What the constraint's
+intent does not survive is the second half of atomicity: a save racing another save
+can lose an entire update, because the two paths do not share a serialisation domain.
+
+**Defect.** The library store holds one lock, the import/export path holds another,
+and both replace the whole file. Each is individually safe and jointly unsound: two
+saves overlapping in time can each read the same starting state and each rename a
+file reflecting only its own change. Nothing reports a problem, because from either
+path's point of view the write succeeded.
+
+**Decision.** No new ADR. One file, one serialisation domain, is not a trade-off.
+
+**Story 58.** As a user, I want two saves that happen close together to both be kept,
+so that saving in one part of the app never silently discards a save from another.
+
+- [ ] A single serialisation domain governs every write to the library file.
+- [ ] A Draft save and a Snapshot save in quick succession both land.
+- [ ] Overlapping saves queue rather than fail.
+- [ ] The file parses after any interleaving of the two paths.
+- [ ] No path reaches the file without the lock.
+
+## D3 — An older build silently strips Drafts
+
+**Violates.** The data constraint: *"A library file with an unrecognised schema
+version is never rewritten."* The version was recognised — it was still `1` — while
+the file's contents had outgrown what that version promised. And the Migration
+section: *"A file with a newer version than the app understands is never rewritten;
+the app reports the mismatch and offers an export path."* That protection exists and
+was never reached, because nothing declared the file newer.
+
+**Defect.** Drafts were added to the file while `SCHEMA_VERSION` stayed `1`, on the
+reasoning that a bump would make existing files unreadable. `#[serde(default)]` made a
+new build read an old file correctly, so the change looked safe. The reverse direction
+was not considered: an older build deserialises the file into a struct with no
+`drafts` field, drops the unknown key without comment, and rewrites the file without
+it. Every Draft is lost, the library still parses, and the Snapshots are intact, so
+nothing looks wrong. The window is open until the file is first re-saved.
+
+**Decision.** ADR 0005. `SCHEMA_VERSION` becomes `2`, and a v1 file is migrated on
+first successful open, eagerly and preserving every key, so the file's stated version
+agrees with its contents immediately rather than at the next save. The general rule
+recorded there: a new persisted key is a schema change, and a schema change bumps the
+version — `#[serde(default)]` tolerates absence, not strangers.
+
+**Story 59.** As a user, I want a library file written by a newer build refused rather
+than rewritten, so that opening the app with an older version cannot destroy my
+Drafts.
+
+- [ ] A v2 file opened by a build that understands only v1 reports a version mismatch
+      and is not rewritten.
+- [ ] A v1 file is migrated to v2 on first successful open with every key preserved.
+- [ ] After a successful open the file on disk claims v2.
+- [ ] Migration happens before the user can edit, so no edit is applied to a library
+      that is about to be rewritten.
+- [ ] A failed migration write is reported, and the app continues with the migrated
+      library in memory rather than refusing to open.
+- [ ] The migrated library holds the same Snapshots and the same Drafts as before, in
+      the same order.
+- [ ] Drafts written by this build survive an attempted downgrade.
+
+## D4 — The raw console bypasses every write guard
+
+**Violates.** The safety invariant: *"Never write without a successful read of the tag
+in the write position. This is ADR 0001 and is not overridable by a user setting."*
+And: *"Never write when the tag in position already presents the target Identity."*
+The raw console is a user setting in effect: it sends whatever it is given, including
+`0x0073` and `0x0082`, consulting neither rule. `0x0082` reaches config pages 131, 133
+and 134 — the only action in the app that can make a tag permanently unusable.
+
+**Defect.** The console was built to interrogate the protocol and is the instrument
+that produced every verified frame in `PROTOCOL.md`. Its reach was never restricted
+once the guarded surfaces were built around it, so the app ships with a supported path
+that reaches past all of them.
+
+**Decision.** ADR 0006. Release builds accept only commands that cannot alter a tag's
+contents — the reads, the version and firmware queries, the poll, and the Reader's own
+beep and LED. The list is closed: a command absent from it is refused. Debug builds
+keep the full range, so protocol work continues from a terminal rather than from the
+app the user runs daily.
+
+**Story 60.** As a user, I want the raw console in the shipped app to send only
+commands that cannot change what a tag holds, so that a typed frame cannot destroy a
+tag.
+
+- [ ] Release builds refuse `0x0073`, `0x0082`, and every command not on the list.
+- [ ] A refusal names the command and says write experiments run in a development
+      build.
+- [ ] The console states that it is read-only before it is used, not when a frame is
+      refused.
+- [ ] Debug builds still send any command.
+- [ ] The allow-list is closed, so a newly discovered opcode is refused until someone
+      states why it is safe.
+- [ ] Every allow-listed command still works for diagnosis.
+- [ ] A guard refusal and a console refusal are distinguishable to the user: one is
+      about the tag in position, the other about the build.
+
+## D5 — Destructive confirmations are never exercised
+
+**Violates.** The testing decision: *"Tests assert public behaviour through the seam,
+with expected values written down independently"*, and *"No test mocks an internal
+collaborator."* Every destructive confirmation in this app is public behaviour and
+none of them is asserted. The library store seam table lists UI state under **Misses**
+for `S8`, and it was left there rather than closed.
+
+**Defect.** The test suite renders no component. Delete a Snapshot without
+confirming — the flow read correctly during review and is not proven by anything. A
+control could be wired straight to the removal call, dropping the confirmation
+entirely, and all tests would still pass. Eight gates are in this position: Snapshot
+delete, Draft delete, clone, author, blank, write a Draft, erase, and password.
+
+This was opted out of deliberately at the time. *"E2E: OPTED-OUT"* rejected browser
+automation driving a real browser against a mocked reader, and that judgement stands.
+It did not follow that confirmations could go unproven, and the two were treated as
+one decision when they are two.
+
+**Decision.** Add a DOM component harness — `jsdom` with `@testing-library/react` —
+under the existing Vitest runner. This is not a reversal of the E2E opt-out: no
+browser is launched, no device is mocked at the transport boundary for the whole app,
+and the manual hardware checklist is unchanged. It is a unit test that renders one
+component and drives its controls, which is what proves a confirmation is attached.
+
+**Story 61.** As a maintainer, I want each destructive confirmation proven by driving
+the interface, so that removing a confirmation fails a test instead of passing review.
+
+- [ ] Dismissing a confirmation leaves the target intact, proven by clicking the
+      destructive control and asserting nothing was removed.
+- [ ] Confirming performs the action.
+- [ ] The same pair of proofs exists for all eight gates.
+- [ ] Removing a gate from its control fails at least one test.
+- [ ] Components render without a Tauri backend; device calls are stubbed at the
+      invoke boundary, not by mocking internal modules.
+- [ ] The suite still runs as one command, with no browser download.
+
+## Deliberately not addressed
+
+Recorded so that their absence reads as a decision rather than an oversight. Each is
+a genuine observation that does not currently cost a user anything.
+
+- `parse_frame` and `ReportStream` both parse frames. Two parsers, one of which is on
+  the hot path and one of which is the reference. Converging them is a cleanup.
+- `Evidence::Declined` is never constructed. It is a variant waiting for the path that
+  would produce it, not a bug.
+- `FrameCutter` does not resynchronise. The reassembler does; the cutter is used where
+  a desynchronised stream is already fatal.
+- `LibraryPage` is around five hundred lines. Large, cohesive, and not yet a problem.
+- There is no TypeScript type corresponding to the Rust `Identity`. The wire shape is
+  flat and the boundary is narrow.
+- `BlankFact`, `EraseFact`, `PasswordFact` and `AuthorFact` duplicate one shape. They
+  are four narrow types that would become one wide type with four optional halves.
+
+**Still open on hardware, tracked separately:** whether a blanked T5577 accepts
+further writes, what sets the T5577 lock bit, whether a 124-page message fills, what a
+mid-write page reporting state `4` means, and the `localStorage` to file migration
+bridge that only runs inside the webview. These belong to the protocol document and
+to the hardware issue, not to this section.
