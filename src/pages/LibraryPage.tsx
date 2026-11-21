@@ -4,6 +4,8 @@ import { AlertTriangle, Check, Copy, Pencil, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Section } from "../components/Section";
+import { MigrationWarning } from "../components/MigrationWarning";
+import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
 import { describeDeviceFailure } from "../lib/readerIdentity";
 import {
   EMPTY_LIBRARY_DETAIL,
@@ -192,20 +194,7 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
             : `${all.length} ${all.length === 1 ? "Snapshot" : "Snapshots"} — click a name to rename it or add a note.`
         }
       >
-        {migrationWarning && (
-          <div className="mb-4 flex items-start gap-3 border-l-2 border-warn bg-warn/5 px-3 py-2">
-            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warn" />
-            <div className="min-w-0">
-              <p className="text-sm text-warn">
-                This library was upgraded from an older version
-              </p>
-              <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
-                {migrationWarning} Saving is still on: a save writes the upgraded library and
-                corrects the version the file claims.
-              </p>
-            </div>
-          </div>
-        )}
+        {migrationWarning && <MigrationWarning detail={migrationWarning} />}
 
         {problem && (
           <div className="mb-4 flex items-start gap-3 border-l-2 border-err bg-err/5 px-3 py-2">
@@ -308,27 +297,14 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
                 >
                   <div className="min-w-0 flex-1">
                     {confirming ? (
-                      <div className="flex flex-col gap-2">
-                        <p className="text-sm text-text">
-                          Delete <span className="text-text">{name}</span> permanently?
-                        </p>
-                        <p className="max-w-prose text-xs leading-relaxed text-text-muted">
-                          The Snapshot is removed from the library file and no copy is kept. The
-                          Tag itself is not touched.
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            autoFocus
-                            variant="danger"
-                            onClick={() => deleteSnapshot(snapshot)}
-                          >
-                            Delete permanently
-                          </Button>
-                          <Button variant="ghost" onClick={() => setConfirmingId(null)}>
-                            Keep
-                          </Button>
-                        </div>
-                      </div>
+                      <RowDeleteConfirmation
+                        name={name}
+                        onConfirm={() => deleteSnapshot(snapshot)}
+                        onDismiss={() => setConfirmingId(null)}
+                      >
+                        The Snapshot is removed from the library file and no copy is kept. The Tag
+                        itself is not touched.
+                      </RowDeleteConfirmation>
                     ) : rowEditing && editing ? (
                       <div className="flex flex-col gap-2">
                         <input

@@ -2,7 +2,8 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import { DraftsPage } from "./DraftsPage";
-import { fakeBackend, renderUi } from "../test/dom";
+import { DraftsProvider } from "../components/DraftsProvider";
+import { fakeBackend, renderUi, type Ui } from "../test/dom";
 import type { Draft, DraftsView } from "../lib/drafts";
 import type { LibraryProblem } from "../lib/library";
 
@@ -56,6 +57,19 @@ function view(
   return { drafts, problem, migrationWarning };
 }
 
+/**
+ * The page as the app mounts it: inside the provider that owns the queue and the
+ * window-close guard. The page itself takes no store, because there is one queue
+ * for the app and not one per page.
+ */
+function renderDraftsPage(): Ui {
+  return renderUi(
+    <DraftsProvider>
+      <DraftsPage connected={false} />
+    </DraftsProvider>,
+  );
+}
+
 /** Every Draft on screen, by name, in the order the list renders them. */
 function listedNames(): string[] {
   return screen
@@ -71,7 +85,7 @@ describe("deleting a Draft", () => {
       draft_delete: () => view([OTHER]),
     });
 
-    const { user } = renderUi(<DraftsPage connected={false} />);
+    const { user } = renderDraftsPage();
 
     await user.click(await screen.findByRole("button", { name: `Delete ${DRAFT.name}` }));
 
@@ -81,9 +95,11 @@ describe("deleting a Draft", () => {
     const prompt = screen.getByText(/Delete\s+permanently\?/);
     expect(prompt.textContent).toContain(DRAFT.name);
     const confirm = screen.getByRole("button", { name: "Delete permanently" });
-    // The control that destroys the Draft reads as destructive, as every other
-    // irreversible action in the app does.
-    expect(confirm.className).toContain("border-err");
+    // The control that destroys the Draft asks for the `danger` variant, rather
+    // than carrying a class that merely looks like it. The variant is read from
+    // the attribute the button renders for it, so a hand-rolled class — including
+    // one that would be almost invisible, `border-err/5` — cannot satisfy this.
+    expect(confirm.dataset.variant).toBe("danger");
 
     await user.click(screen.getByRole("button", { name: "Keep" }));
 
@@ -100,7 +116,7 @@ describe("deleting a Draft", () => {
       draft_delete: () => view([OTHER]),
     });
 
-    const { user } = renderUi(<DraftsPage connected={false} />);
+    const { user } = renderDraftsPage();
 
     await user.click(await screen.findByRole("button", { name: `Delete ${DRAFT.name}` }));
     await user.click(screen.getByRole("button", { name: "Delete permanently" }));
@@ -118,7 +134,7 @@ describe("deleting a Draft", () => {
       draft_delete: () => view([DRAFT, THIRD]),
     });
 
-    const { user } = renderUi(<DraftsPage connected={false} />);
+    const { user } = renderDraftsPage();
 
     await user.click(await screen.findByRole("button", { name: `Delete ${OTHER.name}` }));
     await user.click(screen.getByRole("button", { name: "Delete permanently" }));
@@ -144,7 +160,7 @@ describe("a library lifted from an older schema", () => {
   it("shows every Draft and reports the lift that could not be written", async () => {
     fakeBackend({ drafts_load: () => view([DRAFT], null, WARNING) });
 
-    renderUi(<DraftsPage connected={false} />);
+    renderDraftsPage();
 
     expect(await screen.findByText(DRAFT.name)).toBeTruthy();
     expect(screen.getByText(/could not be rewritten/)).toBeTruthy();
@@ -156,7 +172,7 @@ describe("a library lifted from an older schema", () => {
   it("says nothing when the lift was written", async () => {
     fakeBackend({ drafts_load: () => view([DRAFT]) });
 
-    renderUi(<DraftsPage connected={false} />);
+    renderDraftsPage();
 
     expect(await screen.findByText(DRAFT.name)).toBeTruthy();
     expect(screen.queryByText(/could not be rewritten/)).toBeNull();

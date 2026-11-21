@@ -1,13 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Section } from "../components/Section";
 import { LoadTagIntoDraft } from "../components/LoadTagIntoDraft";
+import { MigrationWarning } from "../components/MigrationWarning";
+import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
 import { WriteDraftToTag } from "../components/WriteDraftToTag";
-import { DraftClosePrompt } from "../components/DraftClosePrompt";
-import { useCloseGuard } from "../hooks/useCloseGuard";
-import { useDrafts } from "../hooks/useDrafts";
+import { useDraftsState } from "../components/DraftsProvider";
 import {
   DRAFT_NOT_A_TAG_NOTICE,
   EMPTY_DRAFT_DETAIL,
@@ -54,11 +54,17 @@ function draftSize(draft: Draft): number | null {
  * tags" mean two different things.
  */
 export function DraftsPage({ connected }: { connected: boolean }) {
-  const drafts = useDrafts();
-  // Closing the window is not an unmount, so the queue is written from the one
-  // place the app is told a close is coming. Edits live only while this page is
-  // mounted; leaving it flushes them on the way out.
-  const closeGuard = useCloseGuard(drafts.settle);
+  const drafts = useDraftsState();
+  // The queue outlives this page — it is the app's, so an edit made here is
+  // still written when the window is closed from somewhere else. Leaving the
+  // page is the one exit that happens *here*, and it writes what is queued on
+  // the way out, exactly as it did when the queue lived in this component.
+  useEffect(() => () => void drafts.settle(), [drafts.settle]);
+  // And a Draft written by another part of the app — an import adds them — is
+  // picked up when the section is opened, rather than only at launch.
+  useEffect(() => {
+    void drafts.reload();
+  }, [drafts.reload]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -94,29 +100,11 @@ export function DraftsPage({ connected }: { connected: boolean }) {
 
   return (
     <div className="flex flex-col gap-8">
-      {closeGuard.problem && (
-        <DraftClosePrompt
-          problem={closeGuard.problem}
-          onQuitAnyway={closeGuard.quitAnyway}
-          onKeepEditing={closeGuard.keepEditing}
-        />
-      )}
-
       <Section
         title="Drafts"
         hint="A Draft is a message you compose before a Tag is in hand. It holds Records in order and is not attached to any Tag."
       >
-        {migrationWarning && (
-          <div className="mb-4 border-l-2 border-warn bg-warn/5 px-3 py-2">
-            <p className="text-sm text-warn">
-              This library was upgraded from an older version
-            </p>
-            <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
-              {migrationWarning} Saving is still on: a save writes the upgraded library and
-              corrects the version the file claims.
-            </p>
-          </div>
-        )}
+        {migrationWarning && <MigrationWarning detail={migrationWarning} />}
 
         {drafts.problem && (
           <div className="mb-4 border-l-2 border-err bg-err/5 px-3 py-2">
@@ -184,24 +172,14 @@ export function DraftsPage({ connected }: { connected: boolean }) {
                 >
                   <div className="min-w-0 flex-1">
                     {confirming ? (
-                      <div className="flex flex-col gap-2">
-                        <p className="text-sm text-text">
-                          Delete <span className="text-text">{name}</span> permanently?
-                        </p>
-                        <p className="max-w-prose text-xs leading-relaxed text-text-muted">
-                          A Draft was written here and never lived on a Tag, so there is no copy
-                          to read back. This removes it from the library file and no copy is
-                          kept.
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Button autoFocus variant="danger" onClick={() => deleteDraft(draft)}>
-                            Delete permanently
-                          </Button>
-                          <Button variant="ghost" onClick={() => setConfirmingId(null)}>
-                            Keep
-                          </Button>
-                        </div>
-                      </div>
+                      <RowDeleteConfirmation
+                        name={name}
+                        onConfirm={() => deleteDraft(draft)}
+                        onDismiss={() => setConfirmingId(null)}
+                      >
+                        A Draft was written here and never lived on a Tag, so there is no copy to
+                        read back. This removes it from the library file and no copy is kept.
+                      </RowDeleteConfirmation>
                     ) : renaming ? (
                       <input
                         autoFocus

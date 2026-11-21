@@ -16,16 +16,23 @@
 //! holds before anything can edit it.
 //!
 //! This module owns the **serialisation domain**: the one lock every write to
-//! the file is performed under, whoever performs it. A save, an import, an
-//! export and a dump all replace the whole file with bytes read moments earlier,
-//! so they must not overlap — two of them reading the same starting state would
+//! the library file is performed under, whoever performs it. A save, an import
+//! and an export all replace the whole file with bytes read moments earlier, so
+//! they must not overlap — two of them reading the same starting state would
 //! each rename a file holding only their own change, and one whole update would
 //! be lost with nothing reported. See [`serialised`].
+//!
+//! The domain is the library file's, and stops there. A file the user chooses —
+//! a memory dump, an export destination — shares no starting state with the
+//! library, so waiting for the library's lock would make a save somewhere else
+//! in the app delay it for no reason. Those writes still stage and rename
+//! atomically ([`write_file_atomically`]); they just do not queue.
 //!
 //! Nothing here touches the Reader, so every test runs against a real temp
 //! directory with no hardware attached.
 
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -49,11 +56,14 @@ const TEMP_SUFFIX: &str = ".tmp";
 /// The one serialisation domain that governs the library file.
 ///
 /// Every write to the file — a save from the store, an import that merges a
-/// document into it, an export or a dump staged beside it — is performed while
-/// this is held. One lock is the whole point: two locks would each be sound on
-/// their own and jointly unsound, which is precisely how two saves overlapping
-/// in time could each read the same starting library and each rename a file
-/// reflecting only its own change.
+/// document into it, an export staged beside it — is performed while this is
+/// held. One lock is the whole point: two locks would each be sound on their own
+/// and jointly unsound, which is precisely how two saves overlapping in time
+/// could each read the same starting library and each rename a file reflecting
+/// only its own change.
+///
+/// What is in scope is the file, not writing as such: a file that is not the
+/// library does not share its starting state and does not queue behind it.
 ///
 /// It is held across a whole read-and-write, not just across the write, because
 /// the write replaces the file with a version read a moment earlier. A lock that
@@ -86,14 +96,26 @@ pub(crate) fn serialised<T>(f: impl FnOnce(&Domain) -> T) -> T {
     f(&Domain { _guard: guard })
 }
 
-/// Write `bytes` to `path` atomically, inside the domain: staged beside the
+/// Replace a library file atomically, inside the domain: staged beside the
 /// target, flushed to disk, renamed over it, and the directory entry flushed.
 ///
-/// This is the only code that replaces a library file, whether the bytes are a
-/// library from a save, a document from an import, or a copy of either for the
-/// user. A crash at any point leaves the old file or the new one, never a torn
-/// one.
+/// This is the only way a library file is replaced — a save, an import, a lift —
+/// and asking for the [`Domain`] is what makes that true, because a write path
+/// that skips the lock does not compile. A crash at any point leaves the old file
+/// or the new one, never a torn one.
 pub(crate) fn write_atomically(_domain: &Domain, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_file_atomically(path, bytes)
+}
+
+/// Write `bytes` to `path` atomically, outside the library's domain.
+///
+/// The atomic replace is the same act for every file the app writes, so it is the
+/// same code: staged beside the target, flushed, renamed, directory entry
+/// flushed. What this does *not* take is the library's [`Domain`], because the
+/// file it writes is not the library — a memory dump, a copy of one — and a
+/// write with no starting state in common with the library has nothing to gain
+/// from waiting for a library save to finish.
+pub(crate) fn write_file_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let staged = stage_bytes(path, bytes)?;
     commit_staged(&staged, path)
 }
@@ -335,19 +357,60 @@ impl LibraryProblem {
     }
 }
 
-/// One library file, decoded.
+/// One library document, decoded.
 ///
 /// `library` is always this build's shape: a file one version behind has
 /// already been lifted, so no caller has to know which version it came from.
 #[derive(Debug, Clone, PartialEq)]
 struct Read {
     library: Library,
+    /// Every top-level key the typed half of the file does not own, exactly as
+    /// it was read.
+    ///
+    /// A key this build has never heard of belongs to a build that does, so it
+    /// is the file's, not this struct's, and every write that replaces the file
+    /// writes it back. The lift keeps such keys because it edits the parsed
+    /// document; this is what makes an ordinary save keep them too.
+    rest: Map<String, Value>,
     /// The version the file itself claimed, before any lift.
     found: u32,
     /// The file as this build would write it, when it had to be lifted. `None`
     /// means the file already claims this build's version and must not be
     /// rewritten just for having been read.
-    lifted: Option<serde_json::Value>,
+    lifted: Option<Value>,
+}
+
+/// The top-level keys the typed half of a library owns.
+///
+/// Everything else in the object is carried, not modelled: an import, a lift and
+/// a save all agree on this list, so none of them can disagree about which keys
+/// are the struct's to write.
+pub(crate) const TYPED_KEYS: [&str; 3] = ["version", "snapshots", "drafts"];
+
+/// One library document as this build writes it: the typed collections, then
+/// every other top-level key the file carried.
+///
+/// The [`Library`] struct alone is exactly `version/snapshots/drafts`, so
+/// serialising it would drop every key this build does not model — the defect
+/// [`crate::library_schema`] exists to prevent, committed by the save that
+/// follows a lift. Writing the document instead is what keeps a save and a lift
+/// the same act: a change of the parts this build understands, on top of a file
+/// that keeps the parts it does not.
+pub(crate) fn document_from(library: &Library, rest: &Map<String, Value>) -> Value {
+    let mut object = Map::new();
+    object.insert("version".to_string(), Value::from(library.version));
+    object.insert(
+        "snapshots".to_string(),
+        serde_json::to_value(&library.snapshots).expect("a Snapshot is always serialisable"),
+    );
+    object.insert(
+        "drafts".to_string(),
+        serde_json::to_value(&library.drafts).expect("a Draft is always serialisable"),
+    );
+    for (key, value) in rest {
+        object.insert(key.clone(), value.clone());
+    }
+    Value::Object(object)
 }
 
 /// What opening the library came to.
@@ -473,6 +536,7 @@ impl LibraryStore {
             // A missing file is a library nobody has written to yet.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Read {
                 library: Library::empty(),
+                rest: Map::new(),
                 found: SCHEMA_VERSION,
                 lifted: None,
             }),
@@ -550,12 +614,15 @@ impl LibraryStore {
     /// The replacement itself, inside the domain the caller holds.
     pub(crate) fn replace(&self, domain: &Domain, library: &Library) -> Result<(), SaveError> {
         // Never replace a file this build cannot read: the bytes on disk may be
-        // the user's only copy, and a clean start would destroy them.
-        if let Err(problem) = self.read() {
-            return Err(SaveError::Refused(problem));
-        }
+        // the user's only copy, and a clean start would destroy them. The same
+        // read says which keys this build does not model, so they can be
+        // written back rather than dropped.
+        let rest = match self.read() {
+            Ok(read) => read.rest,
+            Err(problem) => return Err(SaveError::Refused(problem)),
+        };
         let staged = self
-            .stage(domain, library)
+            .stage(domain, library, &rest)
             .map_err(|e| SaveError::Io(e.to_string()))?;
         self.commit(domain, &staged)
             .map_err(|e| SaveError::Io(e.to_string()))
@@ -563,8 +630,13 @@ impl LibraryStore {
 
     /// The staging half of an atomic replacement: write the replacement to a
     /// sibling temp file and flush it. Nothing is visible at `path` yet.
-    fn stage(&self, _domain: &Domain, library: &Library) -> std::io::Result<PathBuf> {
-        let bytes = serde_json::to_vec_pretty(library)?;
+    fn stage(
+        &self,
+        _domain: &Domain,
+        library: &Library,
+        rest: &Map<String, Value>,
+    ) -> std::io::Result<PathBuf> {
+        let bytes = serde_json::to_vec_pretty(&document_from(library, rest))?;
         stage_bytes(&self.path, &bytes)
     }
 
@@ -836,12 +908,29 @@ fn parse_library(bytes: &[u8]) -> Result<Read, LibraryProblem> {
         current if current == SCHEMA_VERSION => value,
         older => crate::library_schema::lift_to_current(value, older)?,
     };
+    // The keys the typed half does not own, taken from the document this build
+    // would write — after any lift, so the rest is what remains once the version
+    // and the two collections are accounted for.
+    let mut rest = match &document {
+        Value::Object(object) => object.clone(),
+        // Unreachable through `parse_library`, which has already read `version`
+        // out of an object. Reported rather than guessed at all the same.
+        _ => {
+            return Err(LibraryProblem::Corrupt {
+                detail: "the file is not a JSON object".to_string(),
+            })
+        }
+    };
+    for key in TYPED_KEYS {
+        rest.remove(key);
+    }
     let library =
         serde_json::from_value(document.clone()).map_err(|e| LibraryProblem::Corrupt {
             detail: e.to_string(),
         })?;
     Ok(Read {
         library,
+        rest,
         found,
         lifted: (found != SCHEMA_VERSION).then_some(document),
     })
@@ -933,7 +1022,7 @@ mod tests {
             .expect("first save");
 
         let replacement = serialised(|domain| {
-            store.stage(domain, &library_with(&["56 00 53 C7 B3"]))
+            store.stage(domain, &library_with(&["56 00 53 C7 B3"]), &Map::new())
         })
         .expect("stage the replacement, then never commit it");
         assert!(
@@ -972,7 +1061,7 @@ mod tests {
         fs::create_dir(&blocked).expect("make the commit target impossible");
         let blocked_store = LibraryStore::new(&blocked);
         let staged = serialised(|domain| {
-            blocked_store.stage(domain, &library_with(&["56 00 53 C7 B3"]))
+            blocked_store.stage(domain, &library_with(&["56 00 53 C7 B3"]), &Map::new())
         })
         .expect("stage");
         assert!(
@@ -2323,6 +2412,102 @@ mod tests {
         };
         assert_eq!(reopened.drafts, saved, "every Draft, and its Records, in order");
         assert_eq!(reopened.version, SCHEMA_VERSION);
+        assert_eq!(version_on_disk(&path), u64::from(SCHEMA_VERSION));
+    }
+
+    // A save preserves what this build does not model.
+    //
+    // ADR 0005 and the migration module both rest on the same rule: a file is
+    // the user's, and a top-level key this build has never heard of belongs to
+    // a build that does. The lift keeps such keys because it edits the parsed
+    // document; an import keeps them because it carries the rest of the object
+    // with it. The save path did not: it wrote the `Library` struct, which is
+    // exactly `version/snapshots/drafts`, so the first ordinary save after a
+    // lift — or after an import — silently dropped every other key. That is the
+    // same loss the version bump exists to prevent, committed by this build
+    // against a file it just declared it understood.
+
+    /// One top-level key as the file on disk holds it.
+    fn key_on_disk(path: &Path, key: &str) -> serde_json::Value {
+        let bytes = fs::read(path).expect("read the library file");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("the file is JSON");
+        value.get(key).cloned().unwrap_or(serde_json::Value::Null)
+    }
+
+    /// The v1 fixture, carrying two collections this build has no field for.
+    fn v1_file_with_unmodelled_keys(path: &Path) {
+        let mut document: serde_json::Value =
+            serde_json::from_str(V1_WITH_DRAFTS).expect("the fixture is JSON");
+        document["tags"] = serde_json::json!(["Front door", "Back gate"]);
+        document["futureCollection"] = serde_json::json!([{ "kept": true }]);
+        fs::write(path, serde_json::to_vec_pretty(&document).expect("encode"))
+            .expect("write a v1 library with extra keys");
+    }
+
+    #[test]
+    fn an_ordinary_save_keeps_a_top_level_key_this_build_does_not_model() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        v1_file_with_unmodelled_keys(&path);
+
+        let store = LibraryStore::new(&path);
+        match store.open() {
+            Open::Opened {
+                migration: Some(Lifted::Written { from: 1 }),
+                ..
+            } => {}
+            other => panic!("a v1 file is lifted on open: {other:?}"),
+        }
+        assert_eq!(
+            key_on_disk(&path, "tags"),
+            serde_json::json!(["Front door", "Back gate"]),
+            "the lift is a change of version claim, not a rebuild"
+        );
+
+        // The first ordinary save after the lift: one Draft, written the way the
+        // app writes one, and nothing else asked for.
+        store
+            .update(|library| {
+                library.add_draft("Roof light", UPDATED_AT);
+            })
+            .expect("save a Draft");
+
+        assert_eq!(
+            key_on_disk(&path, "tags"),
+            serde_json::json!(["Front door", "Back gate"]),
+            "a save writes the library file, not only the keys this build models"
+        );
+        assert_eq!(
+            key_on_disk(&path, "futureCollection"),
+            serde_json::json!([{ "kept": true }])
+        );
+        // And the save itself landed, so this is not an assertion about a write
+        // that never happened.
+        let after = LibraryStore::new(&path).load().expect("reload");
+        assert_eq!(after.drafts.len(), 3, "the save wrote the Draft it was given");
+    }
+
+    #[test]
+    fn a_whole_library_save_keeps_them_when_no_lift_was_involved() {
+        // A file already at this build's version: the lift never runs, so what
+        // preserves the key has to be the save path itself.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        let mut document = serde_json::to_value(Library::empty()).expect("encode");
+        document["tags"] = serde_json::json!(["kept"]);
+        fs::write(&path, serde_json::to_vec_pretty(&document).expect("encode"))
+            .expect("write");
+
+        let store = LibraryStore::new(&path);
+        let mut library = store.load().expect("load");
+        library.add_draft("Lobby", UPDATED_AT);
+        store.save(&library).expect("save the whole library");
+
+        assert_eq!(
+            key_on_disk(&path, "tags"),
+            serde_json::json!(["kept"]),
+            "a save of the whole library is still a save of the whole file"
+        );
         assert_eq!(version_on_disk(&path), u64::from(SCHEMA_VERSION));
     }
 }

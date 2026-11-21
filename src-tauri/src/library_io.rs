@@ -15,10 +15,12 @@
 //! Nothing here touches the Reader, so every test runs against a real temp
 //! directory with no hardware attached.
 //!
-//! Every write here happens inside the library's serialisation domain (see
-//! [`crate::library::serialised`]): an import merges into the library and then
-//! replaces it, and a save from the store could otherwise read the same starting
-//! library and replace it too, losing the merge.
+//! Every write to the library file here happens inside the library's
+//! serialisation domain (see [`crate::library::serialised`]): an import merges
+//! into the library and then replaces it, and a save from the store could
+//! otherwise read the same starting library and replace it too, losing the merge.
+//! A file that is not the library — a dump the user chose a destination for — is
+//! outside it, and does not queue behind a save.
 
 use serde::Serialize;
 use serde_json::{Map, Value};
@@ -27,15 +29,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::library::{
-    serialised, write_atomically, Domain, Draft, Library, LibraryProblem, LibraryStore, Snapshot,
+    document_from, serialised, write_atomically, write_file_atomically, Domain, Draft, Library,
+    LibraryProblem, LibraryStore, Snapshot, TYPED_KEYS,
 };
-
-/// Top-level keys the typed half of a library owns.
-///
-/// Drafts are here because this build's schema has them: they are read, merged
-/// and written as typed entries, never as an opaque blob that could drift from
-/// what the store itself would write.
-const TYPED_KEYS: [&str; 3] = ["version", "snapshots", "drafts"];
 
 /// One library document as a file holds it.
 ///
@@ -66,23 +62,10 @@ impl Document {
     /// The document as it is written to a file.
     ///
     /// The typed keys are written in the order the store itself writes them, so
-    /// a library file and its export are the same file.
+    /// a library file and its export are the same file — and through the store's
+    /// own writer, so neither can start carrying a key the other drops.
     pub fn to_json(&self) -> Value {
-        let mut object = Map::new();
-        object.insert("version".to_string(), Value::from(self.library.version));
-        object.insert(
-            "snapshots".to_string(),
-            serde_json::to_value(&self.library.snapshots)
-                .expect("a Snapshot is always serialisable"),
-        );
-        object.insert(
-            "drafts".to_string(),
-            serde_json::to_value(&self.library.drafts).expect("a Draft is always serialisable"),
-        );
-        for (key, value) in &self.rest {
-            object.insert(key.clone(), value.clone());
-        }
-        Value::Object(object)
+        document_from(&self.library, &self.rest)
     }
 }
 
@@ -289,13 +272,13 @@ fn write_document(domain: &Domain, path: &Path, document: &Document) -> Result<(
 
 /// Write one file the user chose, atomically.
 ///
-/// The staging-and-rename in `write_atomically` is the same rule a library
+/// The staging-and-rename in `write_file_atomically` is the same rule a library
 /// export follows, so a dump could not leave a half-written file where a
-/// complete one was promised either.
+/// complete one was promised either. It is deliberately outside the library's
+/// serialisation domain: the file is not the library, so a dump the user saved
+/// would otherwise wait behind a library save it shares nothing with.
 pub fn write_text(path: &Path, text: &str) -> Result<(), FileError> {
-    serialised(|domain| {
-        write_atomically(domain, path, text.as_bytes()).map_err(|e| FileError::Io(e.to_string()))
-    })
+    write_file_atomically(path, text.as_bytes()).map_err(|e| FileError::Io(e.to_string()))
 }
 
 #[cfg(test)]
@@ -449,6 +432,47 @@ mod tests {
         let refused = write_text(&dest, "a dump");
         assert!(matches!(refused, Err(FileError::Io(_))), "got {refused:?}");
         assert!(dest.is_dir(), "what was there is still there");
+    }
+
+    #[test]
+    fn a_dump_write_does_not_queue_behind_the_library_domain() {
+        // Ticket 03 put every write to the library file inside one domain. A
+        // dump is not the library file: it is a file the user chose, and making
+        // it wait for a library save buys nothing, because the two have no
+        // starting state in common. This test holds the domain and checks that a
+        // dump written meanwhile finishes anyway.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dest = dir.path().join("tag.txt");
+
+        let (held, domain_held) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel::<()>();
+        let holder = std::thread::spawn(move || {
+            crate::library::serialised(|_| {
+                held.send(()).expect("the test is still waiting");
+                let _ = released.recv();
+            });
+        });
+        domain_held.recv().expect("the domain was taken");
+
+        let written_path = dest.clone();
+        let (done, finished) = std::sync::mpsc::channel();
+        let writer = std::thread::spawn(move || {
+            let _ = done.send(write_text(&written_path, "a dump").is_ok());
+        });
+
+        let outcome = finished.recv_timeout(std::time::Duration::from_secs(5));
+        // Released either way, so a failure here cannot strand the domain for
+        // every test that runs after it.
+        release.send(()).expect("the holder is still there");
+        holder.join().expect("the holder panicked");
+        writer.join().expect("the writer panicked");
+
+        assert_eq!(
+            outcome,
+            Ok(true),
+            "a dump write waited for the library's lock and failed to land"
+        );
+        assert_eq!(bytes_at(&dest), b"a dump");
     }
 
     // Slice B: the preview says what would happen and writes nothing.

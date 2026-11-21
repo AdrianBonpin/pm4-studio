@@ -38,7 +38,8 @@ export interface DraftsState {
    * the file: `null` when it did, otherwise the reason it did not. Resolves at
    * once when nothing is queued, so a window with no pending edit closes with no
    * delay. Used when the window is about to close, the one exit that is not an
-   * unmount and cannot be retried afterwards.
+   * unmount and cannot be retried afterwards — and when the page that edits
+   * Drafts goes away, which does not wait for the reply.
    */
   settle: () => Promise<string | null>;
 }
@@ -47,9 +48,8 @@ export interface DraftsState {
  * Drafts are a collection in the same file as the Snapshots, read and written
  * through the Rust store. Edits apply to the view immediately and are written
  * to disk a moment later, so typing does not turn into one file rewrite per
- * keystroke; anything still pending is written when the page unmounts, so
- * nothing is lost by leaving the section, and `settle` writes it and waits when
- * the window is closing, so nothing is lost by quitting either.
+ * keystroke. Anything still pending is written when the queue's owner goes away
+ * — see `settle`, which is the one definition of "pending" every exit uses.
  */
 export function useDrafts(): DraftsState {
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -67,6 +67,8 @@ export function useDrafts(): DraftsState {
   const revisions = useRef(new Map<string, number>());
   /** Drafts whose newest edit has not reached the file yet. */
   const unsaved = useRef(new Set<string>());
+  /** The settle in flight, so two exits at the same moment write nothing twice. */
+  const settling = useRef<Promise<string | null> | null>(null);
 
   const apply = useCallback((next: Draft[]) => {
     draftsRef.current = next;
@@ -128,42 +130,50 @@ export function useDrafts(): DraftsState {
     [persist],
   );
 
-  /** Write everything still queued, now. Used when the page goes away. */
-  const flush = useCallback(() => {
-    for (const [id, queued] of timers.current) {
-      clearTimeout(queued);
-      void persist(id);
-    }
+  /** Stop the queued writes without performing them: they are queued anyway. */
+  const stopTimers = useCallback(() => {
+    for (const queued of timers.current.values()) clearTimeout(queued);
     timers.current.clear();
-  }, [persist]);
+  }, []);
 
   /**
-   * Write everything still queued and wait for it, so a caller about to end the
+   * What has been edited and is not on disk yet: the one answer to "what is
+   * queued" that every exit uses.
+   *
+   * A timer is only a delayed write of something already here, so a Draft with a
+   * timer is always in this set. A write that is out is not: it carries an edit
+   * that is already on its way, and a newer edit waits for it rather than racing
+   * it. A write that failed leaves its Draft here, which is why a failed save is
+   * retried by whatever exit happens next, whichever exit that is.
+   */
+  const queued = useCallback((): string[] => [...unsaved.current], []);
+
+  /**
+   * Write everything queued and wait for it, so a caller about to end the
    * process knows what is on disk.
    *
    * A write already on its way is awaited first. Only then is what is still
-   * unsaved written, because an unsaved Draft is newer than the copy in flight:
+   * queued written, because a queued Draft is newer than the copy in flight:
    * writing the other way round would let the older copy land last and become
-   * the file. Nothing unsaved and nothing in flight resolves immediately, which
+   * the file. Nothing queued and nothing in flight resolves immediately, which
    * is what keeps an idle window closing instantly.
    *
-   * A write that failed stays unsaved, so the next close tries it again rather
+   * A write that failed stays queued, so the next exit tries it again rather
    * than treating an edit on screen as one that reached the file.
    */
-  const settle = useCallback(async (): Promise<string | null> => {
-    const queued = [...unsaved.current];
-    if (queued.length === 0 && inFlight.current.size === 0) return null;
+  const settleOnce = useCallback(async (): Promise<string | null> => {
+    const pending = queued();
+    if (pending.length === 0 && inFlight.current.size === 0) return null;
 
     // The timers are stopped before anything is awaited: a timer that fired
-    // mid-close would write the same Draft a second time, after this call had
+    // mid-settle would write the same Draft a second time, after this call had
     // already worked out what to write.
-    for (const timer of timers.current.values()) clearTimeout(timer);
-    timers.current.clear();
+    stopTimers();
 
     await Promise.allSettled([...inFlight.current]);
 
     let failure: string | null = null;
-    for (const id of queued) {
+    for (const id of pending) {
       // A write that was out when this started may have carried the newest state
       // to the file already.
       if (!unsaved.current.has(id)) continue;
@@ -171,9 +181,29 @@ export function useDrafts(): DraftsState {
       if (failure === null && reported !== null) failure = reported;
     }
     return failure;
-  }, [persist]);
+  }, [persist, queued, stopTimers]);
 
-  useEffect(() => flush, [flush]);
+  /**
+   * `settleOnce`, but one at a time.
+   *
+   * Two exits can arrive together — leaving the Drafts page unmounts it while the
+   * app above it is going away too — and each would otherwise write the same
+   * Draft again. A caller that asks while a settle is running joins the one that
+   * is already running, which is also the honest answer: what is on disk when it
+   * resolves is what that call promised.
+   */
+  const settle = useCallback((): Promise<string | null> => {
+    if (settling.current) return settling.current;
+    const run = settleOnce();
+    settling.current = run;
+    const done = () => {
+      if (settling.current === run) settling.current = null;
+    };
+    void run.then(done, done);
+    return run;
+  }, [settleOnce]);
+
+  useEffect(() => () => void settle(), [settle]);
 
   const reload = useCallback(async () => {
     if (!isTauri()) {
@@ -182,10 +212,17 @@ export function useDrafts(): DraftsState {
       return;
     }
     try {
-      const view = await invoke<DraftsView>("drafts_load");
-      apply(view.drafts);
-      setProblem(view.problem);
-      setMigrationWarning(view.migrationWarning);
+      const read = await invoke<DraftsView>("drafts_load");
+      // What is on disk, with anything of ours that has not reached it on top: a
+      // reread is not permission to throw away an edit that is still queued.
+      const edited = new Map(
+        draftsRef.current
+          .filter((draft) => unsaved.current.has(draft.id))
+          .map((draft) => [draft.id, draft]),
+      );
+      apply(read.drafts.map((draft) => edited.get(draft.id) ?? draft));
+      setProblem(read.problem);
+      setMigrationWarning(read.migrationWarning);
       setError(null);
     } catch (e) {
       setError(String(e));
