@@ -46,3 +46,7 @@ Neither refusal is a warning the user can dismiss. The write does not proceed.
 - The app can no longer serve a "write anyway" escape hatch without reversing
   this decision deliberately. That is the point: the guard is load-bearing and
   should not be removed as a convenience fix for a flaky read.
+- The decision is a pure function (`src-tauri/src/write_guard.rs`) that takes
+  what the tag in the write position reads as, and the Identity to be written.
+  Both refusals are therefore exercised by tests that need no hardware, so a
+  future change that weakens the guard fails a test rather than reaching a chip.
