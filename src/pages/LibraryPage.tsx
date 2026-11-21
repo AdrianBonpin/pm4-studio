@@ -1,9 +1,10 @@
 import { useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Check, Copy, Pencil, Trash2 } from "lucide-react";
+import { Check, Copy, Pencil, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Section } from "../components/Section";
+import { LibraryProblemBanner } from "../components/LibraryProblemBanner";
 import { MigrationWarning } from "../components/MigrationWarning";
 import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
 import { describeDeviceFailure } from "../lib/readerIdentity";
@@ -196,29 +197,7 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
       >
         {migrationWarning && <MigrationWarning detail={migrationWarning} />}
 
-        {problem && (
-          <div className="mb-4 flex items-start gap-3 border-l-2 border-err bg-err/5 px-3 py-2">
-            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-err" />
-            <div className="min-w-0">
-              <p className="text-sm text-err">
-                {problem.kind === "newerVersion"
-                  ? "This library was written by a newer version of PM4 Studio"
-                  : problem.kind === "olderVersion"
-                    ? "This library is from an older version of PM4 Studio"
-                    : "The library file could not be read"}
-              </p>
-              <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
-                {problem.message} Saving is turned off until it is dealt with, so the file on
-                disk is never replaced by an empty one.
-              </p>
-              {problem.detail && (
-                <p className="mt-1 select-text break-all font-mono text-[11px] text-text-muted">
-                  {problem.detail}
-                </p>
-              )}
-            </div>
-          </div>
-        )}
+        {problem && <LibraryProblemBanner problem={problem} />}
 
         {error && (
           <p className="mb-4 border-l-2 border-err bg-err/5 px-3 py-2 text-xs leading-relaxed text-err">

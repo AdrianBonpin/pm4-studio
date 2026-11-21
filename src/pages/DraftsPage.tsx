@@ -4,6 +4,7 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Section } from "../components/Section";
 import { LoadTagIntoDraft } from "../components/LoadTagIntoDraft";
+import { LibraryProblemBanner } from "../components/LibraryProblemBanner";
 import { MigrationWarning } from "../components/MigrationWarning";
 import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
 import { WriteDraftToTag } from "../components/WriteDraftToTag";
@@ -106,21 +107,7 @@ export function DraftsPage({ connected }: { connected: boolean }) {
       >
         {migrationWarning && <MigrationWarning detail={migrationWarning} />}
 
-        {drafts.problem && (
-          <div className="mb-4 border-l-2 border-err bg-err/5 px-3 py-2">
-            <p className="text-sm text-err">
-              {drafts.problem.kind === "newerVersion"
-                ? "This library was written by a newer version of PM4 Studio"
-                : drafts.problem.kind === "olderVersion"
-                  ? "This library is from an older version of PM4 Studio"
-                  : "The library file could not be read"}
-            </p>
-            <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
-              {drafts.problem.message} Saving is turned off until it is dealt with, so the file on
-              disk is never replaced by an empty one.
-            </p>
-          </div>
-        )}
+        {drafts.problem && <LibraryProblemBanner problem={drafts.problem} />}
 
         {drafts.error && (
           <p className="mb-4 border-l-2 border-err bg-err/5 px-3 py-2 text-xs leading-relaxed text-err">

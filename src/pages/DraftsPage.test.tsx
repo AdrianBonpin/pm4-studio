@@ -207,6 +207,44 @@ function SectionThatOpens() {
 }
 
 /**
+ * The library file cannot be written: Drafts and Snapshots live in one file, so
+ * one lock covers both, and it is reported the same way on both pages.
+ *
+ * This is the same defect class the migration warning had — the same state of
+ * the same file rendered twice, and the two copies drifted — so the page renders
+ * `LibraryProblemBanner` and the assertions here are the treatment it must have
+ * on either page: what the file is, the store's reason, the store's detail, and
+ * saving turned off.
+ */
+describe("a library that cannot be written", () => {
+  const DETAIL = "/Users/ada/Library/Application Support/pm4-studio/library.json";
+
+  it("reports it with the store's reason and detail, and turns saving off", async () => {
+    fakeBackend({
+      drafts_load: () =>
+        view(
+          [DRAFT],
+          {
+            kind: "newerVersion",
+            message: "The file claims schema 3, which this build does not write.",
+            detail: DETAIL,
+          },
+        ),
+    });
+
+    renderDraftsPage();
+
+    expect(await screen.findByText(/newer version of PM4 Studio/)).toBeTruthy();
+    expect(screen.getByText(/claims schema 3/)).toBeTruthy();
+    // The detail the store reported, which the Drafts page used to drop.
+    expect(screen.getByText(DETAIL)).toBeTruthy();
+
+    const create = screen.getByRole("button", { name: "New Draft" });
+    expect((create as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+/**
  * Ticket 04 / ADR 0005: a version 1 library is lifted on open, and a lift that
  * cannot be written is reported. The Drafts are the reason the version exists —
  * they are the collection an older build would have dropped — so the page says
