@@ -78,7 +78,7 @@ describe("Library's two collections", () => {
       within(collectionSwitch()).getByRole("button", { name: "Drafts" }).getAttribute("aria-pressed"),
     ).toBe("true");
     // The Snapshots list is not underneath it: one collection at a time.
-    expect(screen.queryByRole("button", { name: "Export library…" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Snapshots" })).toBeNull();
   });
 
   it("comes back to Snapshots without losing the collection switch", async () => {
@@ -88,7 +88,7 @@ describe("Library's two collections", () => {
     await ui.user.click(within(collectionSwitch()).getByRole("button", { name: "Snapshots" }));
 
     // The Snapshots content is back, and the switch still names both collections.
-    expect(screen.getByRole("button", { name: "Export library…" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Snapshots" })).toBeTruthy();
     expect(within(collectionSwitch()).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Snapshots",
       "Drafts",

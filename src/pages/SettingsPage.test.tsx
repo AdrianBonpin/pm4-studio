@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import { SettingsPage } from "./SettingsPage";
 import { fakeBackend, renderUi, type Backend } from "../test/dom";
+import { libraryState } from "../test/libraryState";
 import { APP_VERSION, CREDITS, LICENCE, REPOSITORY_URL } from "../lib/appInfo";
 import { READER_CAPABILITY_LIMITS } from "../lib/readerIdentity";
 import { TOAST_CORNER_KEY } from "../lib/toastCorner";
@@ -61,6 +62,7 @@ function mount(options: MountOptions = {}) {
       reader={{ connected, info, firmware }}
       beepOn={beepOn}
       onBeepOnChange={onBeepOnChange}
+      library={libraryState()}
     />,
   );
   return { backend, ui };
@@ -77,7 +79,7 @@ beforeEach(() => {
 });
 
 describe("the Settings page's shape", () => {
-  it("opens on Feedback, with About and Diagnostics one click away", async () => {
+  it("opens on Feedback, with Data, About and Diagnostics one click away", async () => {
     const { ui } = mount();
 
     // Feedback is open before anything is clicked: the page has a default, not
@@ -92,6 +94,7 @@ describe("the Settings page's shape", () => {
     // one group at a time and every group is on it.
     expect(within(switchGroup).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Feedback",
+      "Data",
       "About",
       "Diagnostics",
     ]);

@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { legacyChirp } from "../lib/outcome";
+import {
+  BEEP_KEY,
+  DEFAULT_BEEP,
+  loadBeepPreference,
+  subscribePreferenceReset,
+} from "../lib/preferences";
 import { subscribeSignals } from "../lib/signal";
-
-const KEY = "pm4studio.beep";
 
 /**
  * Beeper preference, plus the pre-seam `chirp()` helper the unwired pages still
@@ -26,19 +30,36 @@ const KEY = "pm4studio.beep";
  * it.
  */
 export function useBeep() {
-  const [beepOn, setBeepOn] = useState<boolean>(() => {
-    if (typeof localStorage === "undefined") return true;
-    const v = localStorage.getItem(KEY);
-    return v === null ? true : v === "1";
-  });
+  const [beepOn, setBeepOn] = useState<boolean>(() => loadBeepPreference());
   const beepOnRef = useRef(beepOn);
+  // Set when the change came from the stored value being cleared rather than
+  // from the user: the default then governs the window, but it is not written
+  // back, because the point of clearing is that no choice is stored.
+  const clearingReset = useRef(false);
 
   useEffect(() => {
     beepOnRef.current = beepOn;
+    if (clearingReset.current) {
+      clearingReset.current = false;
+      return;
+    }
     if (typeof localStorage !== "undefined") {
-      localStorage.setItem(KEY, beepOn ? "1" : "0");
+      localStorage.setItem(BEEP_KEY, beepOn ? "1" : "0");
     }
   }, [beepOn]);
+
+  // Clear-all-saved-data removes the key; the preference falls back to the
+  // documented default here, without a restart and without re-storing it.
+  useEffect(
+    () =>
+      subscribePreferenceReset(() => {
+        setBeepOn((current) => {
+          clearingReset.current = current !== DEFAULT_BEEP;
+          return DEFAULT_BEEP;
+        });
+      }),
+    [],
+  );
 
   // The audible half of the seam, played. One frame per symbol today; ticket 04
   // turns a symbol into its count of chirps and holds the LED after attention.

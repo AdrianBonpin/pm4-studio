@@ -185,6 +185,7 @@ export default function App() {
                   reader={{ connected, info: reader.info, firmware: reader.firmware }}
                   beepOn={beepOn}
                   onBeepOnChange={setBeepOn}
+                  library={library}
                 />
               )}
             </div>

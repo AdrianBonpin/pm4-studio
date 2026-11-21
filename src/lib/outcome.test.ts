@@ -45,6 +45,7 @@ const EXPECTED_SEVERITY: Record<OutcomeKind, Severity> = {
   verified: "success",
   blanked: "success",
   erased: "success",
+  "data-cleared": "success",
   unverified: "warning",
   refused: "error",
   failed: "error",
@@ -115,6 +116,7 @@ describe("the discriminator set", () => {
         "announcement",
         "beep-test",
         "blanked",
+        "data-cleared",
         "erased",
         "failed",
         "nothing-latched",
@@ -177,6 +179,34 @@ describe("report", () => {
     ]) {
       expect(outcome.severity).toBe(severityOf(outcome.kind));
     }
+  });
+
+  it("takes a clear-data report the way the Settings page shows it", () => {
+    // One report, one set of words: the message and the page cannot disagree,
+    // and the tone is the report's, not a call site's choice.
+    const cleared = outcomes.dataCleared({
+      cleared: true,
+      removed: [{ target: "libraryFile", detail: "/x/library.json", bytes: 12 }],
+      blocked: null,
+    });
+    expect(cleared.kind).toBe("data-cleared");
+    expect(cleared.severity).toBe("success");
+    expect(cleared.message).toBe("Cleared all saved data.");
+
+    const nothing = outcomes.dataCleared({ cleared: true, removed: [], blocked: null });
+    expect(nothing.kind).toBe("announcement");
+    expect(nothing.message).toBe("There was nothing saved to clear.");
+
+    const refused = outcomes.dataCleared({
+      cleared: false,
+      removed: [],
+      blocked: { target: "staleTemp", detail: "/x/library.json.tmp", reason: "it is a directory" },
+    });
+    expect(refused.kind).toBe("refused");
+    expect(refused.severity).toBe("error");
+    expect(refused.message).toBe(
+      "Nothing was cleared: the temporary file a save may have left beside it could not be removed.",
+    );
   });
 
   it("shows an announcement and keeps it silent", () => {

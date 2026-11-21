@@ -3,13 +3,24 @@ import { invoke } from "@tauri-apps/api/core";
 import { Button } from "../components/ui/Button";
 import { Segmented, type SegmentedOption } from "../components/ui/Segmented";
 import { Toggle } from "../components/ui/Toggle";
+import { ClearSavedData } from "../components/ClearSavedData";
 import { ReaderLimits } from "../components/ReaderLimits";
 import { Field, Section } from "../components/Section";
 import { useToastCorner } from "../hooks/useToastCorner";
 import { APP_VERSION, CREDITS, CREDITS_NOTE, LICENCE, REPOSITORY_URL } from "../lib/appInfo";
+import { LIBRARY_PLAINTEXT_NOTICE } from "../lib/library";
+import {
+  describeExport,
+  describeImportApplied,
+  describeImportPreview,
+  nothingToAdd,
+  suggestedExportName,
+  type ImportPreview,
+} from "../lib/libraryFiles";
 import { outcomes, report } from "../lib/outcome";
 import { formatFirmwareRevision } from "../lib/readerIdentity";
 import { TOAST_CORNER_LABEL, type ToastCorner } from "../lib/toastCorner";
+import type { LibraryState } from "../hooks/useLibrary";
 import type { DeviceInfo } from "../types";
 
 /**
@@ -18,10 +29,9 @@ import type { DeviceInfo } from "../types";
  * every page's footer, and every tag.
  *
  * One group at a time, chosen from a row of buttons, so each group is one click
- * away rather than three screens down. Feedback opens first. A fourth group
- * (`Data`, the library path and clear-all) slots into that row as one entry: the
- * switcher is a single row of pills, the panels are siblings, and nothing about
- * the layout assumes three.
+ * away rather than three screens down. Feedback opens first, and Data sits
+ * between it and About: the library's file, its export and import, and the one
+ * action that clears everything saved.
  *
  * The page is a leaf and owns none of the shell's state. The beep preference and
  * the Reader's identity arrive as props, because they belong to the shell: a
@@ -30,14 +40,15 @@ import type { DeviceInfo } from "../types";
  */
 
 /** One of Settings' groups. */
-export type SettingsGroup = "feedback" | "about" | "diagnostics";
+export type SettingsGroup = "feedback" | "data" | "about" | "diagnostics";
 
 /**
- * The groups, in the order they are shown. `Data` arrives with ticket 05 as one
- * more entry between Feedback and About; nothing else moves.
+ * The groups, in the order they are shown. Data holds the library's own file and
+ * everything that acts on it, so the browsing page is for finding things.
  */
 const GROUPS: readonly { readonly id: SettingsGroup; readonly label: string }[] = [
   { id: "feedback", label: "Feedback" },
+  { id: "data", label: "Data" },
   { id: "about", label: "About" },
   { id: "diagnostics", label: "Diagnostics" },
 ];
@@ -72,9 +83,15 @@ interface SettingsPageProps {
   readonly reader: ReaderSummary;
   readonly beepOn: boolean;
   readonly onBeepOnChange: (on: boolean) => void;
+  /**
+   * The library, passed in because the store is the shell's: the Data group shows
+   * the file's path, exports and imports it, and reloads it after a clear. A
+   * second `useLibrary` here would be a second reader of the same file.
+   */
+  readonly library: LibraryState;
 }
 
-export function SettingsPage({ reader, beepOn, onBeepOnChange }: SettingsPageProps) {
+export function SettingsPage({ reader, beepOn, onBeepOnChange, library }: SettingsPageProps) {
   const [group, setGroup] = useState<SettingsGroup>("feedback");
 
   return (
@@ -92,6 +109,7 @@ export function SettingsPage({ reader, beepOn, onBeepOnChange }: SettingsPagePro
           onBeepOnChange={onBeepOnChange}
         />
       )}
+      {group === "data" && <DataGroup library={library} />}
       {group === "about" && <AboutGroup reader={reader} />}
       {group === "diagnostics" && <DiagnosticsGroup connected={reader.connected} />}
     </div>
@@ -156,6 +174,189 @@ function FeedbackGroup({
           Remembered between sessions, so a corner that suits you stays chosen.
         </p>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Data: the library's own file, its export and import, and clearing everything.
+ *
+ * These controls used to sit on the Library page, under the Snapshots they act on.
+ * They act on the whole library rather than on what is being browsed, so they
+ * belong with the other facts and actions about this machine's storage; the
+ * browsing page keeps finding things. The behaviour is the one that was there:
+ * an export re-imports identically, and an import adds what is missing and leaves
+ * every entry already here untouched.
+ */
+function DataGroup({ library }: { library: LibraryState }) {
+  const path = library.view?.path ?? null;
+  const problem = library.view?.problem ?? null;
+
+  const [revealNote, setRevealNote] = useState<string | null>(null);
+  const [fileBusy, setFileBusy] = useState(false);
+  const [fileNote, setFileNote] = useState<{ text: string; path?: string } | null>(null);
+  const [importPath, setImportPath] = useState<string | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+
+  const reveal = async () => {
+    setRevealNote(null);
+    try {
+      await invoke<string>("library_reveal");
+    } catch (e) {
+      setRevealNote(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const resetImport = () => {
+    setImportPath(null);
+    setImportPreview(null);
+  };
+
+  const exportLibrary = async () => {
+    setFileNote(null);
+    resetImport();
+    setFileBusy(true);
+    try {
+      const chosen = await library.pickPath("save", suggestedExportName(new Date()));
+      // Cancelled: nothing was written, so there is nothing to report.
+      if (!chosen) return;
+      const result = await library.exportTo(chosen);
+      if (result) setFileNote({ text: describeExport(result), path: result.path });
+    } finally {
+      setFileBusy(false);
+    }
+  };
+
+  const chooseImport = async () => {
+    setFileNote(null);
+    resetImport();
+    setFileBusy(true);
+    try {
+      const chosen = await library.pickPath("open");
+      // Cancelled: the library has not been read or written.
+      if (!chosen) return;
+      const preview = await library.previewImport(chosen);
+      if (preview) {
+        setImportPath(chosen);
+        setImportPreview(preview);
+      }
+    } finally {
+      setFileBusy(false);
+    }
+  };
+
+  const confirmImport = async () => {
+    if (!importPath) return;
+    setFileBusy(true);
+    try {
+      const result = await library.applyImport(importPath);
+      if (result) {
+        // The merge keeps every entry already here, so this says what was added.
+        setFileNote({ text: describeImportApplied(result.preview) });
+        resetImport();
+      }
+    } finally {
+      setFileBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-8">
+      <Section
+        title="Library file"
+        hint={LIBRARY_PLAINTEXT_NOTICE}
+        actions={
+          <Button variant="secondary" onClick={() => void reveal()}>
+            Reveal in file manager
+          </Button>
+        }
+      >
+        <div className="flex flex-col gap-2">
+          {/* The path is machine data, so it is mono and selectable in full. */}
+          <code className="block select-text break-all rounded-lg border border-border bg-canvas px-3 py-2 font-mono text-xs leading-relaxed text-text-muted">
+            {path ?? "the app data directory"}
+          </code>
+          {revealNote && <p className="text-xs leading-relaxed text-err">{revealNote}</p>}
+          {!path && (
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">
+              The library file is created the first time something is saved, in this directory.
+            </p>
+          )}
+        </div>
+      </Section>
+
+      <Section
+        title="Export and import"
+        hint="The whole library in one file: back it up, or move it to another machine. An import adds what is missing and leaves every entry already here exactly as it is."
+      >
+        <div className="flex flex-col gap-4">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              variant="secondary"
+              disabled={problem !== null || fileBusy}
+              onClick={() => void exportLibrary()}
+            >
+              Export library…
+            </Button>
+            <Button
+              variant="secondary"
+              disabled={problem !== null || fileBusy}
+              onClick={() => void chooseImport()}
+            >
+              Import library…
+            </Button>
+          </div>
+
+          {problem && (
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">
+              The library file cannot be read, so exporting and importing are unavailable until it
+              is dealt with. Clearing saved data is still possible, below.
+            </p>
+          )}
+
+          {importPreview && importPath && (
+            <div className="flex flex-col gap-3 border-l-2 border-accent bg-accent/5 px-3 py-3">
+              <p className="text-sm leading-relaxed text-text">
+                {describeImportPreview(importPreview)}
+              </p>
+              <code className="select-text break-all font-mono text-[11px] text-text-muted">
+                {importPath}
+              </code>
+              <p className="text-xs leading-relaxed text-text-muted">
+                Nothing has been written yet. Add to library applies the import; Cancel leaves the
+                library exactly as it is.
+              </p>
+              <div className="flex gap-2">
+                <Button
+                  variant="primary"
+                  disabled={fileBusy || nothingToAdd(importPreview)}
+                  onClick={() => void confirmImport()}
+                >
+                  {fileBusy ? "Adding…" : "Add to library"}
+                </Button>
+                <Button variant="ghost" disabled={fileBusy} onClick={resetImport}>
+                  Cancel
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {fileNote && (
+            <div>
+              <p className="text-xs leading-relaxed text-ok">{fileNote.text}</p>
+              {fileNote.path && (
+                <code className="mt-1 block select-text break-all font-mono text-[11px] text-text-muted">
+                  {fileNote.path}
+                </code>
+              )}
+            </div>
+          )}
+        </div>
+      </Section>
+
+      {/* Reloads the library after a clear, so the app is in its first-run state
+          without a restart rather than showing a file that is no longer there. */}
+      <ClearSavedData onCleared={() => library.reload()} />
     </div>
   );
 }
