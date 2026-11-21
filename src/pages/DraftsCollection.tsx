@@ -83,7 +83,19 @@ function recordsCount(count: number): string {
  * the user has gone somewhere else and only the app's own close listener can
  * write it then.
  */
-export function DraftsCollection({ connected }: { connected: boolean }) {
+export function DraftsCollection({
+  connected,
+  openDraftId = null,
+}: {
+  connected: boolean;
+  /**
+   * The Draft a reading handed over, i.e. the one the pane opens on rather than
+   * the first in the list. It is the Collection's arrival value, not a
+   * selection: absent when the user reached this Collection with the switch,
+   * where nothing has been chosen yet.
+   */
+  openDraftId?: string | null;
+}) {
   const drafts = useDraftsState();
   // Leaving the Collection writes what is queued, exactly as leaving the old
   // Drafts page did: both are an unmount, and neither can wait for the reply.
@@ -100,9 +112,10 @@ export function DraftsCollection({ connected }: { connected: boolean }) {
    * `undefined` is "nobody has chosen": the first Draft opens on arrival, for the
    * same reason the first Snapshot does — a pane that starts empty spends half
    * the window saying nothing. `null` is "the choice was closed again", which is
-   * what clicking the open Draft a second time does.
+   * what clicking the open Draft a second time does. A handoff from a reading is
+   * the one arrival that starts on a named Draft instead of the first.
    */
-  const [picked, setPicked] = useState<string | null | undefined>(undefined);
+  const [picked, setPicked] = useState<string | null | undefined>(openDraftId ?? undefined);
   const [newName, setNewName] = useState("");
   const [newKind, setNewKind] = useState<RecordKind>("text");
 

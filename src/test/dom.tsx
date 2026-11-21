@@ -35,6 +35,7 @@ import type { ReactElement } from "react";
 import { afterEach } from "vitest";
 import { cleanup, render, type RenderResult } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
+import { resetDraftHandoffForTest } from "../lib/draftHandoff";
 import { resetDeviceOperationsForTest } from "../lib/deviceLock";
 import { resetSessionModesForTest } from "../hooks/useSessionMode";
 
@@ -172,6 +173,9 @@ afterEach(() => {
   // session belongs to the webview, so one test's mode must not be the next
   // test's default — a fresh test starts where a fresh launch would.
   resetSessionModesForTest();
+  // A Draft handed to Library belongs to one navigation. A test that left one
+  // waiting would move the next test's Library page into the Drafts collection.
+  resetDraftHandoffForTest();
   // The boundary belongs to the webview, not to the test runner: leaving it
   // behind would make `isTauri()` true in a test that never asked for it.
   delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;

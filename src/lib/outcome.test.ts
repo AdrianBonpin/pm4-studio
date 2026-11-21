@@ -42,6 +42,7 @@ beforeEach(() => {
 /** Severity per discriminator, written out again so a silent edit to the table fails here. */
 const EXPECTED_SEVERITY: Record<OutcomeKind, Severity> = {
   read: "success",
+  drafted: "success",
   "beep-test": "success",
   "nothing-latched": "info",
   "read-incomplete": "warning",
@@ -151,6 +152,7 @@ describe("the discriminator set", () => {
         "beep-test",
         "blanked",
         "data-cleared",
+        "drafted",
         "erased",
         "failed",
         "nothing-latched",
@@ -676,6 +678,8 @@ describe("every outcome the vocabulary can build", () => {
     outcomes.beepTest(),
     outcomes.beepTestNoReader(),
     outcomes.beepTestMuted("errors-and-warnings"),
+    outcomes.draftedFromRead("04 43 8A 01 22 09 03", 2),
+    outcomes.draftNotCreated(),
   ];
 
   it("has a non-empty message, a discriminator in the set, and a known severity", () => {
@@ -690,5 +694,56 @@ describe("every outcome the vocabulary can build", () => {
     for (const outcome of built) {
       expect(() => report(outcome)).not.toThrow();
     }
+  });
+});
+
+/**
+ * A reading's message became a Draft (ticket 16).
+ *
+ * This is an operation the user pressed, so it ends in a sound and a message
+ * (ADR 0008). It is neither a read — nothing was read, this is what happened to a
+ * read that already had — nor a write outcome, because nothing about a Tag
+ * changed: the Draft is this machine's own file. The pair of tests below hold the
+ * two ends of that: a Draft that was made, and a Draft that was not.
+ */
+describe("a Draft made from a reading", () => {
+  it("is its own success, and says the Tag was not written to", () => {
+    const outcome = outcomes.draftedFromRead("04 43 8A 01 22 09 03", 2);
+
+    expect(outcome.kind).toBe("drafted");
+    expect(outcome.operation).toBe("draft");
+    expect(outcome.severity).toBe("success");
+    expect(outcome.message).toBe("Draft created from 04 43 8A 01 22 09 03 — 2 Records.");
+    expect(outcome.detail ?? "").toContain("Drafts");
+    // The one thing a user could fear from an action taken on a reading: that it
+    // wrote to the Tag. It says it did not.
+    expect(outcome.detail ?? "").toMatch(/not written to/i);
+  });
+
+  it("counts one Record as one Record", () => {
+    expect(outcomes.draftedFromRead("04 43 8A 01 22 09 03", 1).message).toBe(
+      "Draft created from 04 43 8A 01 22 09 03 — 1 Record.",
+    );
+  });
+
+  it("sounds one done chirp when it worked", () => {
+    const { symbols, stop } = hearSignals();
+
+    report(outcomes.draftedFromRead("04 43 8A 01 22 09 03", 2));
+
+    expect(symbols).toEqual(["done"]);
+    stop();
+  });
+
+  it("reports a Draft that could not be created as an error, and says the Records are still on the Tag", () => {
+    const outcome = outcomes.draftNotCreated();
+
+    expect(outcome.kind).toBe("failed");
+    expect(outcome.operation).toBe("draft");
+    expect(outcome.severity).toBe("error");
+    expect(outcome.message).toBe("The Draft was not created.");
+    // Nothing was written anywhere, so the Tag is where it was — said rather than
+    // left as a worry.
+    expect(outcome.detail ?? "").toMatch(/still on the Tag/i);
   });
 });

@@ -5,6 +5,7 @@ import { LibraryPage } from "./LibraryPage";
 import { DraftsProvider } from "../components/DraftsProvider";
 import { fakeBackend, renderUi } from "../test/dom";
 import { SNAPSHOT, libraryState } from "../test/libraryState";
+import { handOffDraft } from "../lib/draftHandoff";
 import type { Draft, DraftsView } from "../lib/drafts";
 
 /**
@@ -197,5 +198,54 @@ describe("each collection keeps its own selection", () => {
     // A Draft with no Records says so, in the pane, rather than showing the
     // other Draft's Record editor.
     expect(within(draftPane()).queryByRole("textbox", { name: "Text" })).toBeNull();
+  });
+});
+
+/**
+ * A Draft handed over from a reading.
+ *
+ * Ticket 16's action lives on the 13.56 MHz readout and the Collection switch
+ * lives here, so the two are joined by one piece of cross-page intent: the shell
+ * hands the new Draft's id to Library and changes destination. What this file
+ * proves is the half that owns the switch — that an arriving handoff lands the
+ * page in the Drafts collection, on the Draft it names rather than on whichever
+ * Draft happens to be first, and that the handoff is spent by that arrival so
+ * the next visit to Library opens where a visit has always opened.
+ *
+ * The failure this catches is a page that arrives in the wrong collection, or in
+ * the right one showing the wrong Draft — which would leave the user editing the
+ * first Draft in the list while believing they are editing what they just read.
+ */
+describe("a Draft handed over from a reading", () => {
+  it("arrives in the Drafts collection, on that Draft rather than the first in the list", async () => {
+    const handed = { ...DRAFT, id: "draft-handed", name: "Handed over" };
+    handOffDraft(handed.id);
+
+    renderLibrary([DRAFT, handed]);
+
+    // The collection the Draft is in, not the one the page opens on.
+    expect(await screen.findByRole("heading", { name: "Drafts" })).toBeTruthy();
+    expect(currentCollection()).toBe("Drafts");
+    // And that Draft is the pane's subject, not the first Draft in the list.
+    const pane = await screen.findByRole("region", { name: "Draft detail" });
+    expect(
+      (within(pane).getByRole("textbox", { name: `Name for ${handed.name}` }) as HTMLInputElement)
+        .value,
+    ).toBe(handed.name);
+    expect(within(draftList()).getAllByRole("listitem")).toHaveLength(2);
+  });
+
+  it("spends the handoff, so the next visit to Library opens on Snapshots", async () => {
+    handOffDraft(DRAFT.id);
+
+    const first = renderLibrary([DRAFT]);
+    expect(await screen.findByRole("heading", { name: "Drafts" })).toBeTruthy();
+    // Leaving Library unmounts the page; coming back is a fresh arrival, and an
+    // intent that was not spent would put the user in Drafts every time.
+    first.ui.unmount();
+
+    renderLibrary([DRAFT]);
+    expect(await screen.findByRole("heading", { name: "Snapshots" })).toBeTruthy();
+    expect(currentCollection()).toBe("Snapshots");
   });
 });

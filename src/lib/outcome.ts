@@ -63,6 +63,9 @@ export type OutcomeOperation =
   | "clone"
   | "batch"
   | "erase"
+  /** Turning a reading's message into a Draft: this machine's own file, never a
+   *  Tag. */
+  | "draft"
   | "console"
   | "reader"
   | "preferences";
@@ -88,6 +91,9 @@ export type OutcomeKind =
   | "verified"
   /** A Reset that left no Identity on the Tag. */
   | "blanked"
+  /** A readout's message became a Draft. About this machine's library, not the
+   *  Tag: a Draft is authored here and no Tag was written to. */
+  | "drafted"
   /** An erase that cleared the Tag's NDEF content. */
   | "erased"
   /** Saved data was cleared from this machine, by the one action allowed to.
@@ -146,6 +152,7 @@ export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
   "nothing-latched",
   "verified",
   "blanked",
+  "drafted",
   "erased",
   "data-cleared",
   "unverified",
@@ -173,6 +180,7 @@ const SEVERITY_OF: Record<OutcomeKind, Severity> = {
   "nothing-latched": "info",
   verified: "success",
   blanked: "success",
+  drafted: "success",
   erased: "success",
   "data-cleared": "success",
   unverified: "warning",
@@ -475,6 +483,46 @@ export const outcomes = {
       failed: "failed",
     };
     return make(kind[result.outcome], "erase", eraseNotice(result).text);
+  },
+
+  /**
+   * A reading's message became a Draft.
+   *
+   * Its own kind rather than `announcement`, which is silent, and rather than
+   * `read`, because nothing was read here: this is what happened to a read that
+   * already had. It is not a write outcome either — the Draft is this machine's
+   * own file and no Tag was touched, which the detail says in words so the one
+   * thing a user could fear is answered.
+   *
+   * `identity` is the UID the poll reported, and `records` is the count the
+   * readout is showing, so the message and the screen cannot disagree.
+   */
+  draftedFromRead(identity: string, records: number): Outcome {
+    return make(
+      "drafted",
+      "draft",
+      `Draft created from ${identity} — ${records} ${records === 1 ? "Record" : "Records"}.`,
+      {
+        detail:
+          "It is open in Library's Drafts collection, ready to edit. The Tag it was read " +
+          "from was not written to.",
+      },
+    );
+  },
+
+  /**
+   * Turning a readout into a Draft failed: the library file would not take it.
+   *
+   * An error rather than a warning, because nothing was created — but a failure
+   * about this machine, so the detail says where the Records still are instead of
+   * leaving the user wondering whether the press damaged anything.
+   */
+  draftNotCreated(): Outcome {
+    return make("failed", "draft", "The Draft was not created.", {
+      detail:
+        "The library file could not be written to, so nothing was saved. Nothing was written " +
+        "to the Tag either: its Records are still on the Tag, and still on screen.",
+    });
   },
 
   /**

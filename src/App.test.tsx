@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import App from "./App";
+import { DraftsProvider } from "./components/DraftsProvider";
 import { fakeBackend, renderUi } from "./test/dom";
 import { libraryView } from "./test/libraryState";
 import { toastStore } from "./lib/toastStore";
@@ -39,6 +40,19 @@ function quietAnswers() {
   };
 }
 
+/**
+ * The app as `main.tsx` mounts it: inside the provider that owns the Drafts
+ * queue and the window-close guard. 13.56 MHz reads it (a readout can make a
+ * Draft), so every destination needs it to render.
+ */
+function renderApp() {
+  return renderUi(
+    <DraftsProvider>
+      <App />
+    </DraftsProvider>,
+  );
+}
+
 afterEach(() => {
   toastStore.clear();
 });
@@ -52,7 +66,7 @@ describe("a Reader that stops answering", () => {
       },
     });
 
-    renderUi(<App />);
+    renderApp();
 
     const message = await screen.findByRole("status");
     expect(within(message).getByText("The Reader stopped responding")).toBeTruthy();
@@ -71,7 +85,7 @@ describe("a Reader that stops answering", () => {
         throw "I/O Timeout: the reader stopped answering";
       },
     });
-    const { user } = renderUi(<App />);
+    const { user } = renderApp();
 
     await screen.findByRole("status");
     await user.click(screen.getByRole("button", { name: /Dismiss: The Reader stopped responding/ }));
@@ -86,7 +100,7 @@ describe("a Reader that stops answering", () => {
         throw "I/O Timeout: the reader stopped answering";
       },
     });
-    const { user } = renderUi(<App />);
+    const { user } = renderApp();
 
     await screen.findByRole("status");
     // The launch attempt, then the one the message offers.
@@ -103,7 +117,7 @@ describe("a Reader that stops answering", () => {
       },
     });
 
-    renderUi(<App />);
+    renderApp();
 
     const message = await screen.findByRole("status");
     expect(within(message).getByText("No Reader attached")).toBeTruthy();
@@ -119,7 +133,7 @@ describe("a Reader that connects", () => {
       firmware_version: () => "H00S07",
     });
 
-    renderUi(<App />);
+    renderApp();
 
     await waitFor(() => {
       expect(screen.getByText("H00S07")).toBeTruthy();
@@ -141,7 +155,7 @@ describe("a condition that stays true", () => {
         migrationWarning: "The lift from schema 1 failed.",
       }),
     });
-    const { user } = renderUi(<App />);
+    const { user } = renderApp();
 
     await user.click(screen.getByRole("button", { name: "Library" }));
 
@@ -161,7 +175,7 @@ describe("a band page's mode", () => {
       connect: () => READER,
       firmware_version: () => "H00S07",
     });
-    const { user } = renderUi(<App />);
+    const { user } = renderApp();
 
     await user.click(screen.getByRole("button", { name: "13.56 MHz" }));
     const modes = () => screen.getByRole("group", { name: "13.56 MHz mode" });

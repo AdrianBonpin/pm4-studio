@@ -154,6 +154,33 @@ export interface Draft {
   records: DraftRecord[];
 }
 
+/**
+ * A message on its way from a 13.56 MHz readout into a Draft: the Records exactly
+ * as they were read, in the Tag's order, and the name the Draft opens with.
+ *
+ * The two travel together because they are made at the same moment: the Draft is
+ * created with its Records already in it, so there is no window in which an empty
+ * Draft sits on disk under the reading's name.
+ */
+export interface DraftHandoff {
+  name: string;
+  records: DraftRecord[];
+}
+
+/**
+ * What a Draft made from a reading is called before anybody renames it.
+ *
+ * Naming it needs no dialog in front of the Draft's existence: it opens with this
+ * and is renamed in place, in the pane it lands in. The identity the Tag reported
+ * is the one fact that tells two readings apart, and this app knows nothing else
+ * about a message's purpose — a name guessed from the first Record would go stale
+ * the moment that Record was edited.
+ */
+export function draftNameFromRead(identity: string): string {
+  const named = identity.trim();
+  return named === "" ? "Read tag" : named;
+}
+
 export interface DraftsView {
   drafts: Draft[];
   /** Set when the library file must not be written to; nothing may be saved. */

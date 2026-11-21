@@ -129,7 +129,15 @@ function mount({ drafts = [], card = NTAG_CAPTURE, answers = {} }: MountOptions 
 
   function Workspace() {
     const [mode, setMode] = useState<HfMode>("read");
-    return <HfPage connected mode={mode} onModeChange={setMode} onPoll={async () => card} />;
+    return (
+      <HfPage
+        connected
+        mode={mode}
+        onModeChange={setMode}
+        onPoll={async () => card}
+        onOpenDraft={() => {}}
+      />
+    );
   }
 
   const ui = renderUi(

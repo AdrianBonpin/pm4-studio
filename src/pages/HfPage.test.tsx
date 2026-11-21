@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import { HfPage } from "./HfPage";
+import { DraftsProvider } from "../components/DraftsProvider";
 import { fakeBackend, renderUi } from "../test/dom";
 import { MESSAGE, NTAG_CAPTURE, NTAG_UID, recordsRead } from "../test/hfState";
 import { encodeNdefMessage, type NdefRecord } from "../lib/ndef";
@@ -64,8 +65,19 @@ async function readTag(
 ) {
   const backend = fakeBackend(answers);
   const { symbols, stop } = hearSignals();
+  // Inside the provider that owns the Drafts queue: the page's Edit as Draft
+  // action creates a Draft, and there is one queue for the app rather than one
+  // per page.
   const { user } = renderUi(
-    <HfPage connected mode="read" onModeChange={() => {}} onPoll={async () => card} />,
+    <DraftsProvider>
+      <HfPage
+        connected
+        mode="read"
+        onModeChange={() => {}}
+        onPoll={async () => card}
+        onOpenDraft={() => {}}
+      />
+    </DraftsProvider>,
   );
   await user.click(screen.getByRole("button", { name: "Read tag" }));
   return { backend, user, symbols, stop };

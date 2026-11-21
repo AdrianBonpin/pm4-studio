@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Library as LibraryIcon, Nfc, Radio, Settings as SettingsIcon, Terminal } from "lucide-react";
 import { Badge, type BadgeTone } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
@@ -6,6 +6,7 @@ import { ToastViewport } from "./components/ToastViewport";
 import { useBeep } from "./hooks/useBeep";
 import { useLibrary } from "./hooks/useLibrary";
 import { useReader, type Status } from "./hooks/useReader";
+import { handOffDraft } from "./lib/draftHandoff";
 import { outcomes, report } from "./lib/outcome";
 import { formatFirmwareRevision } from "./lib/readerIdentity";
 import { isMacOS, isTauri } from "./lib/platform";
@@ -72,6 +73,19 @@ export default function App() {
 
   const current = PAGES.find((p) => p.id === page) ?? PAGES[0];
   const connected = reader.connected;
+
+  /**
+   * Open a Draft a page has just created, in Library's Drafts collection.
+   *
+   * The id is left where Library will look for it rather than passed as state:
+   * the page that created it is unmounted by this navigation, and the page that
+   * arrives is a fresh mount. That is also why it is a handoff and not a route —
+   * see `lib/draftHandoff`.
+   */
+  const openDraft = useCallback((draftId: string) => {
+    handOffDraft(draftId);
+    setPage("library");
+  }, []);
 
   // The device-failure strip that used to sit at the top of the content column is
   // gone. The same news now arrives as a message in the corner the user chose,
@@ -186,6 +200,7 @@ export default function App() {
                   mode={hfMode}
                   onModeChange={setHfMode}
                   onPoll={reader.pollHfOnce}
+                  onOpenDraft={openDraft}
                 />
               )}
               {page === "library" && (
