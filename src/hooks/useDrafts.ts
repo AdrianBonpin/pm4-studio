@@ -205,22 +205,39 @@ export function useDrafts(): DraftsState {
 
   useEffect(() => () => void settle(), [settle]);
 
+  /**
+   * Read the list again, and show what the file holds without losing an edit
+   * that is on its way to it.
+   *
+   * A read is not atomic with the writes around it, so two things are needed.
+   * First, everything queued is written before the read is asked for: a read
+   * issued while a write is out is answered from the file as it stood *before*
+   * that write, and the reply does not arrive any sooner for it — the old bytes
+   * and a cleared queue is exactly how a reload used to revert an edit. Second,
+   * the reply is only adopted for a Draft nothing has been written for since the
+   * read went out, because an edit typed while the read is in flight can reach
+   * the file before the reply lands, and that reply predates it.
+   */
   const reload = useCallback(async () => {
     if (!isTauri()) {
       setError("Drafts are read through the desktop app; this preview cannot reach them.");
       setLoading(false);
       return;
     }
+    await settle();
+    // How many times each Draft had been edited when the read was issued: a
+    // reply speaks for a Draft only while that number has not moved since.
+    const issued = new Map(revisions.current);
     try {
       const read = await invoke<DraftsView>("drafts_load");
-      // What is on disk, with anything of ours that has not reached it on top: a
-      // reread is not permission to throw away an edit that is still queued.
-      const edited = new Map(
-        draftsRef.current
-          .filter((draft) => unsaved.current.has(draft.id))
-          .map((draft) => [draft.id, draft]),
-      );
-      apply(read.drafts.map((draft) => edited.get(draft.id) ?? draft));
+      // What is on disk, with anything of ours that has not reached it, or has
+      // reached it since the read was issued, on top: a reread is not permission
+      // to throw away an edit, whether it is still queued or was written while
+      // the read was open.
+      const ours = new Map(draftsRef.current.map((draft) => [draft.id, draft]));
+      const edited = (id: string) =>
+        unsaved.current.has(id) || (revisions.current.get(id) ?? 0) !== (issued.get(id) ?? 0);
+      apply(read.drafts.map((draft) => (edited(draft.id) ? (ours.get(draft.id) ?? draft) : draft)));
       setProblem(read.problem);
       setMigrationWarning(read.migrationWarning);
       setError(null);
@@ -229,7 +246,7 @@ export function useDrafts(): DraftsState {
     } finally {
       setLoading(false);
     }
-  }, [apply]);
+  }, [apply, settle]);
 
   useEffect(() => {
     void reload();
