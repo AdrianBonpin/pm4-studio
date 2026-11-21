@@ -7,11 +7,24 @@ import {
   encodeRecords,
   encodeTextPayload,
   encodeUrlPayload,
+  recordProblem,
+  recordSizeBytes,
   recordsByteLength,
   textRecord,
   urlIdentifierCode,
   urlRecord,
 } from "./ndef";
+import {
+  newBluetoothRecord,
+  newContactRecord,
+  newEmailRecord,
+  newExternalRecord,
+  newLocationRecord,
+  newMimeRecord,
+  newPhoneRecord,
+  newSmsRecord,
+  newWifiRecord,
+} from "./drafts";
 import type { DraftRecord } from "./drafts";
 
 /**
@@ -260,7 +273,9 @@ describe("decoding", () => {
       { kind: "text", fields: { language: "en", text: "Hello" } },
       { kind: "url", fields: { url: "https://example.com/x" } },
       { kind: "text", fields: { language: "pt-BR", text: "Ola, mundo" } },
-      { kind: "url", fields: { url: "geo:0,0" } },
+      // A URI no Record type claims stays a URL. `geo:` is claimed by Location,
+      // so it is not used here.
+      { kind: "url", fields: { url: "urn:example:widget" } },
     ];
     expect(decodeRecords(encodeRecords(records))).toEqual(records);
   });
@@ -351,5 +366,592 @@ describe("encoded size", () => {
     // payload = 1 + 2 + 255 = 258, so the length is four bytes:
     // 1 header + 1 type length + 4 length + 1 type + 258 payload.
     expect(recordsByteLength([record])).toBe(265);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Remaining Record types
+//
+// Each expected array below is written from the wire format, not from this
+// encoder. The references used, in addition to NDEF 1.0 and the URI RTD:
+//   - Wi-Fi: Wi-Fi Alliance, "Wi-Fi Simple Configuration Technical
+//     Specification" v2.0.5, section 10.1.2 (Configuration Token): MIME type
+//     "application/vnd.wfa.wsc", one Credential attribute 0x100E wrapping
+//     Network Index 0x1026 (1), SSID 0x1045, Authentication Type 0x1003,
+//     Encryption Type 0x100F, Network Key 0x1027 and MAC Address 0x1020 (six
+//     zero octets here). Attributes are 16-bit type, 16-bit length, value, all
+//     big-endian. AOSP's NfcWifiProtectedSetup.java parses exactly this token
+//     shape, and ndeflib's WifiSimpleConfigRecord emits it.
+//   - Contact: RFC 2426 (vCard 3.0) carried as MIME type "text/vcard", with
+//     CRLF between lines and the RFC 2426 backslash escapes.
+//   - Bluetooth: NFC Forum "Bluetooth Secure Simple Pairing Using NFC" 1.3,
+//     Table 2: MIME type "application/vnd.bluetooth.ep.oob", payload is a
+//     2-octet little-endian OOB Data Length that includes the length field and
+//     the address (minimum 8), then the 6-octet device address little-endian.
+//   - SMS and geo: RFC 5724 (sms: URI) and RFC 5870 (geo: URI), both carried
+//     as URI Records (type "U").
+// ---------------------------------------------------------------------------
+
+/** UTF-8 of a literal string, for the text bodies whose bytes are ASCII. */
+const textBytes = (text: string): number[] => [...new TextEncoder().encode(text)];
+
+describe("a Phone Record", () => {
+  it("encodes as a URI Record whose URI is tel: plus the number", () => {
+    // "tel:+15550100". The URI RTD table has "tel:" at code 0x05, so the
+    // payload is 0x05 then "+15550100" (9 bytes) = 10 bytes.
+    const expected = [
+      0xd1, // MB, ME, SR, TNF well-known
+      0x01, // TYPE LENGTH
+      0x0a, // PAYLOAD LENGTH (10)
+      0x55, // TYPE "U"
+      0x05, // URI identifier code "tel:"
+      0x2b, // +
+      0x31, // 1
+      0x35, // 5
+      0x35, // 5
+      0x35, // 5
+      0x30, // 0
+      0x31, // 1
+      0x30, // 0
+      0x30, // 0
+    ];
+    expect(encodeRecords([newPhoneRecord("+15550100")])).toEqual(expected);
+  });
+
+  it("dials a formatted number the same way, so it writes the same bytes", () => {
+    // The visual separators RFC 3966 allows are not part of the dialled number.
+    expect(encodeRecords([newPhoneRecord("+1 (555) 010-0")])).toEqual(
+      encodeRecords([newPhoneRecord("+15550100")]),
+    );
+  });
+
+  it("refuses a number that is not a phone number, naming the problem", () => {
+    expect(recordProblem(newPhoneRecord(""))).toMatch(/Phone Record/);
+    expect(recordProblem(newPhoneRecord("call me"))).toMatch(/Phone Record/);
+    // One digit is below the two-digit floor.
+    expect(recordProblem(newPhoneRecord("1"))).toMatch(/2 and 15 digits/);
+  });
+
+  it("round-trips", () => {
+    const record = newPhoneRecord("+15550100");
+    expect(decodeRecords(encodeRecords([record]))).toEqual([record]);
+  });
+});
+
+describe("an Email Record", () => {
+  it("encodes as a URI Record whose URI is mailto: plus the address", () => {
+    // "mailto:someone@example.com": code 0x06 plus 19 address bytes, so the
+    // payload is 20 bytes. 0x73 's' through 0x6d 'm' are the ASCII address.
+    const expected = [
+      0xd1,
+      0x01,
+      0x14, // PAYLOAD LENGTH (20)
+      0x55,
+      0x06, // URI identifier code "mailto:"
+      0x73, // s
+      0x6f, // o
+      0x6d, // m
+      0x65, // e
+      0x6f, // o
+      0x6e, // n
+      0x65, // e
+      0x40, // @
+      0x65, // e
+      0x78, // x
+      0x61, // a
+      0x6d, // m
+      0x70, // p
+      0x6c, // l
+      0x65, // e
+      0x2e, // .
+      0x63, // c
+      0x6f, // o
+      0x6d, // m
+    ];
+    expect(encodeRecords([newEmailRecord("someone@example.com")])).toEqual(expected);
+  });
+
+  it("refuses an address with no @, naming the problem", () => {
+    expect(recordProblem(newEmailRecord("someone.example.com"))).toMatch(/Email Record/);
+    expect(recordProblem(newEmailRecord("someone.example.com"))).toMatch(/@/);
+    expect(recordProblem(newEmailRecord("a b@example.com"))).toMatch(/Email Record/);
+  });
+
+  it("round-trips", () => {
+    const record = newEmailRecord("someone@example.com");
+    expect(decodeRecords(encodeRecords([record]))).toEqual([record]);
+  });
+});
+
+describe("an SMS Record", () => {
+  it("encodes as a URI Record whose URI is sms: plus the number and body", () => {
+    // "sms:+15550100?body=Hello%20world". No URI RTD prefix matches, so the
+    // code is 0x00 and the whole 32-byte URI follows, in a 33-byte payload.
+    const expected = [
+      0xd1,
+      0x01,
+      0x21, // PAYLOAD LENGTH (33)
+      0x55,
+      0x00, // no abbreviation
+      0x73, // s
+      0x6d, // m
+      0x73, // s
+      0x3a, // :
+      0x2b, // +
+      0x31, // 1
+      0x35, // 5
+      0x35, // 5
+      0x35, // 5
+      0x30, // 0
+      0x31, // 1
+      0x30, // 0
+      0x30, // 0
+      0x3f, // ?
+      0x62, // b
+      0x6f, // o
+      0x64, // d
+      0x79, // y
+      0x3d, // =
+      0x48, // H
+      0x65, // e
+      0x6c, // l
+      0x6c, // l
+      0x6f, // o
+      0x25, // %
+      0x32, // 2
+      0x30, // 0
+      0x77, // w
+      0x6f, // o
+      0x72, // r
+      0x6c, // l
+      0x64, // d
+    ];
+    expect(encodeRecords([newSmsRecord("+15550100", "Hello world")])).toEqual(expected);
+  });
+
+  it("leaves the body out when there is none, and percent-encodes the rest", () => {
+    expect(encodeRecords([newSmsRecord("+15550100", "")])).toEqual([
+      0xd1, 0x01, 0x0e, 0x55, 0x00,
+      ...textBytes("sms:+15550100"),
+    ]);
+    // "a&b=c" -> "a%26b%3Dc": an ampersand would otherwise end the URI.
+    expect(encodeRecords([newSmsRecord("+15550100", "a&b=c")])).toEqual([
+      0xd1, 0x01, 0x1d, 0x55, 0x00,
+      ...textBytes("sms:+15550100?body=a%26b%3Dc"),
+    ]);
+  });
+
+  it("round-trips a body with characters the URI has to escape", () => {
+    const record = newSmsRecord("+15550100", "Café & bar = 6?");
+    expect(decodeRecords(encodeRecords([record]))).toEqual([record]);
+  });
+
+  it("refuses a number that is not a phone number", () => {
+    expect(recordProblem(newSmsRecord("", "Hi"))).toMatch(/Phone Record/);
+  });
+});
+
+describe("a Location Record", () => {
+  it("encodes as a geo: URI Record", () => {
+    // "geo:51.5074,-0.1278" is 19 bytes and no URI RTD prefix matches, so the
+    // code is 0x00 and the payload is 20 bytes.
+    const expected = [
+      0xd1,
+      0x01,
+      0x14, // PAYLOAD LENGTH (20)
+      0x55,
+      0x00, // no abbreviation
+      0x67, // g
+      0x65, // e
+      0x6f, // o
+      0x3a, // :
+      0x35, // 5
+      0x31, // 1
+      0x2e, // .
+      0x35, // 5
+      0x30, // 0
+      0x37, // 7
+      0x34, // 4
+      0x2c, // ,
+      0x2d, // -
+      0x30, // 0
+      0x2e, // .
+      0x31, // 1
+      0x32, // 2
+      0x37, // 7
+      0x38, // 8
+    ];
+    expect(encodeRecords([newLocationRecord("51.5074", "-0.1278")])).toEqual(expected);
+  });
+
+  it("refuses coordinates that are not on Earth, naming the axis", () => {
+    expect(recordProblem(newLocationRecord("91", "0"))).toMatch(/latitude/);
+    expect(recordProblem(newLocationRecord("0", "181"))).toMatch(/longitude/);
+    expect(recordProblem(newLocationRecord("north", "0"))).toMatch(/latitude/);
+    expect(recordProblem(newLocationRecord("51,5", "0"))).toMatch(/latitude/);
+  });
+
+  it("round-trips", () => {
+    const record = newLocationRecord("51.5074", "-0.1278");
+    expect(decodeRecords(encodeRecords([record]))).toEqual([record]);
+  });
+});
+
+describe("a Wi-Fi Record", () => {
+  // SSID "HomeNet" (7), key "password123" (11), WPA2-Personal (0x0020),
+  // AES (0x0008). Inner attributes, each a 16-bit id, 16-bit length, value:
+  //   1026 0001 01                                  Network Index     5 bytes
+  //   1045 0007 "HomeNet"                           SSID             11 bytes
+  //   1003 0002 0020                                Authentication    6 bytes
+  //   100F 0002 0008                                Encryption        6 bytes
+  //   1027 000B "password123"                       Network Key      15 bytes
+  //   1020 0006 000000000000                        MAC, zeroed      10 bytes
+  // Inner total 5+11+6+6+15+10 = 53 = 0x35, so the Credential (0x100E) is
+  // 4 + 53 = 57 = 0x39 payload bytes. The MIME type name is 23 bytes.
+  const expected = [
+    0xd2, // MB, ME, SR, TNF media
+    0x17, // TYPE LENGTH (23)
+    0x39, // PAYLOAD LENGTH (57)
+    ...textBytes("application/vnd.wfa.wsc"),
+    0x10, 0x0e, 0x00, 0x35, // Credential, length 53
+    0x10, 0x26, 0x00, 0x01, 0x01, // Network Index 1
+    0x10, 0x45, 0x00, 0x07, 0x48, 0x6f, 0x6d, 0x65, 0x4e, 0x65, 0x74, // SSID
+    0x10, 0x03, 0x00, 0x02, 0x00, 0x20, // WPA2-Personal
+    0x10, 0x0f, 0x00, 0x02, 0x00, 0x08, // AES
+    0x10, 0x27, 0x00, 0x0b,
+    0x70, 0x61, 0x73, 0x73, 0x77, 0x6f, 0x72, 0x64, 0x31, 0x32, 0x33, // "password123"
+    0x10, 0x20, 0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // MAC, zeroed
+  ];
+
+  it("encodes the WSC Configuration Token a phone reads", () => {
+    expect(
+      encodeRecords([
+        newWifiRecord({
+          ssid: "HomeNet",
+          networkKey: "password123",
+          auth: "wpa2-personal",
+          encryption: "aes",
+        }),
+      ]),
+    ).toEqual(expected);
+  });
+
+  it("round-trips", () => {
+    const record = newWifiRecord({
+      ssid: "HomeNet",
+      networkKey: "password123",
+      auth: "wpa2-personal",
+      encryption: "aes",
+    });
+    expect(decodeRecords(encodeRecords([record]))).toEqual([record]);
+  });
+
+  it("refuses a Record with no SSID, naming it", () => {
+    expect(
+      recordProblem(
+        newWifiRecord({ ssid: "", networkKey: "password123", auth: "wpa2-personal", encryption: "aes" }),
+      ),
+    ).toMatch(/SSID/);
+  });
+
+  it("refuses an SSID longer than 32 bytes", () => {
+    expect(
+      recordProblem(
+        newWifiRecord({
+          ssid: "s".repeat(33),
+          networkKey: "password123",
+          auth: "wpa2-personal",
+          encryption: "aes",
+        }),
+      ),
+    ).toMatch(/32/);
+  });
+
+  it("refuses a WPA key that is not 8 to 63 bytes", () => {
+    for (const key of ["", "short", "k".repeat(64)]) {
+      expect(
+        recordProblem(
+          newWifiRecord({ ssid: "HomeNet", networkKey: key, auth: "wpa2-personal", encryption: "aes" }),
+        ),
+      ).toMatch(/8 and 63|8 to 63/);
+    }
+  });
+
+  it("refuses contradictory security settings instead of writing a bad token", () => {
+    // An open network has no key and no encryption.
+    expect(
+      recordProblem(
+        newWifiRecord({ ssid: "Cafe", networkKey: "password123", auth: "open", encryption: "none" }),
+      ),
+    ).toMatch(/open.*key|key.*open/i);
+    expect(
+      recordProblem(newWifiRecord({ ssid: "Cafe", networkKey: "", auth: "open", encryption: "aes" })),
+    ).toMatch(/open.*encryption|encryption.*open/i);
+    // A WPA network without encryption is not a network a phone can join.
+    expect(
+      recordProblem(
+        newWifiRecord({ ssid: "HomeNet", networkKey: "password123", auth: "wpa2-personal", encryption: "none" }),
+      ),
+    ).toMatch(/encryption/);
+  });
+});
+
+describe("a Contact Record", () => {
+  const fields = {
+    name: "Ada Lovelace",
+    organization: "Analytical Engines",
+    phone: "+15550100",
+    email: "ada@example.com",
+  };
+  // vCard 3.0 with CRLF line endings, 146 bytes:
+  //   BEGIN:VCARD\r\n                       13
+  //   VERSION:3.0\r\n                       13
+  //   N:Ada Lovelace;;;;\r\n                20
+  //   FN:Ada Lovelace\r\n                   17
+  //   ORG:Analytical Engines\r\n            24
+  //   TEL;TYPE=CELL:+15550100\r\n           25
+  //   EMAIL:ada@example.com\r\n             23
+  //   END:VCARD\r\n                         11
+  const body =
+    "BEGIN:VCARD\r\n" +
+    "VERSION:3.0\r\n" +
+    "N:Ada Lovelace;;;;\r\n" +
+    "FN:Ada Lovelace\r\n" +
+    "ORG:Analytical Engines\r\n" +
+    "TEL;TYPE=CELL:+15550100\r\n" +
+    "EMAIL:ada@example.com\r\n" +
+    "END:VCARD\r\n";
+
+  it("encodes a vCard 3.0 body as text/vcard", () => {
+    expect(body.length).toBe(146);
+    expect(encodeRecords([newContactRecord(fields)])).toEqual([
+      0xd2,
+      0x0a, // TYPE LENGTH (10)
+      0x92, // PAYLOAD LENGTH (146)
+      ...textBytes("text/vcard"),
+      ...textBytes(body),
+    ]);
+  });
+
+  it("escapes the characters RFC 2426 reserves", () => {
+    const record = newContactRecord({
+      name: "Doe, Jane; Jr.",
+      organization: "ACME\\Inc",
+      phone: "+15550100",
+      email: "jane@example.com",
+    });
+    const text = String.fromCharCode(...encodeRecords([record]).slice(13));
+    expect(text).toContain("N:Doe\\, Jane\\; Jr.;;;;");
+    expect(text).toContain("ORG:ACME\\\\Inc");
+  });
+
+  it("round-trips a name and organisation that need escaping", () => {
+    const record = newContactRecord({
+      name: "Doe, Jane; Jr.",
+      organization: "ACME\\Inc",
+      phone: "+15550100",
+      email: "jane@example.com",
+    });
+    expect(decodeRecords(encodeRecords([record]))).toEqual([record]);
+  });
+
+  it("refuses a Contact with no name, and a bad email in the card", () => {
+    expect(recordProblem(newContactRecord({ ...fields, name: "" }))).toMatch(/Contact Record.*name/i);
+    expect(recordProblem(newContactRecord({ ...fields, email: "no-at-sign" }))).toMatch(/Email Record/);
+  });
+
+  it("round-trips with the optional fields left empty", () => {
+    const record = newContactRecord({ name: "Ada Lovelace" });
+    expect(decodeRecords(encodeRecords([record]))).toEqual([record]);
+  });
+});
+
+describe("a Bluetooth Record", () => {
+  it("encodes the little-endian OOB block", () => {
+    // AA:BB:CC:DD:EE:FF is sent least significant octet first: FF EE DD CC BB
+    // AA. OOB Data Length is 8 and little-endian (08 00), and includes the
+    // length field itself plus the address, per BTSSP Table 2. The type name
+    // "application/vnd.bluetooth.ep.oob" is 32 bytes.
+    const expected = [
+      0xd2,
+      0x20, // TYPE LENGTH (32)
+      0x08, // PAYLOAD LENGTH (8)
+      ...textBytes("application/vnd.bluetooth.ep.oob"),
+      0x08, 0x00, // OOB Data Length, little-endian
+      0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, // address, reversed
+    ];
+    expect(encodeRecords([newBluetoothRecord("AA:BB:CC:DD:EE:FF")])).toEqual(expected);
+  });
+
+  it("accepts a lower-case, hyphen-separated address and writes the same bytes", () => {
+    expect(encodeRecords([newBluetoothRecord("aa-bb-cc-dd-ee-ff")])).toEqual(
+      encodeRecords([newBluetoothRecord("AA:BB:CC:DD:EE:FF")]),
+    );
+  });
+
+  it("refuses anything that is not six octets, or is the zero address", () => {
+    expect(recordProblem(newBluetoothRecord("AA:BB:CC"))).toMatch(/Bluetooth Record/);
+    expect(recordProblem(newBluetoothRecord("GG:BB:CC:DD:EE:FF"))).toMatch(/Bluetooth Record/);
+    expect(recordProblem(newBluetoothRecord("00:00:00:00:00:00"))).toMatch(/zero address/);
+  });
+
+  it("round-trips", () => {
+    const record = newBluetoothRecord("AA:BB:CC:DD:EE:FF");
+    expect(decodeRecords(encodeRecords([record]))).toEqual([record]);
+  });
+});
+
+describe("a generic MIME Record", () => {
+  it("encodes the media type as the type and the payload as bytes", () => {
+    // "text/plain" is 10 bytes; 48 65 6C 6C 6F is "Hello".
+    expect(encodeRecords([newMimeRecord("text/plain", "48656C6C6F")])).toEqual([
+      0xd2,
+      0x0a, // TYPE LENGTH (10)
+      0x05, // PAYLOAD LENGTH (5)
+      ...textBytes("text/plain"),
+      0x48, 0x65, 0x6c, 0x6c, 0x6f,
+    ]);
+  });
+
+  it("round-trips a payload that is not text", () => {
+    const record = newMimeRecord("application/octet-stream", "00FF7F");
+    expect(decodeRecords(encodeRecords([record]))).toEqual([record]);
+  });
+
+  it("refuses a type with no subtype, or a payload that is not hex", () => {
+    expect(recordProblem(newMimeRecord("text", ""))).toMatch(/MIME Record/);
+    expect(recordProblem(newMimeRecord("text/plain", "0"))).toMatch(/hex/);
+    expect(recordProblem(newMimeRecord("text/plain", "zz"))).toMatch(/hex/);
+  });
+});
+
+describe("an External Record", () => {
+  it("encodes TNF external with domain:service and the payload bytes", () => {
+    // "example.com:do" is 14 bytes; payload 01 02 FF.
+    expect(encodeRecords([newExternalRecord("example.com:do", "0102FF")])).toEqual([
+      0xd4, // MB, ME, SR, TNF external
+      0x0e, // TYPE LENGTH (14)
+      0x03, // PAYLOAD LENGTH (3)
+      ...textBytes("example.com:do"),
+      0x01, 0x02, 0xff,
+    ]);
+  });
+
+  it("refuses a type that is not domain:service, naming the problem", () => {
+    expect(recordProblem(newExternalRecord("example.com", ""))).toMatch(/External Record/);
+    expect(recordProblem(newExternalRecord("Example.com:do", ""))).toMatch(/External Record/);
+    expect(recordProblem(newExternalRecord("example.com:", ""))).toMatch(/External Record/);
+  });
+
+  it("round-trips", () => {
+    const record = newExternalRecord("example.com:do", "0102FF");
+    expect(decodeRecords(encodeRecords([record]))).toEqual([record]);
+  });
+});
+
+describe("reading the remaining types back", () => {
+  it("reads a tel: URI Record as a Phone Record", () => {
+    const message = [
+      0xd1, 0x01, 0x0a, 0x55, 0x05,
+      0x2b, 0x31, 0x35, 0x35, 0x35, 0x30, 0x31, 0x30, 0x30,
+    ];
+    expect(decodeRecords(message)).toEqual([newPhoneRecord("+15550100")]);
+  });
+
+  it("reads a mailto: URI Record as an Email Record", () => {
+    const message = [
+      0xd1, 0x01, 0x14, 0x55, 0x06,
+      ...textBytes("someone@example.com"),
+    ];
+    expect(decodeRecords(message)).toEqual([newEmailRecord("someone@example.com")]);
+  });
+
+  it("reads an sms: URI Record as an SMS Record, body decoded", () => {
+    const message = [
+      0xd1, 0x01, 0x21, 0x55, 0x00,
+      ...textBytes("sms:+15550100?body=Hello%20world"),
+    ];
+    expect(decodeRecords(message)).toEqual([newSmsRecord("+15550100", "Hello world")]);
+  });
+
+  it("reads a geo: URI Record as a Location Record", () => {
+    const message = [
+      0xd1, 0x01, 0x14, 0x55, 0x00,
+      ...textBytes("geo:51.5074,-0.1278"),
+    ];
+    expect(decodeRecords(message)).toEqual([newLocationRecord("51.5074", "-0.1278")]);
+  });
+
+  it("leaves an SMS URI with an extra parameter as a URL, not as a mangled message", () => {
+    // "sms:+15550100?body=Hi&x=1" is 25 bytes; no abbreviation, payload 26.
+    const message = [
+      0xd1, 0x01, 0x1a, 0x55, 0x00,
+      ...textBytes("sms:+15550100?body=Hi&x=1"),
+    ];
+    expect(decodeRecords(message)).toEqual([
+      { kind: "url", fields: { url: "sms:+15550100?body=Hi&x=1" } },
+    ]);
+  });
+
+  it("leaves a URI with no matching form as a URL Record", () => {
+    // "ftp://example.com": code 0x0D, 11 bytes left, payload 12.
+    const message = [0xd1, 0x01, 0x0c, 0x55, 0x0d, ...textBytes("example.com")];
+    expect(decodeRecords(message)).toEqual([{ kind: "url", fields: { url: "ftp://example.com" } }]);
+  });
+
+  it("reads an unknown MIME type as a generic MIME Record with hex bytes", () => {
+    const message = [
+      0xd2, 0x0a, 0x03, ...textBytes("text/plain"), 0x01, 0x02, 0xff,
+    ];
+    expect(decodeRecords(message)).toEqual([newMimeRecord("text/plain", "0102FF")]);
+  });
+
+  it("refuses a Wi-Fi Record whose token has no Credential", () => {
+    const message = encodeNdefMessage([
+      {
+        tnf: 0x02,
+        type: textBytes("application/vnd.wfa.wsc"),
+        payload: [0x10, 0x26, 0x00, 0x01, 0x01],
+      },
+    ]);
+    expect(() => decodeRecords(message)).toThrow(/Credential/i);
+  });
+});
+
+describe("encoded size across the record set", () => {
+  const everyKind: DraftRecord[] = [
+    { kind: "text", fields: { language: "en", text: "Hello" } },
+    { kind: "url", fields: { url: "https://example.com/x" } },
+    newPhoneRecord("+15550100"),
+    newEmailRecord("someone@example.com"),
+    newSmsRecord("+15550100", "Hello world"),
+    newLocationRecord("51.5074", "-0.1278"),
+    newWifiRecord({
+      ssid: "HomeNet",
+      networkKey: "password123",
+      auth: "wpa2-personal",
+      encryption: "aes",
+    }),
+    newContactRecord({
+      name: "Ada Lovelace",
+      organization: "Analytical Engines",
+      phone: "+15550100",
+      email: "ada@example.com",
+    }),
+    newBluetoothRecord("AA:BB:CC:DD:EE:FF"),
+    newMimeRecord("text/plain", "48656C6C6F"),
+    newExternalRecord("example.com:do", "0102FF"),
+  ];
+
+  it("counts exactly the bytes each Record writes", () => {
+    for (const record of everyKind) {
+      expect(recordSizeBytes(record), record.kind).toBe(encodeRecords([record]).length);
+    }
+  });
+
+  it("sums to the message length for a mixed Draft", () => {
+    const total = everyKind.reduce((sum, record) => sum + recordSizeBytes(record), 0);
+    expect(recordsByteLength(everyKind)).toBe(total);
+    expect(total).toBe(encodeRecords(everyKind).length);
   });
 });
