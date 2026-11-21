@@ -235,7 +235,10 @@ fn map_stored_read(
         .to_string();
     let stored_id = object.get("id").and_then(Value::as_str);
 
-    let decoded = match (customer_byte(object.get("customer")), data32_field(object.get("data32"))) {
+    let decoded = match (
+        customer_byte(object.get("customer")),
+        data32_field(object.get("data32")),
+    ) {
         (Some(customer), Some(data32)) => Some(Identity { customer, data32 }),
         _ => None,
     };
@@ -473,10 +476,11 @@ mod tests {
 
         let library = LibraryStore::new(&path).load().expect("reload");
         assert_eq!(library.snapshots.len(), 3, "nothing was dropped");
-        for (snapshot, stored_id) in library
-            .snapshots
-            .iter()
-            .zip(["57 00 AA BB CC", "58 00 11 22 33", "59 00 00 00 00"])
+        for (snapshot, stored_id) in
+            library
+                .snapshots
+                .iter()
+                .zip(["57 00 AA BB CC", "58 00 11 22 33", "59 00 00 00 00"])
         {
             assert_eq!(snapshot.identity, None, "no Identity is invented");
             assert_eq!(snapshot.hf, None, "nothing pretends to be a UID");
@@ -536,7 +540,10 @@ mod tests {
 
         let run = migrate(&store, &entries(stored), NOW).expect("migration");
 
-        assert_eq!(run.unmapped, vec!["facility".to_string(), "tags".to_string()]);
+        assert_eq!(
+            run.unmapped,
+            vec!["facility".to_string(), "tags".to_string()]
+        );
     }
 
     #[test]
@@ -549,7 +556,10 @@ mod tests {
         let library = LibraryStore::new(&path).load().expect("reload");
         assert_eq!(library.snapshots[0].write_count, 0);
         assert_eq!(
-            library.snapshots[0].identity.as_ref().map(|i| i.raw.as_str()),
+            library.snapshots[0]
+                .identity
+                .as_ref()
+                .map(|i| i.raw.as_str()),
             Some(""),
             "no payload bytes are fabricated"
         );
@@ -561,7 +571,9 @@ mod tests {
         let store = LibraryStore::new(&path);
         let mut existing = Library::empty();
         existing.add_lf(0x56, 0x0053_C7B3, "00 01 01", "2026-11-20T08:00:00.000Z");
-        store.save(&existing).expect("a library the user already has");
+        store
+            .save(&existing)
+            .expect("a library the user already has");
         let bytes = std::fs::read(&path).expect("read the library");
 
         let run = migrate(&store, &entries(&format!("[{SAVED_READ}]")), NOW).expect("migration");
@@ -591,7 +603,11 @@ mod tests {
         assert_eq!(second.status, MigrationStatus::LibraryExists);
         assert_eq!(second.migrated, 0);
         assert_eq!(
-            LibraryStore::new(&path).load().expect("reload").snapshots.len(),
+            LibraryStore::new(&path)
+                .load()
+                .expect("reload")
+                .snapshots
+                .len(),
             1
         );
     }
@@ -611,7 +627,10 @@ mod tests {
         assert_eq!(run.already_present, 1);
         let library = LibraryStore::new(&path).load().expect("reload");
         assert_eq!(library.snapshots.len(), 1);
-        assert_eq!(library.snapshots[0].name, "Front door", "the first read wins");
+        assert_eq!(
+            library.snapshots[0].name, "Front door",
+            "the first read wins"
+        );
     }
 
     #[test]
@@ -659,7 +678,11 @@ mod tests {
 
         assert_eq!(retried.status, MigrationStatus::LibraryExists);
         assert_eq!(
-            LibraryStore::new(&path).load().expect("reload").snapshots.len(),
+            LibraryStore::new(&path)
+                .load()
+                .expect("reload")
+                .snapshots
+                .len(),
             1,
             "one copy of the read, however many launches ran"
         );
@@ -671,8 +694,12 @@ mod tests {
         let torn = b"{\"version\":1,\"snapshots\":[{\"id\":\"55 00".to_vec();
         std::fs::write(&path, &torn).expect("write a torn file");
 
-        let refused = migrate(&LibraryStore::new(&path), &entries(&format!("[{SAVED_READ}]")), NOW)
-            .expect_err("a file this build cannot read must not be touched");
+        let refused = migrate(
+            &LibraryStore::new(&path),
+            &entries(&format!("[{SAVED_READ}]")),
+            NOW,
+        )
+        .expect_err("a file this build cannot read must not be touched");
         assert!(matches!(refused, MigrationError::Refused(_)), "{refused:?}");
         assert_eq!(
             std::fs::read(&path).expect("read the file"),
@@ -687,8 +714,12 @@ mod tests {
         let newer = br#"{"version": 99, "snapshots": []}"#.to_vec();
         std::fs::write(&path, &newer).expect("write a newer file");
 
-        let refused = migrate(&LibraryStore::new(&path), &entries(&format!("[{SAVED_READ}]")), NOW)
-            .expect_err("a newer file must not be touched");
+        let refused = migrate(
+            &LibraryStore::new(&path),
+            &entries(&format!("[{SAVED_READ}]")),
+            NOW,
+        )
+        .expect_err("a newer file must not be touched");
         assert!(matches!(refused, MigrationError::Refused(_)), "{refused:?}");
         assert_eq!(std::fs::read(&path).expect("read the file"), newer);
     }
