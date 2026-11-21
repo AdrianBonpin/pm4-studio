@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { BookmarkPlus, Check } from "lucide-react";
 import { Button } from "../components/ui/Button";
+import { AuthorIdentity } from "../components/AuthorIdentity";
 import { BlankTag } from "../components/BlankTag";
 import { CloneWizard } from "../components/CloneWizard";
 import { Field, Readout, Section } from "../components/Section";
@@ -126,6 +127,13 @@ export function LfPage({ connected, onChirp, library, onDeviceError }: LfPagePro
           write a Snapshot back to a Blank.
         </p>
       </Section>
+
+      <AuthorIdentity
+        connected={connected}
+        onChirp={onChirp}
+        library={library}
+        onDeviceError={onDeviceError}
+      />
 
       <BlankTag connected={connected} onChirp={onChirp} onDeviceError={onDeviceError} />
     </div>

@@ -52,6 +52,24 @@ export type WriteResult = {
   countProblem: string | null;
 };
 
+/** What an authored Identity would be written as, produced before any write.
+ *
+ * Every field is decided by the Rust codec (`author_identity.rs` on top of
+ * `identity.rs`), so the values shown here are the values on the wire: the form
+ * never re-derives the bit layout. */
+export type IdentityPreview = {
+  customer: number;
+  data32: number;
+  /** The five-byte id as every other surface shows it: `55 00 84 82 12`. */
+  id: string;
+  /** The same five bytes with no separators, for copying back into the form. */
+  hex: string;
+  facility: number;
+  card: number;
+  /** The 24-byte `0x0073` payload, hex: what goes on the wire. */
+  payloadHex: string;
+};
+
 /** What became of one blanking attempt.
  *
  * `blanked` means the re-read found no Identity, which is the success condition
