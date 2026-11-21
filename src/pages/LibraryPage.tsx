@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Check, Copy, Pencil, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { Segmented } from "../components/ui/Segmented";
 import { Section } from "../components/Section";
 import { LibraryProblemBanner } from "../components/LibraryProblemBanner";
 import { MigrationWarning } from "../components/MigrationWarning";
@@ -32,6 +33,7 @@ import {
   nothingToAdd,
   suggestedExportName,
 } from "../lib/libraryFiles";
+import { DraftsPage } from "./DraftsPage";
 import type { LibraryState } from "../hooks/useLibrary";
 import type { ImportPreview } from "../lib/libraryFiles";
 import type { Snapshot, SnapshotDraft, SnapshotOrder } from "../lib/library";
@@ -43,12 +45,22 @@ interface LibraryPageProps {
   onChirp: () => void;
 }
 
+/** Library's two kinds of saved thing, in the order the switch shows them. */
+type Collection = "snapshots" | "drafts";
+
 /**
  * The library, with no Reader required. Snapshots are read from a file in the
  * app data directory, so they are here whether or not the Reader is plugged in;
  * writing one back to a Tag is the only part that needs hardware.
+ *
+ * Library holds both Collections. Drafts is not a destination any more — the
+ * sidebar is five destinations and Drafts is not one of them — so the second
+ * Collection lives here, and this one switch is what keeps every saved Draft
+ * reachable. Ticket 10 gives both Collections the list-beside-detail shape; this
+ * slice only re-homes the Drafts page as it stands.
  */
 export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
+  const [collection, setCollection] = useState<Collection>("snapshots");
   const { view, error, loading, edit, remove, pickPath, exportTo, previewImport, applyImport } =
     library;
 
@@ -185,8 +197,22 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
     }
   };
 
+  // Drafts, as it stands, inside the Collection it now belongs to. Ticket 10
+  // gives both Collections the list-beside-detail shape; until then this is the
+  // same editor it always was, reached from Library instead of from the sidebar.
+  if (collection === "drafts") {
+    return (
+      <div className="flex flex-col gap-8">
+        <CollectionSwitch value={collection} onChange={setCollection} />
+        <DraftsPage connected={connected} />
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col gap-8">
+      <CollectionSwitch value={collection} onChange={setCollection} />
+
       <Section
         title="Snapshots"
         hint={
@@ -523,5 +549,31 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
         </code>
       </Section>
     </div>
+  );
+}
+
+/**
+ * The one control that keeps both Collections reachable.
+ *
+ * It sits above the panel rather than inside either one, so switching does not
+ * feel like navigating: it is the same page, showing the other Collection.
+ */
+function CollectionSwitch({
+  value,
+  onChange,
+}: {
+  value: Collection;
+  onChange: (next: Collection) => void;
+}) {
+  return (
+    <Segmented
+      label="Collection"
+      value={value}
+      options={[
+        { value: "snapshots", label: "Snapshots" },
+        { value: "drafts", label: "Drafts" },
+      ]}
+      onChange={onChange}
+    />
   );
 }

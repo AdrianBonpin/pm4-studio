@@ -16,6 +16,21 @@ export const TOAST_CORNERS = ["bottom-right", "bottom-left", "top-right", "top-l
 
 export type ToastCorner = (typeof TOAST_CORNERS)[number];
 
+/**
+ * The words for each corner, for the control that chooses one.
+ *
+ * A corner is a place on the screen, so it is named as one: `bottom-right` is a
+ * storage value, and it is not what the user is shown. The words mirror the
+ * geometry — top row first — so the control can be laid out in the shape of the
+ * window.
+ */
+export const TOAST_CORNER_LABEL: Record<ToastCorner, string> = {
+  "bottom-right": "Bottom right",
+  "bottom-left": "Bottom left",
+  "top-right": "Top right",
+  "top-left": "Top left",
+};
+
 /** The same default the spec states, named so tests do not hard-code it twice. */
 export const DEFAULT_TOAST_CORNER: ToastCorner = "bottom-right";
 

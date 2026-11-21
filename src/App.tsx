@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { FileText, Library as LibraryIcon, Nfc, Radio, Terminal } from "lucide-react";
+import { Library as LibraryIcon, Nfc, Radio, Settings as SettingsIcon, Terminal } from "lucide-react";
 import { Badge, type BadgeTone } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
-import { Toggle } from "./components/ui/Toggle";
 import { ToastViewport } from "./components/ToastViewport";
 import { useBeep } from "./hooks/useBeep";
 import { useLibrary } from "./hooks/useLibrary";
@@ -12,9 +11,9 @@ import { formatFirmwareRevision } from "./lib/readerIdentity";
 import { isMacOS, isTauri } from "./lib/platform";
 import { PAGES, type PageId } from "./lib/pageCopy";
 import { HfPage } from "./pages/HfPage";
-import { DraftsPage } from "./pages/DraftsPage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { LfPage } from "./pages/LfPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { ToolsPage } from "./pages/ToolsPage";
 
 /**
@@ -32,15 +31,32 @@ const STATUS_TONE: Record<Status, BadgeTone> = {
   error: "err",
 };
 
-/** The sidebar icon per page. The words are in `lib/pageCopy`. */
+/** The sidebar icon per destination. The words are in `lib/pageCopy`. */
 const PAGE_ICON: Record<PageId, typeof Nfc> = {
   lf: Nfc,
   hf: Radio,
-  drafts: FileText,
   library: LibraryIcon,
   tools: Terminal,
+  settings: SettingsIcon,
 };
 
+/**
+ * The shell.
+ *
+ * The sidebar is navigation and connection, and nothing else: five destinations
+ * above, the Reader's identity, status, firmware and Connect below. The beep
+ * preference used to sit down there, disabled whenever the Reader was unplugged,
+ * for a value stored on this machine and unrelated to the hardware; it is in
+ * Settings → Feedback now, where it is available with nothing plugged in.
+ *
+ * The destination is the shell's own state, so leaving one for another and coming
+ * back returns to the one you left — within a session, which is what it promises.
+ * It is deliberately not persisted across launches: an app that opens where you
+ * last were is a different decision, and this one is not made here.
+ *
+ * The credits that used to close every page are gone from the page flow. They are
+ * a fact about the project, so they are stated once in Settings → About.
+ */
 export default function App() {
   const [page, setPage] = useState<PageId>("lf");
   const reader = useReader();
@@ -95,7 +111,7 @@ export default function App() {
             </p>
           </div>
 
-          <nav className="flex flex-col gap-0.5 px-2">
+          <nav aria-label="Destinations" className="flex flex-col gap-0.5 px-2">
             {PAGES.map((p) => {
               const Icon = PAGE_ICON[p.id];
               const active = p.id === page;
@@ -104,7 +120,7 @@ export default function App() {
                   key={p.id}
                   onClick={() => setPage(p.id)}
                   aria-current={active ? "page" : undefined}
-                  className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
+                  className={`flex cursor-pointer items-center gap-2.5 whitespace-nowrap rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
                     active
                       ? "bg-surface-raised text-text"
                       : "text-text-muted hover:bg-surface hover:text-text"
@@ -135,15 +151,6 @@ export default function App() {
                 {connected ? formatFirmwareRevision(reader.firmware) : "not connected"}
               </span>
             </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs text-text-muted">Beep</span>
-              <Toggle
-                checked={beepOn}
-                onChange={setBeepOn}
-                label="Beep on read and write"
-                disabled={!connected}
-              />
-            </div>
             <Button variant="secondary" className="w-full" onClick={() => void reader.connect()}>
               {connected ? "Reconnect" : "Connect"}
             </Button>
@@ -173,33 +180,17 @@ export default function App() {
                   onChirp={chirp}
                 />
               )}
-              {page === "drafts" && <DraftsPage connected={connected} />}
               {page === "library" && (
                 <LibraryPage connected={connected} library={library} onChirp={chirp} />
               )}
               {page === "tools" && <ToolsPage connected={connected} />}
-
-              <footer className="border-t border-border pt-4 text-[11px] leading-relaxed text-text-muted">
-                Protocol reverse-engineered from USB captures. Credits:{" "}
-                <a
-                  href="https://github.com/vicrodh/cyb-nfc"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-accent-muted hover:underline"
-                >
-                  vicrodh/cyb-nfc
-                </a>{" "}
-                and{" "}
-                <a
-                  href="https://github.com/journeyman846/nfcx-tool"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-accent-muted hover:underline"
-                >
-                  journeyman846/nfcx-tool
-                </a>
-                . Not PC/SC, not CCID.
-              </footer>
+              {page === "settings" && (
+                <SettingsPage
+                  reader={{ connected, info: reader.info, firmware: reader.firmware }}
+                  beepOn={beepOn}
+                  onBeepOnChange={setBeepOn}
+                />
+              )}
             </div>
           </div>
         </main>

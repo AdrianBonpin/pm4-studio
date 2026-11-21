@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TOAST_CORNER,
   TOAST_CORNER_KEY,
+  TOAST_CORNER_LABEL,
   TOAST_CORNERS,
   isToastCorner,
   loadToastCorner,
@@ -33,6 +34,15 @@ describe("the corner preference", () => {
   it("is bottom-right until the user says otherwise", () => {
     expect(DEFAULT_TOAST_CORNER).toBe("bottom-right");
     expect(loadToastCorner(storage())).toBe("bottom-right");
+  });
+
+  it("names every corner in words, for the control that chooses one", () => {
+    // A corner is a place, and a place written as `bottom-right` is a variable
+    // name on screen. The control that sets it reads these.
+    for (const corner of TOAST_CORNERS) {
+      expect(TOAST_CORNER_LABEL[corner], corner).toMatch(/^[A-Z][a-z]+ [a-z]+$/);
+    }
+    expect(new Set(TOAST_CORNERS.map((c) => TOAST_CORNER_LABEL[c])).size).toBe(TOAST_CORNERS.length);
   });
 
   it("offers exactly four corners", () => {
