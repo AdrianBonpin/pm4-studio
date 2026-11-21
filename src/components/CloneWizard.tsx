@@ -1,33 +1,74 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowRight, Check, RotateCcw } from "lucide-react";
+import { ArrowRight, Check, Layers, RotateCcw } from "lucide-react";
 import { Button } from "./ui/Button";
+import { BatchClone } from "./BatchClone";
 import { Field, Readout } from "./Section";
+import {
+  ReplacementConfirmation,
+  replacementActionVariant,
+} from "./ReplacementConfirmation";
 import { useLfPoller } from "../hooks/useReader";
+import { describeDeviceFailure } from "../lib/readerIdentity";
+import { replacementConfirmation } from "../lib/replacement";
+import { confirmedCopiesLabel, writeNotice } from "../lib/writeOutcome";
 import type { LfCard, WriteResult } from "../types";
 
-type Step = "idle" | "awaitSource" | "sourceReady" | "awaitDest" | "writing" | "done" | "failed";
+type Step =
+  | "idle"
+  | "awaitSource"
+  | "sourceReady"
+  | "awaitDest"
+  /** The Blank was read; the write waits on a confirmation naming what it holds. */
+  | "confirmDest"
+  | "writing"
+  | "done"
+  | "failed"
+  /** Several Blanks from the one source reading. Rendered by `BatchClone`. */
+  | "batch";
 
-const STEP_ORDER: Step[] = ["awaitSource", "sourceReady", "awaitDest", "writing", "done"];
+const STEP_ORDER: Step[] = [
+  "awaitSource",
+  "sourceReady",
+  "awaitDest",
+  "confirmDest",
+  "writing",
+  "done",
+];
 
 function stepIndex(step: Step): number {
   const i = STEP_ORDER.indexOf(step);
   return i < 0 ? 0 : i;
 }
 
-const LABELS = ["Tap source", "Read source", "Tap blank", "Writing", "Done"];
+const LABELS = ["Tap source", "Read source", "Tap blank", "Confirm", "Writing", "Done"];
 
 interface CloneWizardProps {
   connected: boolean;
   onSaved?: (card: LfCard) => void;
   onChirp: () => void;
+  /** Surfaces a dead or wedged Reader in the shell's notice strip. */
+  onDeviceError?: (message: string) => void;
 }
 
 /**
  * Guided clone: tap the original, confirm what was read, swap in a blank, write,
  * verify. One linear flow with the current step always visible.
+ *
+ * The blank is read before it is written, and that reading is what the
+ * confirmation names: a Tag that carries another Identity is not a Blank, and the
+ * write destroys what it carries. The wording comes from `lib/replacement.ts`,
+ * the same module authoring an Identity uses, and the markup from
+ * `ReplacementConfirmation`, which both paths render — so the two confirmations
+ * cannot disagree about what a destructive write says, or about how serious it
+ * looks.
+ *
+ * The same source reading also feeds a Batch Clone (`batch` step): one Identity
+ * written to successive Blanks, each attempt reporting its own result. Sharing
+ * the read here is the point — the original is tapped once either way, and the
+ * batch path must never re-read it per attempt.
  */
-export function CloneWizard({ connected, onSaved, onChirp }: CloneWizardProps) {
+export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: CloneWizardProps) {
   const [step, setStep] = useState<Step>("idle");
   const [source, setSource] = useState<LfCard | null>(null);
   const [dest, setDest] = useState<LfCard | null>(null);
@@ -61,36 +102,47 @@ export function CloneWizard({ connected, onSaved, onChirp }: CloneWizardProps) {
           onChirp();
         } else {
           setStep("failed");
-          setErr("The write was sent but the blank did not read back the expected id.");
+          // The notice names the actual outcome: refused, unknown, or not sent.
+          setErr(writeNotice(res).text);
         }
       } catch (e) {
         setStep("failed");
-        setErr(String(e));
+        // A wedged firmware is reported with its remedy, not as a bare timeout.
+        setErr(describeDeviceFailure(e));
         void dst;
       }
     },
     [onChirp],
   );
 
-  useLfPoller(polling, connected, (card) => {
-    if (step === "awaitSource") {
-      setSource(card);
-      setNote(null);
-      setStep("sourceReady");
-      onChirp();
-      return;
-    }
-    if (step === "awaitDest" && source) {
-      if (card.id === source.id) {
-        setNote("That is still the source badge. Take it off and tap a blank tag.");
+  useLfPoller(
+    polling,
+    connected,
+    (card) => {
+      if (step === "awaitSource") {
+        setSource(card);
+        setNote(null);
+        setStep("sourceReady");
+        onChirp();
         return;
       }
-      setDest(card);
-      void doWrite(source, card);
-    }
-  });
+      if (step === "awaitDest" && source) {
+        if (card.id === source.id) {
+          setNote("That is still the original tag. Take it off and tap a blank tag.");
+          return;
+        }
+        // Read, then ask. `write_guard::decide` allows writing over a Tag that
+        // carries a different Identity, so this reading is the only chance to say
+        // which Identity is about to be lost.
+        setDest(card);
+        setNote(null);
+        setStep("confirmDest");
+      }
+    },
+    onDeviceError,
+  );
 
-  // Clear a stale "still the source badge" note once the flow moves on.
+  // Clear a stale "still the original tag" note once the flow moves on.
   useEffect(() => {
     if (step !== "awaitDest") setNote(null);
   }, [step]);
@@ -99,7 +151,7 @@ export function CloneWizard({ connected, onSaved, onChirp }: CloneWizardProps) {
     return (
       <div className="flex flex-col gap-3">
         <p className="text-sm leading-relaxed text-text-muted">
-          Copies a badge id onto a blank tag. You will tap the original first, then a
+          Copies a tag's identity onto a blank tag. You will tap the original first, then a
           blank, and the result is read back to prove it matches.
         </p>
         <div>
@@ -111,7 +163,28 @@ export function CloneWizard({ connected, onSaved, onChirp }: CloneWizardProps) {
     );
   }
 
+  // The batch is its own run: it holds the reader and reports attempt by attempt,
+  // so it takes over the whole step rather than sitting inside the stepper.
+  if (step === "batch" && source) {
+    return (
+      <BatchClone
+        source={source}
+        connected={connected}
+        onChirp={onChirp}
+        onExit={() => setStep("sourceReady")}
+        onDeviceError={onDeviceError}
+      />
+    );
+  }
+
   const current = stepIndex(step);
+
+  // Built from the reading taken in the step before, never from what the flow
+  // assumed was on the reader: the Tag that was read is the Tag the button names.
+  const cloneConfirmation =
+    step === "confirmDest" && source && dest
+      ? replacementConfirmation(source, { kind: "identified", card: dest })
+      : null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -139,7 +212,7 @@ export function CloneWizard({ connected, onSaved, onChirp }: CloneWizardProps) {
 
       {step === "awaitSource" && (
         <p className="text-sm text-text-muted">
-          Tap the badge you want to copy on the reader, flat and centred.
+          Tap the tag you want to copy on the reader, flat and centred.
         </p>
       )}
 
@@ -150,9 +223,12 @@ export function CloneWizard({ connected, onSaved, onChirp }: CloneWizardProps) {
             <Field label="Facility / card" value={`${source.facility} / ${source.card}`} />
             <Field label="data32" value={`0x${source.data32.toString(16).padStart(8, "0").toUpperCase()}`} />
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="primary" onClick={() => setStep("awaitDest")}>
-              Use this badge
+              Use this tag
+            </Button>
+            <Button variant="secondary" onClick={() => setStep("batch")}>
+              <Layers size={13} /> Write it to several blanks
             </Button>
             <Button variant="ghost" onClick={reset}>
               Cancel
@@ -176,6 +252,32 @@ export function CloneWizard({ connected, onSaved, onChirp }: CloneWizardProps) {
         </div>
       )}
 
+      {cloneConfirmation && source && dest && (
+        <div className="flex flex-col gap-4">
+          <ReplacementConfirmation confirmation={cloneConfirmation} />
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant={replacementActionVariant(cloneConfirmation.destructive)}
+              onClick={() => void doWrite(source, dest)}
+            >
+              {cloneConfirmation.action}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setDest(null);
+                setStep("awaitDest");
+              }}
+            >
+              Tap a different tag
+            </Button>
+            <Button variant="ghost" onClick={reset}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
       {step === "writing" && (
         <p className="text-sm text-text-muted">
           Writing <span className="font-mono text-text">{source?.id}</span> to{" "}
@@ -189,6 +291,11 @@ export function CloneWizard({ connected, onSaved, onChirp }: CloneWizardProps) {
             <Check size={15} /> Cloned and verified
           </p>
           <Readout value={result?.readback?.id ?? source?.id} />
+          {result && result.confirmedCopies !== null && (
+            <p className="text-xs text-text-muted">
+              {confirmedCopiesLabel(result.confirmedCopies)} in the library.
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <Field
               label="Facility / card"

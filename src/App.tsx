@@ -1,61 +1,65 @@
 import { useState } from "react";
-import { Nfc, Radio, Terminal, X } from "lucide-react";
-import { Badge } from "./components/ui/Badge";
+import { FileText, Library as LibraryIcon, Nfc, Radio, Terminal, X } from "lucide-react";
+import { Badge, type BadgeTone } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
 import { Toggle } from "./components/ui/Toggle";
 import { useBeep } from "./hooks/useBeep";
-import { useReader } from "./hooks/useReader";
+import { useLibrary } from "./hooks/useLibrary";
+import { useReader, type Status } from "./hooks/useReader";
+import {
+  classifyDeviceFailure,
+  deviceFailureNotice,
+  formatFirmwareRevision,
+} from "./lib/readerIdentity";
 import { isMacOS, isTauri } from "./lib/platform";
+import { PAGES, type PageId } from "./lib/pageCopy";
 import { HfPage } from "./pages/HfPage";
+import { DraftsPage } from "./pages/DraftsPage";
+import { LibraryPage } from "./pages/LibraryPage";
 import { LfPage } from "./pages/LfPage";
 import { ToolsPage } from "./pages/ToolsPage";
 
-type Page = "lf" | "hf" | "tools";
+/**
+ * Tone per Reader status, in the design system's own vocabulary.
+ *
+ * A tone, not a colour: the tokens in `src/index.css` are the only place a hue
+ * is defined, so a status badge cannot drift away from the theme.
+ */
+const STATUS_TONE: Record<Status, BadgeTone> = {
+  idle: "muted",
+  connecting: "warn",
+  connected: "ok",
+  absent: "muted",
+  wedged: "warn",
+  error: "err",
+};
 
-const STATUS_COLOR = {
-  idle: "#A1A1AA",
-  connecting: "#FBBF24",
-  connected: "#4ADE80",
-  error: "#F87171",
+/** Left-rule tone per classified failure. Hardware faults carry the remedy. */
+const NOTICE_TONE = {
+  muted: { box: "border-border-hover bg-surface/50", title: "text-text" },
+  warn: { box: "border-warn bg-warn/5", title: "text-warn" },
+  error: { box: "border-err bg-err/5", title: "text-err" },
 } as const;
 
-const PAGES: {
-  id: Page;
-  label: string;
-  title: string;
-  subtitle: string;
-  icon: typeof Nfc;
-}[] = [
-  {
-    id: "lf",
-    label: "125 kHz",
-    title: "125 kHz",
-    subtitle: "Badges, fobs and elevator tags. Read, clone and write EM4100.",
-    icon: Nfc,
-  },
-  {
-    id: "hf",
-    label: "13.56 MHz",
-    title: "13.56 MHz",
-    subtitle: "ISO14443-A cards. Read the UID of whatever is in the field.",
-    icon: Radio,
-  },
-  {
-    id: "tools",
-    label: "Tools",
-    title: "Tools",
-    subtitle: "Hardware probes and raw command frames.",
-    icon: Terminal,
-  },
-];
+/** The sidebar icon per page. The words are in `lib/pageCopy`. */
+const PAGE_ICON: Record<PageId, typeof Nfc> = {
+  lf: Nfc,
+  hf: Radio,
+  drafts: FileText,
+  library: LibraryIcon,
+  tools: Terminal,
+};
 
 export default function App() {
-  const [page, setPage] = useState<Page>("lf");
+  const [page, setPage] = useState<PageId>("lf");
   const reader = useReader();
+  const library = useLibrary();
   const { beepOn, setBeepOn, chirp } = useBeep();
 
   const current = PAGES.find((p) => p.id === page) ?? PAGES[0];
   const connected = reader.connected;
+  const failure = reader.error ? classifyDeviceFailure(reader.error) : "unknown";
+  const notice = reader.error ? deviceFailureNotice(failure) : null;
 
   return (
     <div className="flex h-svh flex-col overflow-hidden bg-canvas text-text select-none">
@@ -80,7 +84,7 @@ export default function App() {
 
           <nav className="flex flex-col gap-0.5 px-2">
             {PAGES.map((p) => {
-              const Icon = p.icon;
+              const Icon = PAGE_ICON[p.id];
               const active = p.id === page;
               return (
                 <button
@@ -105,7 +109,18 @@ export default function App() {
               <span className="truncate font-mono text-[11px] text-text-muted">
                 {reader.info ? reader.info.product : "no reader"}
               </span>
-              <Badge label={reader.status} color={STATUS_COLOR[reader.status]} />
+              <Badge label={reader.status} tone={STATUS_TONE[reader.status]} />
+            </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">
+                Firmware
+              </span>
+              <span
+                className="truncate font-mono text-[11px] text-text-muted"
+                title="Firmware revision reported by the Reader"
+              >
+                {connected ? formatFirmwareRevision(reader.firmware) : "not connected"}
+              </span>
             </div>
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs text-text-muted">Beep</span>
@@ -130,26 +145,66 @@ export default function App() {
                 <p className="text-sm text-text-muted">{current.subtitle}</p>
               </header>
 
-              {reader.error && (
-                <div className="flex items-start justify-between gap-3 border-l-2 border-err bg-err/5 px-3 py-2 text-sm text-err">
-                  <span>{reader.error}</span>
-                  <button
-                    aria-label="Dismiss"
-                    onClick={() => reader.setError(null)}
-                    className="cursor-pointer text-err/70 transition-colors hover:text-err"
-                  >
-                    <X size={15} />
-                  </button>
+              {reader.error && notice && (
+                <div
+                  className={`flex items-start justify-between gap-3 border-l-2 px-3 py-2 ${NOTICE_TONE[notice.tone].box}`}
+                >
+                  <div className="min-w-0">
+                    {failure === "unknown" ? (
+                      <p className="text-sm text-err">{reader.error}</p>
+                    ) : (
+                      <>
+                        <p className={`text-sm ${NOTICE_TONE[notice.tone].title}`}>
+                          {notice.title}
+                        </p>
+                        <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
+                          {notice.detail}
+                        </p>
+                        <p className="mt-1 select-text break-all font-mono text-[11px] text-text-muted">
+                          {reader.error}
+                        </p>
+                      </>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1">
+                    {failure !== "unknown" && (
+                      <Button
+                        variant="ghost"
+                        className="text-xs"
+                        onClick={() => void reader.connect()}
+                      >
+                        Reconnect
+                      </Button>
+                    )}
+                    <button
+                      aria-label="Dismiss"
+                      onClick={() => reader.setError(null)}
+                      className="cursor-pointer opacity-70 transition-opacity hover:opacity-100"
+                    >
+                      <X size={15} />
+                    </button>
+                  </div>
                 </div>
               )}
 
-              {page === "lf" && <LfPage connected={connected} onChirp={chirp} />}
+              {page === "lf" && (
+                <LfPage
+                  connected={connected}
+                  onChirp={chirp}
+                  library={library}
+                  onDeviceError={reader.setError}
+                />
+              )}
               {page === "hf" && (
                 <HfPage
                   connected={connected}
                   onPoll={reader.pollHfOnce}
                   onChirp={chirp}
                 />
+              )}
+              {page === "drafts" && <DraftsPage connected={connected} />}
+              {page === "library" && (
+                <LibraryPage connected={connected} library={library} onChirp={chirp} />
               )}
               {page === "tools" && <ToolsPage connected={connected} />}
 

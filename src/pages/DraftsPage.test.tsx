@@ -1,0 +1,277 @@
+// @vitest-environment jsdom
+import { useState } from "react";
+import { describe, expect, it } from "vitest";
+import { screen, waitFor } from "@testing-library/react";
+import { DraftsPage } from "./DraftsPage";
+import { DraftsProvider } from "../components/DraftsProvider";
+import { fakeBackend, renderUi, type Ui } from "../test/dom";
+import type { Draft, DraftsView } from "../lib/drafts";
+import type { LibraryProblem } from "../lib/library";
+
+/**
+ * Gate 2 of 8: deleting a Draft.
+ *
+ * A Snapshot can be read off its Tag again; a Draft was authored and never lived
+ * on a Tag, so nothing can regenerate it. Draft delete is therefore the one
+ * removal in the app with no way back, and it asks first: the row's trash control
+ * opens a confirmation naming the Draft, and the removal happens from that
+ * confirmation's button, not from the trash control.
+ *
+ * The three tests below are the pair the defect section asks for, plus the
+ * narrowness the ticket adds. Dismissing must remove nothing (which fails if the
+ * removal is wired straight to the trash control); confirming must remove that
+ * Draft and no other; and the Draft that was dismissed must still be there
+ * afterwards. Eight gates is D5's number, and it is true only because this one
+ * exists — ticket 01 proved the seven that already had a confirmation and could
+ * not prove a gate that was not there (see the correction note in D5).
+ *
+ * The store is reached through `invoke`, like every other persisted call, so the
+ * fake backend stands at that boundary and the real hook runs unmodified.
+ */
+
+const DRAFT: Draft = {
+  id: "draft-1",
+  name: "Loading bay sign",
+  updatedAt: new Date().toISOString(),
+  records: [],
+};
+
+const OTHER: Draft = {
+  id: "draft-2",
+  name: "Canteen sign",
+  updatedAt: new Date().toISOString(),
+  records: [],
+};
+
+const THIRD: Draft = {
+  id: "draft-3",
+  name: "Gate three sign",
+  updatedAt: new Date().toISOString(),
+  records: [],
+};
+
+function view(
+  drafts: Draft[],
+  problem: LibraryProblem | null = null,
+  migrationWarning: string | null = null,
+): DraftsView {
+  return { drafts, problem, migrationWarning };
+}
+
+/**
+ * The page as the app mounts it: inside the provider that owns the queue and the
+ * window-close guard. The page itself takes no store, because there is one queue
+ * for the app and not one per page.
+ */
+function renderDraftsPage(): Ui {
+  return renderUi(
+    <DraftsProvider>
+      <DraftsPage connected={false} />
+    </DraftsProvider>,
+  );
+}
+
+/** Every Draft on screen, by name, in the order the list renders them. */
+function listedNames(): string[] {
+  return screen
+    .queryAllByRole("button", { name: /^Rename / })
+    .map((control) => control.getAttribute("aria-label") ?? "")
+    .map((label) => label.replace(/^Rename /, ""));
+}
+
+describe("deleting a Draft", () => {
+  it("asks before it removes anything, and keeping the Draft removes nothing", async () => {
+    const backend = fakeBackend({
+      drafts_load: () => view([DRAFT, OTHER]),
+      draft_delete: () => view([OTHER]),
+    });
+
+    const { user } = renderDraftsPage();
+
+    await user.click(await screen.findByRole("button", { name: `Delete ${DRAFT.name}` }));
+
+    // The confirmation is on screen, and it names the Draft it is about to
+    // remove. While it is open the row's own title is replaced by it, so the
+    // name has nowhere else to come from.
+    const prompt = screen.getByText(/Delete\s+permanently\?/);
+    expect(prompt.textContent).toContain(DRAFT.name);
+    const confirm = screen.getByRole("button", { name: "Delete permanently" });
+    // The control that destroys the Draft asks for the `danger` variant, rather
+    // than carrying a class that merely looks like it. The variant is read from
+    // the attribute the button renders for it, so a hand-rolled class — including
+    // one that would be almost invisible, `border-err/5` — cannot satisfy this.
+    expect(confirm.dataset.variant).toBe("danger");
+
+    await user.click(screen.getByRole("button", { name: "Keep" }));
+
+    // Dismissed: the store was never asked to remove anything, and both Drafts
+    // are still listed exactly as they were.
+    expect(backend.callsTo("draft_delete")).toHaveLength(0);
+    expect(listedNames()).toEqual([DRAFT.name, OTHER.name]);
+    expect(screen.queryByRole("button", { name: "Delete permanently" })).toBeNull();
+  });
+
+  it("removes that Draft through the store when the confirmation is confirmed", async () => {
+    const backend = fakeBackend({
+      drafts_load: () => view([DRAFT, OTHER]),
+      draft_delete: () => view([OTHER]),
+    });
+
+    const { user } = renderDraftsPage();
+
+    await user.click(await screen.findByRole("button", { name: `Delete ${DRAFT.name}` }));
+    await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+
+    await waitFor(() => {
+      expect(backend.callsTo("draft_delete")).toHaveLength(1);
+    });
+    // That Draft, and no other.
+    expect(backend.callsTo("draft_delete")[0]?.args).toEqual({ id: DRAFT.id });
+  });
+
+  it("leaves every other Draft in place when one is confirmed away", async () => {
+    const backend = fakeBackend({
+      drafts_load: () => view([DRAFT, OTHER, THIRD]),
+      draft_delete: () => view([DRAFT, THIRD]),
+    });
+
+    const { user } = renderDraftsPage();
+
+    await user.click(await screen.findByRole("button", { name: `Delete ${OTHER.name}` }));
+    await user.click(screen.getByRole("button", { name: "Delete permanently" }));
+
+    await waitFor(() => {
+      expect(listedNames()).toEqual([DRAFT.name, THIRD.name]);
+    });
+    // One removal was asked for, and it named the row whose control was used.
+    expect(backend.callsTo("draft_delete").map((call) => call.args)).toEqual([{ id: OTHER.id }]);
+  });
+});
+
+/**
+ * The list is read once on the way up, not once per reader.
+ *
+ * The queue is the app's — it lives above the router — so the list is already
+ * read when the app starts. The page reads it again on mount because the list
+ * can change elsewhere (an import adds Drafts), and that is the reason the page
+ * must be fresh when the user gets there. At launch those two are the same
+ * question asked in the same commit, so they are one read: a second one could
+ * only answer it again, with the same bytes.
+ */
+describe("reading the list", () => {
+  it("reads it once when the app opens, not once per reader", async () => {
+    const backend = fakeBackend({ drafts_load: () => view([DRAFT]) });
+
+    renderDraftsPage();
+
+    expect(await screen.findByText(DRAFT.name)).toBeTruthy();
+    // Both readers ask in the same commit, so a second read would already have
+    // been sent by now.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(backend.callsTo("drafts_load")).toHaveLength(1);
+  });
+
+  it("reads it again when the section is opened, so a Draft added elsewhere is there", async () => {
+    // The reason the page reads at all: the list can change while the page is
+    // somewhere else — an import adds Drafts — so opening the section must not
+    // show what the queue read at launch.
+    const backend = fakeBackend({ drafts_load: () => view([DRAFT]) });
+    const { user } = renderUi(<SectionThatOpens />);
+    await waitFor(() => {
+      expect(backend.callsTo("drafts_load")).toHaveLength(1);
+    });
+
+    // Something else wrote a Draft to the library while this section was closed.
+    backend.answer("drafts_load", () => view([DRAFT, OTHER]));
+    await user.click(screen.getByRole("button", { name: "Drafts" }));
+
+    expect(await screen.findByText(OTHER.name)).toBeTruthy();
+    expect(backend.callsTo("drafts_load")).toHaveLength(2);
+  });
+});
+
+/**
+ * The app's shape: the queue and the guard mounted once, one section on screen.
+ *
+ * Starting on another section is what the sidebar does, and it is the case that
+ * decides whether opening Drafts reads the list again.
+ */
+function SectionThatOpens() {
+  const [open, setOpen] = useState(false);
+  return (
+    <DraftsProvider>
+      <button onClick={() => setOpen(true)}>Drafts</button>
+      {open ? <DraftsPage connected={false} /> : <p>Snapshots</p>}
+    </DraftsProvider>
+  );
+}
+
+/**
+ * The library file cannot be written: Drafts and Snapshots live in one file, so
+ * one lock covers both, and it is reported the same way on both pages.
+ *
+ * This is the same defect class the migration warning had — the same state of
+ * the same file rendered twice, and the two copies drifted — so the page renders
+ * `LibraryProblemBanner` and the assertions here are the treatment it must have
+ * on either page: what the file is, the store's reason, the store's detail, and
+ * saving turned off.
+ */
+describe("a library that cannot be written", () => {
+  const DETAIL = "/Users/ada/Library/Application Support/pm4-studio/library.json";
+
+  it("reports it with the store's reason and detail, and turns saving off", async () => {
+    fakeBackend({
+      drafts_load: () =>
+        view(
+          [DRAFT],
+          {
+            kind: "newerVersion",
+            message: "The file claims schema 3, which this build does not write.",
+            detail: DETAIL,
+          },
+        ),
+    });
+
+    renderDraftsPage();
+
+    expect(await screen.findByText(/newer version of PM4 Studio/)).toBeTruthy();
+    expect(screen.getByText(/claims schema 3/)).toBeTruthy();
+    // The detail the store reported, which the Drafts page used to drop.
+    expect(screen.getByText(DETAIL)).toBeTruthy();
+
+    const create = screen.getByRole("button", { name: "New Draft" });
+    expect((create as HTMLButtonElement).disabled).toBe(true);
+  });
+});
+
+/**
+ * Ticket 04 / ADR 0005: a version 1 library is lifted on open, and a lift that
+ * cannot be written is reported. The Drafts are the reason the version exists —
+ * they are the collection an older build would have dropped — so the page says
+ * when the file still carries the older claim, and stays usable.
+ */
+describe("a library lifted from an older schema", () => {
+  const WARNING =
+    "This library was written for schema 1 and has been read as schema 2. It could not be rewritten: permission denied. Everything in it is open and usable, and saving will correct the file.";
+
+  it("shows every Draft and reports the lift that could not be written", async () => {
+    fakeBackend({ drafts_load: () => view([DRAFT], null, WARNING) });
+
+    renderDraftsPage();
+
+    expect(await screen.findByText(DRAFT.name)).toBeTruthy();
+    expect(screen.getByText(/could not be rewritten/)).toBeTruthy();
+    // A warning, not a lock: the file was read whole, so saving stays on.
+    const create = screen.getByRole("button", { name: "New Draft" });
+    expect((create as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("says nothing when the lift was written", async () => {
+    fakeBackend({ drafts_load: () => view([DRAFT]) });
+
+    renderDraftsPage();
+
+    expect(await screen.findByText(DRAFT.name)).toBeTruthy();
+    expect(screen.queryByText(/could not be rewritten/)).toBeNull();
+  });
+});

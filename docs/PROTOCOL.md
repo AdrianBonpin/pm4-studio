@@ -10,6 +10,15 @@ and [journeyman846/nfcx-tool](https://github.com/journeyman846/nfcx-tool)
 (endpoints + 125 kHz response layout). Their findings are reproduced and
 cross-checked here, not claimed as original.
 
+> **Reproducing these frames — a development build.** Every frame below was
+> found by typing it into the app's raw console and reading the reply, and that
+> is still the instrument. In a **release** build the console sends only the
+> commands that cannot change a Tag — the wake and select, the version query,
+> the poll, the two reads, the NTAG info and the Reader's beep and LED — so
+> every write documented here is refused there, deliberately. Writes are
+> reproducible from a **development** build (`cargo run` from the repository),
+> which sends anything. See ADR 0006.
+
 ## Device
 
 ```
@@ -116,6 +125,29 @@ OUT  55 00 53 00 00 FF 00
 An earlier build of this app had `0x0055` wired to the beeper, so the beep never
 fired and only the LED reacted.
 
+### `0x0054` — firmware version — VERIFIED
+
+Confirmed on this hardware by probing every id in the `0x0040..=0x008A` range
+with an empty payload and a 900 ms wait. The reply is a 17-byte payload: an
+ASCII revision, NUL padding, then a trailing `0x01`.
+
+```
+OUT  55 00 54 00 00 FF 00
+IN   55 00 54 00 11 48 30 30 53 30 37 00 00 00 00 00 00 00 00 00 00 01 <cksum>
+```
+
+The revision is `48 30 30 53 30 37` = **`H00S07`**. The payload length is `0x11`
+(17) and the checksum verified. Everything from the first NUL on is padding, so
+the string is read up to that byte; a payload with no printable bytes is
+treated as unreadable rather than displayed.
+
+The trailing `0x01` is unexplained. It is not a terminator — the string is
+already NUL-terminated — so it may be a flag or a second, numeric part of the
+version. Do not read it as part of the revision.
+
+This is the frame to quote in a bug report. The app surfaces the revision in
+the sidebar once the Reader is open.
+
 ### `0x0055` — LED off
 
 Confirmed on hardware. Turns the status LED off. **Not a beep.**
@@ -138,9 +170,41 @@ IN   55 00 69 00 13 ST 01 [UID(4)] …tail…
   garbage and must be ignored)
 - UID at payload offset 2..6
 
-**Not verified:** ATQA/SAK tail offsets. Upstream reports `ATQA 0x0004,
-SAK 0x08` (MIFARE Classic 1K) for one card, but we have not reproduced this on
-real HF hardware. This app therefore reports only the UID plus the raw payload.
+**Not verified — the tail offsets are a hypothesis.** Upstream reports `ATQA
+0x0004, SAK 0x08` (MIFARE Classic 1K) for one card, but we have not reproduced
+this on real HF hardware. Nothing below is backed by a capture from this
+Reader; it comes from third-party client source:
+
+| Payload offset | Meaning (hypothesis) |
+|---|---|
+| 0 | validity flag (`0x01` latched) — the byte right after the header |
+| 1 | constant `0x01`, carries nothing |
+| 2..6 | UID, 4 bytes |
+| 6..14 | unconfirmed |
+| 14..16 | ATQA, byte-swapped relative to how NXP quotes it |
+| 16 | unconfirmed |
+| 17 | SAK of the last cascade level |
+| 18 | unconfirmed |
+
+> **Counter-evidence from a real capture.** A latched NTAG215 was captured — see
+> "`0x0069` payloads, for the record" below. Its payload carries a **7-byte UID
+> at offsets 2..9**, and the tail after that UID does not resemble ATQA/SAK. For
+> that Tag the hypothesis above yields no resolvable ATQA/SAK pair, so the
+> readout correctly falls back to raw bytes with the reason shown instead of
+> naming a family. This is one more reason the decoded values below stay
+> provisional until ticket 12.
+
+The whole reply is 19 bytes in one USB report, so nothing needs reassembling.
+The app decodes this layout in `src/lib/hfDecoder.ts` and **labels every decoded
+value provisional** until a real capture confirms or corrects it. A reply of a
+different length, an ATQA/SAK pair no published table assigns, or a UID field
+that cannot hold the announced UID all fall back to raw bytes with the reason
+shown — no card type, no capacity, no UID split.
+
+Earlier app code read the validity flag from payload byte 1 instead of byte 0,
+which is why it reported no tag for a latched reply. `hf_card_from_payload` in
+`src-tauri/src/reader.rs` now reads byte 0 and hands the raw payload to the
+frontend undecoded.
 
 ### `0x0072` — 125 kHz read (EM4100)
 
@@ -219,26 +283,647 @@ source badge.
    behaviour. Treat each blank as single-use until proven otherwise, and never
    experiment on a tag you care about.
 
-### `0x0083` / `0x0081` / `0x0082` / `0x0084` — NTAG operations
+#### Blanking — writing no Identity — IMPLEMENTED, HARDWARE UNVERIFIED
 
-Documented upstream as NTAG info / read / write / format. **Not implemented
-here.** Their replies can report a payload length larger than a single 64-byte
-report (`LEN 0x40` observed on `0x0083`), so multiple reports must be reassembled
-before the payload is meaningful.
+Blanking writes the neutral Identity: customer `0x00`, data32 `0x00000000`, in
+the usual 24-byte `0x0073` payload (`00 01 01` then all zeros). It is not a
+factory reset and it does not unlock a locked chip; neither is reachable over
+this protocol.
+
+The read path cannot confirm it the way a clone is confirmed. An all-zero data
+field decodes as "no reading", so a Tag that has been blanked reads as **empty**
+— the same as no Tag at all. That is why the app reports `blanked` rather than
+`verified` (ADR 0003): the success condition of a blanking write is the absence
+of an Identity, which the codec reports as `None`.
+
+Probe: `cargo run --example blankprobe -- read` (reads only) and
+`cargo run --example blankprobe -- blank` (writes the neutral Identity to the Tag
+on the Reader, consuming it).
+
+**No blanking write has been observed on hardware yet.** What has been observed:
+the Reader opens and answers (wake, `0x0069` poll, `0x0072` read all reply), and
+the 125 kHz field was empty on every attempt — three separate
+`blankprobe -- read` runs each reported `no tag latched`, so there was nothing to
+blank. The write path is therefore proven only by unit tests over the codec, the
+guard and the read-back scan; whether `0x0073` with the neutral payload blanks a
+T5577, what it reads as afterwards, and whether it can trigger the lock bit in
+open problem 7 are all still open. Record the probe's output here when it runs.
+
+### Multi-report frames — VERIFIED (spike 16, 2026-11-21)
+
+Everything above fits in one 64-byte report. Frames that do not are real, in
+both directions, and this is how they behave.
+
+**A frame is a continuous byte stream across reports.** Each report carries the
+next 64 bytes of that stream. Frames are not framed or padded per report — the
+only guide to a frame boundary is the declared length. Zero padding exists, but it
+is frame-level padding on short frames, not per-report padding.
+
+Three shapes were observed on hardware against a real NTAG215.
+
+**A reply that overflows by a few bytes** — the `0x0083` body is 64 bytes, so the
+71-byte frame splits, and the second report opens mid-payload:
+
+```
+OUT  55 00 83 00 06 01 01 00 00 00 00 FF 00
+IN   55 00 83 00 40 04 00 00 00 05 00 00 00 00 87 E3 … FF FF FF      (report 1, 64 bytes)
+IN   FF FF FF FF FF 24 DB 00 00 …                                    (report 2, 64 bytes)
+```
+
+The first report carries the 5-byte header plus 59 payload bytes; the second
+carries payload bytes 59..63 and then the `24 DB` checksum, followed by zeros. A
+parser that expects `0x55` at the start of every report never sees this frame.
+The checksum over `payload[..64 & 0xFF]` recomputes to `24 DB` **only after the
+two reports are concatenated**.
+
+**A reply that overflows by a lot** — the `0x0081` read reply is 1284 payload
+bytes, a 1291-byte frame, delivered as **21 reports**: 20 full reports and a last
+report of 9 payload bytes plus the `FF 00` checksum. A checksum of `FF 00` means
+the XOR of `payload[..1284 & 0xFF]` — the first four bytes, the status dword
+`00 00 00 00` — is zero.
+
+**A command that overflows** — a `0x0082` write payload is 1328 bytes, a
+1335-byte frame, sent as **21 reports of 64 bytes**, and the firmware accepts it:
+
+```
+OUT  report 1 starts 55 00 82 05 30 FF FF FF FF FF FF FF FF 05 00 00 00 01 00 00 00 …
+     … 20 further reports, the last zero-padded …
+```
+
+Inter-report pacing matters for outbound frames. A 5 ms gap between the 21
+reports works. A 64 ms gap produces **no reply at all** — the firmware gives up on
+the frame. Nothing wedges; the next command works normally.
+
+Practical rule for a reassembler: accumulate every report into one buffer and
+parse frames out of the buffer by `5 + LEN + 2` from the `0x55` magic, keeping any
+incomplete tail for the next read. Never parse a single report as a frame.
+
+### Checksum for large payloads
+
+The `len & 0xFF` truncation described at the top of this document is not just a
+curiosity at the 1328-byte size, and it was confirmed by getting it wrong. For the
+write frame, `1328 & 0xFF = 0x30 = 48`, so the checksum covers only the 48 header
+bytes (token, type, flag and the 32-byte field at `0x10..0x30`) and **not one byte
+of the page data**:
+
+```
+checksum over payload[..48]      -> FB 04   parsed by the firmware, answered
+checksum over all 1328 bytes     -> DB 24   no reply at all
+```
+
+So a checksum computed over the whole payload is silently ignored, not diagnosed.
+Generate it the vendor's way.
+
+## NTAG command family — VERIFIED (spike 16, 2026-11-21)
+
+Read and write both work end to end on hardware. A page was written and then
+observed on a later read from a separate process.
+
+Status is a little-endian `u32` at payload offset 0 of the reply.
+
+| Status | Meaning |
+|---|---|
+| `0` | success — read completed, or write carried out |
+| `1` | nothing to operate on — no NTAG latched |
+| `4` | NTAG ready, info complete |
+| `32` | request refused for a bad parameter (see the write section) |
+
+### `0x0083` — NTAG info — VERIFIED
+
+```
+OUT  55 00 83 00 06 01 01 00 00 00 00 FF 00
+```
+
+Request payload is 6 bytes: `01` count, `01` short flag, then a `u32` little
+endian page index (`00 00 00 00`).
+
+Reply with a tag present, 2 reports as shown above, `LEN 0x40`:
+
+| Payload offset | Meaning |
+|---|---|
+| 0..4 | status `u32` LE — `04 00 00 00` = ready, `01 00 00 00` = no tag |
+| 4..8 | tag type `u32` LE — `5` = NTAG215, `0` when no tag. **Not** the value `0x0082` wants; see the write section |
+| 9..0x29 | 32 stable bytes, purpose unknown; identical across sessions, so not a session token |
+| 0x29 | `01`, purpose unknown |
+| 0x2A..0x31 | the tag's **7-byte UID**, low byte first: `04 43 8A 01 22 09 03` |
+| 0x31 | `03`, purpose unknown |
+| 0x38..0x40 | `FF FF FF FF FF FF FF FF` — upstream calls this the read token; the read works when it is sent back unchanged |
+
+**`LEN 0x40` does not mean data arrived.** The no-tag reply is already a full
+64-byte body, so length alone distinguishes nothing; only the status dword does.
+
+### `0x0081` — NTAG read — VERIFIED
+
+```
+OUT  55 00 81 00 10 FF FF FF FF FF FF FF FF 05 00 00 00 00 00 00 00 <cksum>
+```
+
+Request payload is 16 bytes: the 8-byte token from `0x0083`, the 1-byte tag type,
+then 7 zero bytes.
+
+The reply is a stream of `0x0085` page frames followed by one final `0x0081`
+frame. Both are covered by the multi-report rules above.
+
+`0x0085` page frame, 6-byte payload, one 13-byte frame per report:
+
+| Offset | Meaning |
+|---|---|
+| 0 | page number |
+| 1 | state — `1` = read ok, `3` = page outside the tag's memory |
+| 2..6 | the page's 4 bytes |
+
+Final `0x0081` frame, `LEN 0x504` (1284), **21 reports**:
+
+| Offset | Meaning |
+|---|---|
+| 0..4 | status `u32` LE — `00 00 00 00` = read completed |
+| 4..0x404 | page data, 256 pages × 4 bytes |
+| 0x404..0x504 | page states, 256 bytes, same codes as the `0x0085` frames |
+
+**Cross-checks against independently known values.** These are what make the read
+a fact rather than a plausible-looking buffer.
+
+The `0x0069` poll returns the full 7-byte UID at `payload[2..9]` —
+`04 43 8A 01 22 09 03` — and ISO14443-A says the tag's own anticollision bytes
+must agree with it:
+
+| Claim | Expected from the poll UID | Memory read | |
+|---|---|---|---|
+| page 0 = UID0..UID2 + BCC0 | `04 43 8A` + `0x88^04^43^8A` = `45` | `04 43 8A 45` | ✓ |
+| page 1 = UID3..UID6 | `01 22 09 03` | `01 22 09 03` | ✓ |
+| page 2[0] = BCC1 | `01^22^09^03` = `29` | `29 48 00 00` | ✓ |
+
+The NFC Forum Type 2 Capability Container is a published constant, not something
+the firmware invents:
+
+```
+page 3 = E1 10 3E 00
+  0xE1  magic, 0x10 = version 1.0, 0x3E = 62 × 8 = 496 bytes of user memory
+  ⇒ NTAG215
+```
+
+And the user area holds a message that decodes to something readable:
+
+```
+pages 4..8: 03 11 D1 01 0D 55 04 64 65 76 67 6F 2E 73 74 75 64 69 6F FE
+  TLV 0x03 (NDEF) length 0x11
+  NDEF: D1 01 0D 55 04 "devgo.studio"
+        short record, well known, type 'U', prefix 0x04 = https://
+  ⇒ https://devgo.studio
+```
+
+The dump also shows four pages where an NTAG's configuration block would sit. The
+field names below are upstream's labels for that layout, and an earlier round of
+this spike read them at face value — **do not**, and do not treat them as an
+explanation for any write outcome. See open problem 5: the block is identical on
+two different chips and is a firmware artifact, not per-tag configuration.
+
+```
+page 130: 00 00 00 BD
+page 131: 04 00 00 FF     upstream labels: AUTH0 / ACCESS / VCTID / RFUI — NOT real config
+page 132: 00 05 00 00
+page 133: 00 00 00 00     upstream label: PWD
+page 134: 00 00 00 00     upstream label: PACK
+```
+
+### `0x0082` — NTAG write — CONFIRMED, single and multi-page (verbatim bytes recorded)
+
+Request payload is exactly **1328 bytes** (`0x530`), sent as 21 reports:
+
+| Offset | Meaning |
+|---|---|
+| 0..8 | session token from `0x0083` (`FF`×8 on this firmware) |
+| 8..12 | **write-path tag selector**, `u32` LE — must be `0..4`; see the warning below |
+| 12..16 | `01 00 00 00` — flag |
+| 0x10..0x30 | 32 bytes, purpose unknown; zero works |
+| 0x30..0x430 | page data, 256 pages × 4 bytes |
+| 0x430..0x530 | page states — `2` = write this page, `1` = ok, `4` = failed |
+
+The data table carries the tag's **whole** current image, not just the pages being
+written; the state table is what selects pages. Only pages marked `2` are changed.
+
+**Working write of page 4 on a factory-blank NTAG215 (UID
+`04 43 7B 01 CC 09 03`).** Request header, then the reply, then the progress
+frame, all captured verbatim:
+
+```
+OUT  55 00 82 05 30 FF FF FF FF FF FF FF FF 03 00 00 00 01 00 00 00 …   21 reports
+     0x30 + 4*4 = CA FE F0 0D        (page 4, the value to write)
+     0x430 + 4  = 02                 (state: write page 4)
+IN   55 00 82 01 04 00 00 00 00 00 00 00 00 01 00 00 00 …                5 reports
+     status dword = 0, page-state table entry page 4 = 0x01
+IN   55 00 85 00 06 04 01 CA FE F0 0D 33 CC                              progress frame
+```
+
+Read-back, in a **separate process**, i.e. a fresh session and a fresh token:
+
+```
+IN   55 00 85 00 06 04 01 CA FE F0 0D 33 CC      page 4 = CA FE F0 0D
+```
+
+The same frame writes the page back to its previous contents, and the tag is left
+byte-identical to how it started (`03 00 FE 00`, an empty NDEF TLV):
+
+```
+IN   55 00 85 00 06 04 01 03 00 FE 00 07 F8      page 4 = 03 00 FE 00, status 0
+```
+
+**The tag selector is not the value `0x0083` reports.** This is the single trap in
+the command, and it cost a false negative the first time round:
+
+| Value at payload 8..12 | Result |
+|---|---|
+| `0`, `1`, `2`, `3`, `4` | write accepted, status `0`, page written |
+| `5` (what `0x0083` reports for this NTAG215) | **status `32`, nothing written** |
+| `6`, `7` | status `32`, nothing written |
+
+Values 3 and 4 produce byte-identical replies for a page-4 write, so what the
+field selects is not observable from a single-page write — only that the accepted
+range is `0..4` and that `0x0083`'s numbering does not carry over into it. Do not
+copy the info reply's tag type into the write request.
+
+**Status `32` means refused, and a refusal is distinguishable without the status
+dword.** A refused write returns 256 bytes of uninitialised memory where the page
+state table belongs — random values on almost every page — and no `0x0085` page
+frames at all. An accepted write returns a clean table with only the requested
+pages set to `1`, plus one `0x0085` frame per page.
+
+Values that were tried and do **not** matter, established while the selector was
+still wrong: the flag dword (`0`, `1`, `20`), the page-state byte (`0`, `1`, `2`,
+`4`), a 400 ms or 1500 ms settle after the read, echoing the info reply's 32-byte
+block into `0x10..0x30`, the `0x0083` request's page index and flags, and closing
+the read cycle first with the `0x0051` payload-`00` variant. Only the selector
+mattered.
+
+**The state table is not limited to one page — CONFIRMED, 2026-11-22.** A single
+request marking 13 consecutive pages `2` wrote all 13, and the reply carried one
+`0x0085` progress frame per page. The request and reply are recorded verbatim in
+the multi-page section below, so this is auditable rather than merely observed.
+
+**Multi-page write — CONFIRMED with verbatim bytes, 2026-11-22.** The earlier
+PROVISIONAL label on this section is now withdrawn: a multi-page request and its
+replies were recorded frame by frame with the Reader's wire tap, and the read-back
+came from a fresh session (device dropped and reopened, not an echo in the same
+one). The verbatim transcript is reproduced below the table.
+
+The original three requests (2026-11-21) on the NTAG215 above
+(`04 43 7B 01 CC 09 03`, CC `E1 10 3E 00`), sent through the shipping path
+(`src-tauri/src/ntag.rs`, probe
+`cargo run --example ndefwrite -- --yes-disposable`):
+
+| Request (NDEF message inside a Type 2 TLV) | Pages marked `2` | Reply | Read-back |
+|---|---|---|---|
+| `03 09 D1 01 54 05 02 65 6E 68 69 FE` — a 9-byte Text message | 4, 5, 6 | status `0`, one `0x0085` frame per page | the 9 bytes, byte for byte |
+| `03 2F D1 01 54 2B … FE` — a 47-byte Text message | 4 … 16 | status `0`, 13 `0x0085` frames | the 47 bytes, byte for byte |
+| the 9-byte message again, written over the 47-byte one | 4 … 16 | status `0`, 13 `0x0085` frames | the 9 bytes, then zeros |
+
+The third row is the replacing case, which is what an NDEF write is: the request
+covers the union of the new message's pages and the pages the previous message
+occupied, and everything after the new terminator is zero. A **separate process**
+read that tag afterwards and saw pages 4..6 = `03 09 D1 01 / 54 05 02 65 /
+6E 68 69 FE` and pages 7..16 all `00 00 00 00`.
+
+Pages 0..3 read identically before and after every request — `04 43 7B B4 /
+01 CC 09 03 / C7 48 00 00 / E1 10 3E 00` — so a multi-page write leaves the UID,
+the BCC bytes, the static lock bytes and the Capability Container alone.
+
+A message larger than the CC's capacity was refused before any write frame
+existed: 500 message bytes, i.e. 505 bytes of TLV, against 496. The tag was
+unchanged afterwards, so capacity is enforced by reading the CC rather than by
+asking the firmware and hoping.
+
+What is still not exercised: a message that fills the whole 496 bytes (124
+pages), and a write in which one page reports state `4` while its neighbours
+succeed. Neither is needed to write a normal message; both are recorded here so
+the gap is visible rather than assumed away.
+
+The frame that makes this section auditable was recorded on 2026-11-22 with the
+Reader's wire tap:
+
+```
+cd src-tauri && cargo run --example ndefwrite -- --yes-disposable --record
+```
+
+The tap copies what `write_frame_paced` hands the device and what `read_one`
+receives; it is observation only, and with `--record` absent the probe's output is
+unchanged. Frame bytes below are tapped, not reconstructed. Checksum validity,
+report counts and the payload field layout are derived from those tapped bytes and
+are labelled as derived.
+
+The message written was a 47-byte Text record (`PM4 Studio NDEF write probe,
+multi-page.`) inside a Type 2 TLV — `03 2F D1 01 54 2B 02 65 6E … FE`, 50 TLV
+bytes, which is 13 pages.
+
+Outbound request — one `0x0082`, 1335 bytes, sent as **21 reports** of 64 bytes:
+
+```
+OUT 0x0082  len=0x0530  cksum=FD 02 ok   total=1335 bytes  21 reports
+  frame: 55 00 82 05 30 FF FF FF FF FF FF FF FF 03 00 00 00 01 00 00 …
+```
+
+Payload laid out by field:
+
+```
+  header          : 55 00 82 05 30 (magic, cmd, declared length)
+  token           : FF FF FF FF FF FF FF FF
+  selector        : 3 (0x00000003) — 0..4 is accepted; 5 is what 0x0083 reports
+                    and 0x0082 refuses
+  flag dword      : 01 00 00 00 = 1 (payload 12..16, little endian)
+  first data page : 4 (page n sits at 0x30 + 4n; 0x30..0x430 is the carried image)
+  pages marked 2  : 13 — the state table at 0x430..0x530 selects them
+    page   4 : 03 2F D1 01   page  11 : 74 65 20 70
+    page   5 : 54 2B 02 65   page  12 : 72 6F 62 65
+    page   6 : 6E 50 4D 34   page  13 : 2C 20 6D 75
+    page   7 : 20 53 74 75   page  14 : 6C 74 69 2D
+    page   8 : 64 69 6F 20   page  15 : 70 61 67 65
+    page   9 : 4E 44 45 46   page  16 : 2E FE 00 00
+    page  10 : 20 77 72 69
+  state table, non-zero entries: 4:2 5:2 6:2 7:2 8:2 9:2 10:2 11:2 12:2 13:2 14:2 15:2 16:2
+  state bytes 0..17 : 00 00 00 00 02 02 02 02 02 02 02 02 02 02 02 02 02
+  pages 0..3      : state 0 0 0 0  — UID, lock bytes and CC, never marked
+  pages 0..3 carry: 04 73 6E 91 01 B0 09 03 BB 48 00 00 E1 10 3E 00
+```
+
+Reply — status `0`, and one `0x0085` progress frame per written page (13 of them),
+each naming its page, its state and the four bytes it carried:
+
+```
+IN  0x0082  len=0x0004  cksum=… ok   total=11 bytes  1 report
+IN  0x0085  len=0x0006  cksum=76 89 ok   total=13 bytes  1 report
+IN  0x0085  len=0x0006  cksum=44 BB ok   total=13 bytes  1 report
+   … 13 in total, one per page 4..16 …
+```
+
+Read-back — taken in a **fresh session**: the probe drops the handle and reopens
+the Reader before reading, so the bytes come from the Tag and not from a buffer in
+the process that wrote it:
+
+```
+# the user memory that fresh read returned, page by page
+    page   0 : 04 73 6E 91
+    page   1 : 01 B0 09 03
+    page   2 : BB 48 00 00
+    page   3 : E1 10 3E 00
+    page   4 : 03 2F D1 01   (matches the TLV that was written)
+    page   5 : 54 2B 02 65   (matches the TLV that was written)
+    …
+    page  16 : 2E FE 00 00   (matches the TLV that was written)
+# the fresh read carries the message that was written: true
+```
+
+The probe's own verdict for that run:
+
+```
+outcome             : verified
+pages asked for     : [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+pages firmware wrote: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+RESULT: MULTI-PAGE WRITE VERIFIED — 13 page(s) written in one 0x0082 request and
+read back as the message that was sent.
+```
+
+So: one request, two pages would have been enough to show it, but 13 were marked
+and all 13 landed; the state table selected exactly those 13 and left pages 0..3 at
+state `0`, which is why the UID, the BCC bytes, the static lock bytes and the CC
+were untouched. What the earlier record could not show — the request bytes — is now
+shown.
+
+Still not exercised, and unchanged by this capture: a message that fills the whole
+496 bytes (124 pages), and a write in which one page reports state `4` while its
+neighbours succeed. A `--record` read that `drain()` discards as a stale echo is not
+logged, because the transport throws it away; resets are marked in the transcript so
+a discarded reply can never be spliced onto the next frame.
+
+One later multi-page request *was* recorded byte for byte: the 14-page erase
+below has its request header, its state table, its status reply and its read-back
+in full, which is why erase is stated as verified on its own evidence. That is one
+run of one shape — an empty NDEF TLV over existing content — and it does not make
+the three NDEF-write requests above auditable.
+
+The capacity refusal below does **not** depend on the missing frames: it happened
+before any write frame existed, so "nothing was written" is the whole claim.
+
+**Correction (ticket 20), about the bytes rather than the write.** The 9-byte
+message in the first row is recorded as bytes only. `D1 01 54 05 …` puts the type
+byte `54` where the payload length belongs (NDEF orders these TYPE LENGTH,
+PAYLOAD LENGTH, TYPE, PAYLOAD), so it is not a well-formed NDEF Text record: the
+shipping codec refuses to decode it. The write itself landed — page states and
+read-back were as recorded — but a Tag holding those bytes carries a message no
+NDEF reader can name. For an erase probe ticket 20 wrote a well-formed Text
+record instead (`D1 01 2E 54 02 65 6E …`, 50 message bytes).
+
+### Erasing NDEF content — VERIFIED (ticket 20, 2026-11-21)
+
+There is no separate erase command. Erasing writes an **empty NDEF TLV**
+(`03 00 FE`) over the message area with `0x0082`, exactly as a write replaces a
+message. It is not a format, not a zeroing of user memory, and not a write to
+pages 0..3: the UID, the static lock bytes and the Capability Container stay
+byte-identical, so the Tag keeps its size and its NDEF format and becomes a Tag
+that carries no Records.
+
+The request covers the union of the new empty TLV and the region the old message
+occupied, so an old message's tail cannot stay readable behind the new
+terminator. Only user pages from page 4 are marked `2`, through the same page
+guard a write uses.
+
+**Recorded run — a 14-page message erased in one request.** The Tag held a
+50-byte Text message (`D1 01 2E 54 02 65 6E …`), i.e. a 53-byte TLV written and
+read back by the shipping path. Probe:
+`cargo run --example ndeferase -- --yes-disposable`.
+
+Request, 1335 bytes over 21 reports — header as sent, then the carried image and
+the state table:
+
+```
+OUT  55 00 82 05 30 FF FF FF FF FF FF FF FF 03 00 00 00 01 00 00 00   21 reports
+     [0x10..0x30] 32 × 00                                  (unknown block, ignored)
+     [0x30..0x44] 04 43 7B B4 01 CC 09 03 C7 48 00 00 E1 10 3E 00 03 00 FE 00
+                  pages 0..4: UID/BCC/lock/CC carried unchanged, page 4 = 03 00 FE 00
+     [0x430..0x43E] 02 × 14                                 (pages 4..17 marked to write)
+     tail FD 02    (payload[..0x30]: 0xFF×8 = 0, ^0x03, ^0x01 = 0x02)
+```
+
+Reply payloads, verbatim (`0x0085` progress frames then the final `0x0082`):
+
+```
+IN   55 00 85 00 06 04 01 03 00 FE 00           page 4 = 03 00 FE 00, state 1
+IN   55 00 85 00 06 05 01 00 00 00 00           … one frame per page, 5 through 17
+IN   55 00 82 01 04 00 00 00 00 00 …            status dword 0; page-state table 1 for 4..17
+```
+
+Read-back pages, verbatim:
+
+```
+page 0: 04 43 7B B4    page 1: 01 CC 09 03    page 2: C7 48 00 00    page 3: E1 10 3E 00
+page 4: 03 00 FE 00    pages 5..: 00 00 00 00
+```
+
+Pages 0..3 are byte-identical to what they were before the erase, page 4 holds
+the empty NDEF TLV, and a separate process (`cargo run --example dumpread`) reads
+the Tag as an NTAG215 with 496 bytes and no Records. 53 bytes of NDEF content
+across 14 pages were cleared.
+
+Run again on the already-erased Tag, the same probe is refused before any frame
+exists: *"the tag already carries an empty NDEF message, so there is nothing to
+erase"*. That is deliberate: writing `03 00 FE` into memory that holds no NDEF
+TLV would be a format, and rewriting an already-empty Tag buys nothing on a risk
+that is one-way.
+
+The app reports the outcome as `erased`, which is **not** `verified`: clearing
+content places no copy, so no Snapshot's confirmed-copy count moves. A read-back
+that still shows content, or pages 0..3 that changed, is a failure on a Tag that
+is still readable; a Tag that cannot be read back at all is reported as unknown.
+
+### `0x0084` — format — NOT ATTEMPTED
+
+Destructive and out of scope for this app. Request is the 8-byte session token.
+
+## Password protection (`AUTH0` / `PWD` / `PACK`) — NOT ACHIEVABLE
+
+Password protection on an NTAG21x is three configuration pages: `AUTH0` on page
+131, `PWD` on 133, `PACK` on 134. Writing them is how protection is switched on.
+**This Reader cannot switch it off again, and cannot even read whether it is on.**
+
+**No authentication command exists.** The command family above is complete: no
+`PWD_AUTH`, no MIFARE key authentication, no APDU passthrough. So a password set
+through `0x0082` could never be presented at the Tag, and the write that would
+put `AUTH0` back to `0xFF` is itself behind the protection it clears. Setting one
+is one-way.
+
+**The configuration-area read is not the Tag's configuration.** Pages ≥ 130
+return an identical block on two different UIDs (open problem 5). Ticket 21 adds
+the argument that settles it — the reported `AUTH0` is contradicted by the same
+dump:
+
+```
+page   3   E1 10 3E 00       CC, 496 bytes of user memory
+page   4   03 09 D1 01 54    the NDEF message, state 1 (read ok)
+page 130   00 00 00 BD
+page 131   04 00 00 FF       reported AUTH0 = 0x04
+page 132   00 05 00 00
+page 133   00 00 00 00       reported PWD
+page 134   00 00 00 00       reported PACK
+page 135   (state 3 — outside the tag's memory)
+```
+
+An `AUTH0` of `0x04` would put every access from page 4 onwards behind
+`PWD_AUTH`. Pages 4..16 of that same reply read back in full with state `1`. Both
+cannot be true, so page 131 is not `AUTH0`: the firmware does not read the
+configuration block. `AUTH0 = 0x04` must not be read as "this Tag is protected" —
+it was that misreading that made the `status 32` write refusals look like a
+hardware limit (open problem 3 has the real cause).
+
+Consequences for the app: protection status is reported as *cannot be
+determined*, never as "off"; a Tag whose password is unknown is never presented
+as recoverable; and neither setting nor removing a password is offered
+(`src-tauri/src/password.rs`, ticket 21).
+
+## `0x0069` payloads, for the record
+
+**Nothing latched.** The poll still returns `LEN 0x13`, and every byte after the
+validity flag is unstable garbage — two different payloads inside one second, 54
+polls over 40 seconds all `st=0x00`:
+
+```
+IN   55 00 69 00 13 00 01 00 08 DB 96 00 08 90 1D 00 20 00 26 00 20 00 00 00 <cksum>
+IN   55 00 69 00 13 00 01 00 00 DB 96 00 08 90 1D 00 20 00 27 00 20 00 00 00 <cksum>
+```
+
+That is the strongest available confirmation that `ST = 0x00` means "ignore the
+rest": the values drift between polls while no tag is present.
+
+**Tag latched.** `ST = 0x01` at payload offset 0, and the payload carries the
+**full 7-byte UID** at offsets 2..9, not just four bytes:
+
+```
+IN   55 00 69 00 13 01 01 04 43 8A 01 22 09 03 1D 00 20 07 44 00 00 02 00 00 67 98
+     [0]=01 ST  [2..9]=04 43 8A 01 22 09 03  UID (7 bytes, NTAG215)
+```
+
+The tail after the UID (`1D 00 20 07 44 00 00 02 00 00`) does not look like ATQA
+and SAK: it contains values shaped like firmware pointers, the same shape the
+no-tag payloads contain. ATQA/SAK offsets therefore remain **unconfirmed** for
+13.56 MHz, and the app must keep treating that tail as raw bytes.
 
 ## Open problems
 
-1. **ATQA/SAK offsets** for the HF poll tail. Not yet captured from a real
-   13.56 MHz card, so this app reports only the UID plus the raw payload.
-2. **Multi-report reassembly** for NTAG responses.
-3. **`C8 42`** meaning in the LF read payload.
-4. **What sets the T5577 lock bit.** One write locked a chip; another did not.
+1. **ATQA/SAK offsets** for the HF poll tail. A latched NTAG215 poll was captured
+   (above) and its tail does not resemble ATQA/SAK, so ticket 12's capture still
+   has to settle where those fields are — or that they are not transmitted.
+2. **Multi-page writes — CONFIRMED 2026-11-22.** Ticket 18 marked up to 13 consecutive
+   pages in one request and a separate process read every byte back, but the
+   request and reply frames were not recorded, so the observation cannot be
+   audited from this document the way the single-page write can. See the
+   `0x0082` section for exactly what is missing. Unexercised: filling the whole
+   496 bytes, and a page that fails mid-write.
+3. **What the write-path tag selector means.** `0x0082` accepts `0..4` and rejects
+   `5` and above, while `0x0083` reports `5` for the same NTAG215. Values 3 and 4
+   are indistinguishable on a single-page write, so the selector's meaning is
+   unknown — only its accepted range.
+4. **The 32-byte field at info offset 9..0x29** and its echo area at write
+   `0x10..0x30`. Stable per tag, unknown purpose, not required for a write.
+5. **Pages ≥ 130 do not look like real configuration.** Both tags tested — two
+   different UIDs — returned the identical block
+   `00 00 00 BD / 04 00 00 FF / 00 05 00 00 / 00 00 00 00`, including for
+   `AUTH0`, which cannot plausibly be identical on two different chips. Treat the
+   dump's tail as unreliable until a known-good reference tag settles it. It is
+   certainly **not** a write blocker: `AUTH0` read `0x04` on the tag that wrote
+   successfully.
+6. **`C8 42`** meaning in the LF read payload.
+7. **What sets the T5577 lock bit.** One write locked a chip; another did not.
    Understanding which payloads are safe would remove the main hazard of the
-   `0x0073` path.
+   `0x0073` path. Blanking writes a payload unlike any tried so far, so whether
+   it is safe is unknown; `blankprobe` is the probe that would say.
 
 Solved: **125 kHz write/clone** — command `0x0073`, see above.
+Solved: **multi-report reassembly** — verified in both directions, with real
+boundaries, see "Multi-report frames".
+Solved: **NTAG read** — `0x0081`, verified against the poll UID, the tag's own
+BCC bytes, the Type 2 CC and a decoded NDEF record.
+Solved: **NTAG write** — `0x0082`, both single-page and multi-page, each read back
+from a separate process, see the write section.
+Solved: **multi-page NTAG write** — 13 consecutive pages marked `2` in one
+1335-byte request sent as 21 reports, 13 `0x0085` progress frames, and a
+fresh-session read-back carrying the message. The request and reply frames are
+recorded verbatim in the write section, so this is auditable rather than observed.
 
-Contributions with real captures welcome.
+## Spike 16 finding — NTAG viability
+
+Probe: `src-tauri/examples/ntagspike.rs` (`check`, `wait`, `info`, `read`,
+`write`, `transport`). Throwaway, per ADR 0002 — not part of the shipping path.
+
+**The question was whether this Reader can read and write NTAG memory. It can do
+both, and both were observed on hardware.**
+
+**Read — verified.** `0x0081` returns a 1284-byte page dump across 21 reports,
+preceded by one `0x0085` frame per page, and the contents agree with four things
+they were not derived from: the 7-byte UID from the independent `0x0069` poll, the
+tag's two ISO14443-A anticollision BCC bytes, the NFC Forum Type 2 Capability
+Container, and a decoded NDEF URI. The tag read was an NTAG215 with 496 bytes of
+user memory.
+
+**Write — verified.** `0x0082` wrote `CA FE F0 0D` into page 4 of a factory-blank
+NTAG215 and reported `status 0` with a single `page 4 = state 1` entry and a
+matching `0x0085` progress frame. A subsequent read from a **separate process**
+returned `CA FE F0 0D` on page 4. The same command then restored the page to its
+original `03 00 FE 00`, and the tag finished byte-identical to how it started.
+
+**Two dead ends worth remembering, because both produced convincing false
+negatives.** The first tag available was password-protected as far as its config
+dump claimed (`AUTH0 = 0x04`), and every write was refused with `status 32` — that
+looked like a hardware limit. It was not: that same `AUTH0` byte appears on two
+different tags, so the dump's tail is not real configuration. The actual blocker
+was the **write-path tag selector**: `0x0082` refuses the tag type `5` that
+`0x0083` reports, and accepts `0..4` instead. With the selector corrected, the
+write landed on the very same class of tag.
+
+**The ADR 0002 gate is therefore cleared.** A write was observed to land and was
+confirmed by a later read, which is exactly what the ADR required. Slices that
+depend on writing 13.56 MHz tags — tickets 18 to 22 — may begin. Ticket 18 has
+since reported that several pages marked `2` in one request are written and read
+back. An earlier note here called that report PROVISIONAL because its request and
+reply frames were not captured; that gap has since been closed — the `0x0082`
+section now carries the verbatim 21-report request, its `0x0085` progress frames and
+a fresh-session read-back for a 13-page write.
 
 ## Legal
 
