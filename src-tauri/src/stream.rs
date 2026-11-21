@@ -408,7 +408,7 @@ mod tests {
 
     #[test]
     fn a_frame_split_at_every_possible_boundary_still_parses() {
-        let mut checked = 0;
+        let mut exercised: Vec<(&str, usize)> = Vec::new();
         for (name, captured) in all_captures() {
             let frame = captured_frame(captured);
             for split in 1..frame.len() {
@@ -432,17 +432,28 @@ mod tests {
                     .unwrap_or_else(|| panic!("{name}: split at {split} did not reassemble"));
                 assert_same_frame(captured, &got);
                 assert_eq!(stream.buffered(), 0, "{name}: split at {split} left bytes");
-                checked += 1;
+                exercised.push((name, split));
             }
         }
-        // Every interior byte of every captured frame was a split point.
-        assert_eq!(checked, 30 + 30 + 30 + 30, "all 120 captured split points ran");
+
+        // The split points exercised are exactly every interior byte of every
+        // captured frame, each one once: 4 frames x 30 splits = 120.
+        for (name, captured) in all_captures() {
+            let len = captured_frame(captured).len();
+            let got: Vec<usize> = exercised
+                .iter()
+                .filter(|(n, _)| *n == name)
+                .map(|(_, split)| *split)
+                .collect();
+            assert_eq!(got, (1..len).collect::<Vec<_>>(), "{name}: every split ran once");
+        }
+        assert_eq!(exercised.len(), 30 + 30 + 30 + 30, "all 120 captured split points ran");
     }
 
     #[test]
     fn the_21_report_reply_survives_a_split_at_every_report_boundary() {
         let frame = ntag_read_frame();
-        let mut checked = 0;
+        let mut exercised: Vec<(usize, usize)> = Vec::new();
         for split in 1..frame.len() {
             // Feed the frame as two reports split at `split`, then in 64-byte
             // reports with the same split as a third boundary. Both shapes must
@@ -453,13 +464,24 @@ mod tests {
                 assert_eq!(frames[0].payload, frame[5..5 + 1284].to_vec());
                 assert!(frames[0].checksum_ok);
                 assert_eq!(stream.take_error(), None);
-                checked += 1;
+                exercised.push((split, chunk));
             }
         }
-        assert_eq!(checked, (1291 - 1) * 2, "every split of the 1291-byte frame ran twice");
-        // The 20 real report boundaries are a subset of those split points.
-        for boundary in (64..1291).step_by(64) {
-            assert!(boundary < 1291, "boundary {boundary} is an interior split");
+
+        let expected: Vec<(usize, usize)> = (1..frame.len())
+            .flat_map(|split| [(split, split), (split, REPORT_LEN)])
+            .collect();
+        assert_eq!(exercised, expected, "every split ran in both report shapes");
+
+        // The 20 real report boundaries of the verified 21-report reply are a
+        // subset of the split points that just passed.
+        let boundaries: Vec<usize> = (REPORT_LEN..frame.len()).step_by(REPORT_LEN).collect();
+        assert_eq!(boundaries.len(), 20, "20 full reports before the short last one");
+        for boundary in boundaries {
+            assert!(
+                exercised.contains(&(boundary, boundary)),
+                "report boundary {boundary} was split and reassembled"
+            );
         }
     }
 
