@@ -18,10 +18,15 @@ export interface CloseGuard {
 /**
  * Hold the window open until what is queued has been written.
  *
- * Navigating away is an unmount, so the queue flushes on its own; closing the
- * window is not, and a queued write used to die with the process. This registers
- * the one place the app is told a close is coming, writes everything still
- * queued, and only then lets the window go.
+ * Closing the window is not an unmount, so the queue is not written by anything
+ * that merely goes away: a queued write used to die with the process. This
+ * registers the one place the app is told a close is coming, writes everything
+ * still queued, and only then lets the window go.
+ *
+ * It is mounted by `DraftsProvider`, above the navigation, so the lifetime of the
+ * listener is the lifetime of the app rather than the lifetime of one page: a
+ * user who types, opens another page and then quits must not lose the edit
+ * because the listener went with the page that queued it.
  *
  * `settle` writes what is waiting and resolves to null when it reached the file,
  * or to the reason it did not. A window with nothing queued never awaits
@@ -36,7 +41,7 @@ export interface CloseGuard {
 export function useCloseGuard(settle: () => Promise<string | null>): CloseGuard {
   const [problem, setProblem] = useState<string | null>(null);
 
-  // The listener is registered once for the life of the page; the settle it
+  // The listener is registered once for the life of the app; the settle it
   // calls is whichever is current, so a re-render cannot leave a stale one
   // closing over an old view of the queue.
   const currentSettle = useRef(settle);

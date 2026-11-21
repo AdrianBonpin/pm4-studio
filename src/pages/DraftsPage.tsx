@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
@@ -7,9 +7,7 @@ import { LoadTagIntoDraft } from "../components/LoadTagIntoDraft";
 import { MigrationWarning } from "../components/MigrationWarning";
 import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
 import { WriteDraftToTag } from "../components/WriteDraftToTag";
-import { DraftClosePrompt } from "../components/DraftClosePrompt";
-import { useCloseGuard } from "../hooks/useCloseGuard";
-import { useDrafts } from "../hooks/useDrafts";
+import { useDraftsState } from "../components/DraftsProvider";
 import {
   DRAFT_NOT_A_TAG_NOTICE,
   EMPTY_DRAFT_DETAIL,
@@ -56,11 +54,17 @@ function draftSize(draft: Draft): number | null {
  * tags" mean two different things.
  */
 export function DraftsPage({ connected }: { connected: boolean }) {
-  const drafts = useDrafts();
-  // Closing the window is not an unmount, so the queue is written from the one
-  // place the app is told a close is coming. Edits live only while this page is
-  // mounted; leaving it flushes them on the way out.
-  const closeGuard = useCloseGuard(drafts.settle);
+  const drafts = useDraftsState();
+  // The queue outlives this page — it is the app's, so an edit made here is
+  // still written when the window is closed from somewhere else. Leaving the
+  // page is the one exit that happens *here*, and it writes what is queued on
+  // the way out, exactly as it did when the queue lived in this component.
+  useEffect(() => () => void drafts.settle(), [drafts.settle]);
+  // And a Draft written by another part of the app — an import adds them — is
+  // picked up when the section is opened, rather than only at launch.
+  useEffect(() => {
+    void drafts.reload();
+  }, [drafts.reload]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -96,14 +100,6 @@ export function DraftsPage({ connected }: { connected: boolean }) {
 
   return (
     <div className="flex flex-col gap-8">
-      {closeGuard.problem && (
-        <DraftClosePrompt
-          problem={closeGuard.problem}
-          onQuitAnyway={closeGuard.quitAnyway}
-          onKeepEditing={closeGuard.keepEditing}
-        />
-      )}
-
       <Section
         title="Drafts"
         hint="A Draft is a message you compose before a Tag is in hand. It holds Records in order and is not attached to any Tag."
