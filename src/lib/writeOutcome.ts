@@ -98,6 +98,16 @@ export function writeNotice(result: WriteResult): WriteNotice {
           "Unexpected outcome: this write reported a blanked tag, which a copy cannot do. " +
           "Blanking has its own notice; nothing was counted here.",
       };
+    case "erased":
+      // Erasing NDEF content has its own notice and its own word; see
+      // `lib/eraseTag.ts`. A 125 kHz copy cannot clear an NDEF message, so this
+      // is a bug worth naming rather than a result worth wording.
+      return {
+        tone: "warn",
+        text:
+          "Unexpected outcome: this write reported an erased tag, which a copy cannot do. " +
+          "Erasing NDEF content has its own notice; nothing was counted here.",
+      };
   }
 }
 

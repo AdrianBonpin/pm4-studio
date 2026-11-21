@@ -22,7 +22,7 @@ use library::{
 };
 use library_io::{FileError, ImportPreview};
 use memory_dump::MemoryDump;
-use ntag::{NdefPreview, NdefWrite, TagView};
+use ntag::{ErasePreview, EraseReport, NdefPreview, NdefWrite, TagView};
 use reader::{DeviceInfo, Frame, HfCard, LfCard, LfWriteAttempt, Reader, REPORT_LEN};
 use write_outcome::Evidence;
 use serde::{Deserialize, Serialize};
@@ -463,6 +463,111 @@ fn hf_ndef_write(
 ) -> Result<NdefWriteView, String> {
     let message = message_bytes(&message_hex)?;
     with_reader(&state, |r| Ok(ntag::write_message(r, &message).into()))
+}
+
+/// What erasing the 13.56 MHz Tag's NDEF content would clear, before anything is
+/// cleared.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NdefErasePreviewView {
+    /// What the Tag holds now, so the confirmation can name what will be lost.
+    pub tag: Option<TagView>,
+    /// Bytes of the current NDEF TLV an erase would clear, terminator included.
+    pub clears_bytes: usize,
+    /// User pages an erase would write: `03 00 FE` plus the old message's tail.
+    pub pages: Vec<usize>,
+    pub capacity_bytes: Option<usize>,
+    /// True only when an erase would actually proceed.
+    pub can_erase: bool,
+    /// Why the erase would not proceed, when it would not: no Tag in the field,
+    /// a Tag that could not be read, no NDEF message to clear, an already empty
+    /// message, unreadable content, or a capacity that cannot be read.
+    pub refusal: Option<String>,
+}
+
+impl From<ErasePreview> for NdefErasePreviewView {
+    fn from(preview: ErasePreview) -> Self {
+        Self {
+            tag: preview.tag,
+            clears_bytes: preview.clears_bytes,
+            pages: preview.pages,
+            capacity_bytes: preview.capacity_bytes,
+            can_erase: preview.can_erase,
+            refusal: preview.refusal,
+        }
+    }
+}
+
+/// What one erase did, in the shape the webview reads it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NdefEraseView {
+    /// "refused" | "erased" | "unverified" | "failed" — see `write_outcome`.
+    /// Never "verified": clearing content places no copy to verify.
+    pub outcome: &'static str,
+    /// Why the content was not cleared, when it was not.
+    pub message: Option<String>,
+    /// What the Tag held before the erase, from the read that precedes it.
+    pub before: Option<TagView>,
+    /// What it read back as afterwards, when it could be re-read.
+    pub after: Option<TagView>,
+    pub capacity_bytes: Option<usize>,
+    /// Bytes of the old NDEF TLV the erase cleared.
+    pub cleared_bytes: usize,
+    /// Pages the request asked the firmware to write.
+    pub erase_pages: Vec<usize>,
+    /// Pages the firmware reported writing.
+    pub accepted_pages: Vec<usize>,
+    /// Pages 0..=3 (UID, lock bytes, Capability Container) read identically
+    /// before and after. `None` when there was nothing to compare.
+    pub identity_intact: Option<bool>,
+    /// The bytes written over the message area, hex. Evidence, not a summary.
+    pub written_hex: String,
+}
+
+impl From<EraseReport> for NdefEraseView {
+    fn from(report: EraseReport) -> Self {
+        Self {
+            outcome: report.outcome.as_str(),
+            message: report.message,
+            before: report.before,
+            after: report.readback,
+            capacity_bytes: report.capacity_bytes,
+            cleared_bytes: report.cleared_bytes,
+            erase_pages: report.erase_pages,
+            accepted_pages: report.accepted_pages,
+            identity_intact: report.identity_intact,
+            written_hex: report.written_hex,
+        }
+    }
+}
+
+/// What erasing the 13.56 MHz Tag's NDEF content would do, without doing it.
+///
+/// Read-only: it sends the info and read commands and nothing else, so the
+/// confirmation can name the Records that would be lost before the user
+/// consents. The Tag keeps its UID, its Capability Container and its format —
+/// only the NDEF message is cleared.
+#[tauri::command]
+fn hf_ndef_erase_preview(
+    state: State<'_, AppState>,
+) -> Result<NdefErasePreviewView, String> {
+    with_reader(&state, |r| Ok(ntag::preview_erase(r).into()))
+}
+
+/// Clear the NDEF content of the 13.56 MHz Tag on the Reader, then read it back.
+///
+/// A Tag that cannot be read first is not erased at all (ADR 0001), and a Tag
+/// with no NDEF message to clear is refused rather than formatted. The write is
+/// one 21-report frame carrying the Tag's whole image, with only the pages the
+/// old message occupied marked — so the UID, lock bytes and Capability Container
+/// cannot be touched (`ntag::plan_erase`, which reuses ticket 18's page guard).
+///
+/// The outcome has its own word: `erased`, which is never `verified` and never
+/// raises a Snapshot's confirmed-copy count.
+#[tauri::command]
+fn hf_ndef_erase(state: State<'_, AppState>) -> Result<NdefEraseView, String> {
+    with_reader(&state, |r| Ok(ntag::erase_ndef(r).into()))
 }
 
 /// Send an arbitrary frame. Input is a hex string; the frame is zero-padded to
@@ -1030,6 +1135,8 @@ pub fn run() {
             lf_blank,
             hf_ndef_preview,
             hf_ndef_write,
+            hf_ndef_erase_preview,
+            hf_ndef_erase,
             raw_send,
             send_cmd,
             library_load,

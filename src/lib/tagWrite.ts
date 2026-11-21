@@ -16,29 +16,15 @@
 import type { DraftRecord } from "./drafts";
 import { recordKindLabel, recordSummary } from "./drafts";
 import { encodeRecords, decodeRecords } from "./ndef";
-import type { WriteOutcome } from "../types";
+import type { NdefTagSnapshot, WriteOutcome } from "../types";
 import type { WriteNotice } from "./writeOutcome";
 
-/** One Tag as the backend read it. */
-export interface NdefTagView {
-  /** Space-separated hex, as every other UID in this app is written. */
-  uid: string;
-  /** What `0x0083` reported. Not the write-path tag selector. */
-  reportedTagType: number;
-  /** User memory from the Type 2 Capability Container, or null when unreadable. */
-  capacityBytes: number | null;
-  userPages: number | null;
-  existing: ExistingNdef;
-}
+/** One Tag as the backend read it. One definition, in `types.ts`, so the write
+ *  and erase results cannot drift apart on what a Tag read contains. */
+export type NdefTagView = NdefTagSnapshot;
 
 /** The message a Tag carries now, as far as its Type 2 TLV could be read. */
-export interface ExistingNdef {
-  state: "empty" | "message" | "unreadable";
-  /** The NDEF message itself, hex. Decoded by this module, not by Rust. */
-  messageHex: string | null;
-  bytes: number;
-  reason: string | null;
-}
+export type ExistingNdef = NdefTagSnapshot["existing"];
 
 /** What writing a Draft would do, before anything is written. */
 export interface NdefPreview {
@@ -207,6 +193,16 @@ export function writeNotice(result: NdefWriteResult): WriteNotice {
         tone: "warn",
         text:
           "Unexpected outcome: this write reported a blanked tag, which writing an NDEF " +
+          "message cannot do. Re-read the tag before trusting what it holds.",
+      };
+    case "erased":
+      // Erasing is its own operation with its own word and its own notice; see
+      // `lib/eraseTag.ts`. A Draft write never clears content, so reaching here
+      // is a bug worth naming rather than a result worth wording.
+      return {
+        tone: "warn",
+        text:
+          "Unexpected outcome: this write reported an erased tag, which writing an NDEF " +
           "message cannot do. Re-read the tag before trusting what it holds.",
       };
   }

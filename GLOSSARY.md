@@ -63,6 +63,13 @@ Blanking a Tag's Identity so it carries no assigned value. Reset does **not**
 restore a factory configuration, and does **not** unlock a locked Tag.
 _Avoid_: wipe, erase, format, factory reset, restore
 
+**Erase**:
+Clearing a 13.56 MHz Tag's NDEF content by writing an empty NDEF TLV (`03 00 FE`)
+over the message area. An erased Tag is still a Tag: it keeps its UID, its
+Capability Container and its format, and carries no Records. Erase is not a
+format, not a Reset, and does not lock or password-protect anything.
+_Avoid_: format, wipe, reset, blank, unlock
+
 **Card type**:
 The tag family derived from a 13.56 MHz Tag's ATQA and SAK values (for example
 MIFARE Classic 1K). A derived label, never a value read directly from the Tag.
@@ -95,6 +102,8 @@ _Avoid_: phase, stage, milestone, epic
 - A **Draft** holds zero or more **Records**
 - A **Clone** consumes one **Blank** and the **Identity** from one **Snapshot**
 - A **Reset** consumes one non-**Blank** Tag and leaves a **Blank**
+- An **Erase** leaves a **Tag** present with no **Records**; it is not a **Reset**
+  and does not make the Tag **Blank**
 - A **Frame** carries exactly one **Command**
 - A **Slice** may be gated on a **Spike**
 

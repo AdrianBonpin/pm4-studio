@@ -581,6 +581,77 @@ pages), and a write in which one page reports state `4` while its neighbours
 succeed. Neither is needed to write a normal message; both are recorded here so
 the gap is visible rather than assumed away.
 
+**Correction (ticket 20), about the bytes rather than the write.** The 9-byte
+message in the first row is recorded as bytes only. `D1 01 54 05 …` puts the type
+byte `54` where the payload length belongs (NDEF orders these TYPE LENGTH,
+PAYLOAD LENGTH, TYPE, PAYLOAD), so it is not a well-formed NDEF Text record: the
+shipping codec refuses to decode it. The write itself landed — page states and
+read-back were as recorded — but a Tag holding those bytes carries a message no
+NDEF reader can name. For an erase probe ticket 20 wrote a well-formed Text
+record instead (`D1 01 2E 54 02 65 6E …`, 50 message bytes).
+
+### Erasing NDEF content — VERIFIED (ticket 20, 2026-11-21)
+
+There is no separate erase command. Erasing writes an **empty NDEF TLV**
+(`03 00 FE`) over the message area with `0x0082`, exactly as a write replaces a
+message. It is not a format, not a zeroing of user memory, and not a write to
+pages 0..3: the UID, the static lock bytes and the Capability Container stay
+byte-identical, so the Tag keeps its size and its NDEF format and becomes a Tag
+that carries no Records.
+
+The request covers the union of the new empty TLV and the region the old message
+occupied, so an old message's tail cannot stay readable behind the new
+terminator. Only user pages from page 4 are marked `2`, through the same page
+guard a write uses.
+
+**Recorded run — a 14-page message erased in one request.** The Tag held a
+50-byte Text message (`D1 01 2E 54 02 65 6E …`), i.e. a 53-byte TLV written and
+read back by the shipping path. Probe:
+`cargo run --example ndeferase -- --yes-disposable`.
+
+Request, 1335 bytes over 21 reports — header as sent, then the carried image and
+the state table:
+
+```
+OUT  55 00 82 05 30 FF FF FF FF FF FF FF FF 03 00 00 00 01 00 00 00   21 reports
+     [0x10..0x30] 32 × 00                                  (unknown block, ignored)
+     [0x30..0x44] 04 43 7B B4 01 CC 09 03 C7 48 00 00 E1 10 3E 00 03 00 FE 00
+                  pages 0..4: UID/BCC/lock/CC carried unchanged, page 4 = 03 00 FE 00
+     [0x430..0x43E] 02 × 14                                 (pages 4..17 marked to write)
+     tail FD 02    (payload[..0x30]: 0xFF×8 = 0, ^0x03, ^0x01 = 0x02)
+```
+
+Reply payloads, verbatim (`0x0085` progress frames then the final `0x0082`):
+
+```
+IN   55 00 85 00 06 04 01 03 00 FE 00           page 4 = 03 00 FE 00, state 1
+IN   55 00 85 00 06 05 01 00 00 00 00           … one frame per page, 5 through 17
+IN   55 00 82 01 04 00 00 00 00 00 …            status dword 0; page-state table 1 for 4..17
+```
+
+Read-back pages, verbatim:
+
+```
+page 0: 04 43 7B B4    page 1: 01 CC 09 03    page 2: C7 48 00 00    page 3: E1 10 3E 00
+page 4: 03 00 FE 00    pages 5..: 00 00 00 00
+```
+
+Pages 0..3 are byte-identical to what they were before the erase, page 4 holds
+the empty NDEF TLV, and a separate process (`cargo run --example dumpread`) reads
+the Tag as an NTAG215 with 496 bytes and no Records. 53 bytes of NDEF content
+across 14 pages were cleared.
+
+Run again on the already-erased Tag, the same probe is refused before any frame
+exists: *"the tag already carries an empty NDEF message, so there is nothing to
+erase"*. That is deliberate: writing `03 00 FE` into memory that holds no NDEF
+TLV would be a format, and rewriting an already-empty Tag buys nothing on a risk
+that is one-way.
+
+The app reports the outcome as `erased`, which is **not** `verified`: clearing
+content places no copy, so no Snapshot's confirmed-copy count moves. A read-back
+that still shows content, or pages 0..3 that changed, is a failure on a Tag that
+is still readable; a Tag that cannot be read back at all is reported as unknown.
+
 ### `0x0084` — format — NOT ATTEMPTED
 
 Destructive and out of scope for this app. Request is the 8-byte session token.
