@@ -176,13 +176,6 @@ pub struct ImportPreview {
     pub drafts_conflicting: usize,
 }
 
-impl ImportPreview {
-    /// True when the file would change nothing.
-    pub fn nothing_to_add(&self) -> bool {
-        self.snapshots_added == 0 && self.drafts_added == 0
-    }
-}
-
 /// Read an import file and say what it would change. Nothing is written, so a
 /// user who cancels after the preview leaves the library exactly as it was.
 pub fn preview(store: &LibraryStore, source: &Path) -> Result<ImportPreview, FileError> {
