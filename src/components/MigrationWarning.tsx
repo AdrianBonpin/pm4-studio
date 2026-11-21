@@ -15,7 +15,7 @@ interface MigrationWarningProps {
  * The same warning is shown wherever a page can be the first to see the lifted
  * library, so it is one component rather than one copy per page. It already
  * drifted once: `LibraryPage` rendered it with the warning icon and a
- * `flex items-start gap-3` frame while `DraftsPage` rendered the same prose
+ * `flex items-start gap-3` frame while the Drafts page rendered the same prose
  * without either, so the same state of the same file was two different things
  * to look at depending on which page the user happened to open first.
  *

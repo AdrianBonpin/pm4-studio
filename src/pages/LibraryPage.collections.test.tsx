@@ -1,32 +1,34 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { screen, waitFor, within } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
 import { LibraryPage } from "./LibraryPage";
 import { DraftsProvider } from "../components/DraftsProvider";
 import { fakeBackend, renderUi } from "../test/dom";
-import { libraryState } from "../test/libraryState";
+import { SNAPSHOT, libraryState } from "../test/libraryState";
 import type { Draft, DraftsView } from "../lib/drafts";
 
 /**
- * Drafts is reachable inside Library as its second Collection.
+ * Library holds both Collections, and they are two Collections of one page.
  *
- * Drafts stops being a destination in this slice — the sidebar is five
- * destinations and Drafts is not one of them — but the Drafts that already exist
- * must not become unreachable, and neither must the editor that makes them. So
- * Library carries a Collection switch, and this file is the proof that flipping it
- * lands on the Drafts page the app already had, unmodified, and that flipping it
- * back returns to the Snapshots.
+ * A Draft is a message under construction and a Snapshot is a record of a read,
+ * so they are never one list. What they share is the page and the layout: the
+ * Collection switch above, a list on the left, the chosen item's editor beside
+ * it. Drafts stopped being a destination when the sidebar became five, and this
+ * switch is what keeps every saved Draft reachable.
  *
- * Ticket 10 gives the collection the two-pane shape the spec asks for. This slice
- * deliberately does not: it makes Drafts reachable and changes nothing about how
- * a Draft is edited.
+ * The seam this file proves is the switch: which Collection is active, and that
+ * one Collection's chosen item never appears in the other. Both halves are
+ * things the DOM can answer, so neither is a claim about intent — a page that
+ * mounted both Collections, or that let a Snapshot's editor stand in for a
+ * Draft's, fails here.
  */
 
+/** A Draft with one Record, so its editor has something of its own to show. */
 const DRAFT: Draft = {
   id: "draft-1",
   name: "Loading bay sign",
-  updatedAt: new Date().toISOString(),
-  records: [],
+  updatedAt: "2026-11-22T09:00:00.000Z",
+  records: [{ kind: "text", fields: { language: "en", text: "Deliveries to bay 3" } }],
 };
 
 function draftsView(drafts: Draft[]): DraftsView {
@@ -34,10 +36,10 @@ function draftsView(drafts: Draft[]): DraftsView {
 }
 
 /** The page as the app mounts it: Library, inside the provider Drafts needs. */
-function renderLibrary() {
+function renderLibrary(drafts: Draft[] = [DRAFT]) {
   const backend = fakeBackend({
     // Drafts are read through the same library file, on their own command.
-    drafts_load: () => draftsView([DRAFT]),
+    drafts_load: () => draftsView(drafts),
   });
   const ui = renderUi(
     <DraftsProvider>
@@ -48,40 +50,70 @@ function renderLibrary() {
 }
 
 /** The Collection switch, which is how a user moves between the two. */
-function collectionSwitch() {
+function collectionSwitch(): HTMLElement {
   return screen.getByRole("group", { name: "Collection" });
+}
+
+/** Which Collection the switch says is current. */
+function currentCollection(): string | null {
+  const pressed = within(collectionSwitch())
+    .getAllByRole("button")
+    .filter((button) => button.getAttribute("aria-pressed") === "true");
+  expect(pressed).toHaveLength(1);
+  return pressed[0]?.textContent ?? null;
+}
+
+/** The Draft list: the column the editor sits beside. */
+function draftList(): HTMLElement {
+  return screen.getByRole("list", { name: "Drafts" });
+}
+
+/** The pane beside the Draft list. */
+function draftPane(): HTMLElement {
+  return screen.getByRole("region", { name: "Draft detail" });
 }
 
 describe("Library's two collections", () => {
   it("opens on Snapshots, and says which collection is current", () => {
     renderLibrary();
 
-    expect(
-      within(collectionSwitch()).getByRole("button", { name: "Snapshots" }).getAttribute("aria-pressed"),
-    ).toBe("true");
-    expect(
-      within(collectionSwitch()).getByRole("button", { name: "Drafts" }).getAttribute("aria-pressed"),
-    ).toBe("false");
+    expect(currentCollection()).toBe("Snapshots");
+    expect(screen.getByRole("heading", { name: "Snapshots" })).toBeTruthy();
   });
 
-  it("reaches the Drafts page, unchanged, in one click", async () => {
+  it("reaches Drafts in one click, as the second collection of the same page", async () => {
     const { ui } = renderLibrary();
 
     await ui.user.click(within(collectionSwitch()).getByRole("button", { name: "Drafts" }));
 
-    // The same Drafts editor as before, with the Draft that is on disk: the
-    // Collection switch re-homes the page rather than rewriting it.
-    await waitFor(() => {
-      expect(screen.getByRole("button", { name: /^Rename Loading bay sign/ })).toBeTruthy();
-    });
-    expect(
-      within(collectionSwitch()).getByRole("button", { name: "Drafts" }).getAttribute("aria-pressed"),
-    ).toBe("true");
-    // The Snapshots list is not underneath it: one collection at a time.
+    // The Drafts that are on disk, under a heading that names the collection.
+    expect(await screen.findByRole("heading", { name: "Drafts" })).toBeTruthy();
+    expect(within(draftList()).getByRole("button", { name: /^Loading bay sign — 1 Record$/ })).toBeTruthy();
+    expect(currentCollection()).toBe("Drafts");
+    // One collection at a time: the Snapshots are not underneath it.
     expect(screen.queryByRole("heading", { name: "Snapshots" })).toBeNull();
   });
 
-  it("comes back to Snapshots without losing the collection switch", async () => {
+  it("gives Drafts the same list and detail shape as Snapshots", async () => {
+    const { ui } = renderLibrary();
+
+    await ui.user.click(within(collectionSwitch()).getByRole("button", { name: "Drafts" }));
+
+    const layout = document.querySelector('[data-layout="list-detail"]');
+    expect(layout).toBeTruthy();
+    // Both halves are in the one layout row, and the list is not part of the
+    // pane it sits beside.
+    expect(within(layout as HTMLElement).getByRole("list", { name: "Drafts" })).toBeTruthy();
+    expect(within(layout as HTMLElement).getByRole("region", { name: "Draft detail" })).toBeTruthy();
+    expect(within(draftPane()).queryByRole("list", { name: "Drafts" })).toBeNull();
+
+    // The Records editor is beside the list, never under it: the pane's fields
+    // are the Draft's, and the list column holds no field at all.
+    expect(within(draftPane()).getByRole("textbox", { name: "Text" })).toBeTruthy();
+    expect(within(draftList()).queryByRole("textbox")).toBeNull();
+  });
+
+  it("comes back to Snapshots without losing the switch", async () => {
     const { ui } = renderLibrary();
 
     await ui.user.click(within(collectionSwitch()).getByRole("button", { name: "Drafts" }));
@@ -89,9 +121,81 @@ describe("Library's two collections", () => {
 
     // The Snapshots content is back, and the switch still names both collections.
     expect(screen.getByRole("heading", { name: "Snapshots" })).toBeTruthy();
+    expect(currentCollection()).toBe("Snapshots");
     expect(within(collectionSwitch()).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Snapshots",
       "Drafts",
     ]);
+  });
+});
+
+/**
+ * One collection's chosen item never appears in the other.
+ *
+ * A Snapshot's editor and a Draft's editor look alike — a name field, a place
+ * for Records — so the failure this catches is not a crash but a substitution:
+ * the pane carrying the wrong collection's subject, or the two collections both
+ * mounted with one hidden only to the eye. Every assertion below is about what
+ * is *not* on screen while a collection is active.
+ */
+describe("each collection keeps its own selection", () => {
+  it("shows one collection's subject at a time, and never the other's", async () => {
+    const { ui } = renderLibrary();
+
+    // Snapshots on arrival: the Snapshot is open in its own pane.
+    const snapshotPane = screen.getByRole("region", { name: "Snapshot detail" });
+    expect(
+      within(snapshotPane).getByRole("textbox", { name: `Name for ${SNAPSHOT.name}` }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Draft detail" })).toBeNull();
+    expect(screen.queryByText(DRAFT.name)).toBeNull();
+
+    await ui.user.click(within(collectionSwitch()).getByRole("button", { name: "Drafts" }));
+
+    // Drafts now: the Draft that is open is the pane's subject, with its own
+    // name field and its own Records — and nothing of the Snapshot is left.
+    const pane = draftPane();
+    expect(
+      (within(pane).getByRole("textbox", { name: `Name for ${DRAFT.name}` }) as HTMLInputElement)
+        .value,
+    ).toBe(DRAFT.name);
+    expect(
+      (within(pane).getByRole("textbox", { name: "Text" }) as HTMLInputElement).value,
+    ).toBe("Deliveries to bay 3");
+    expect(screen.queryByRole("region", { name: "Snapshot detail" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: `Name for ${SNAPSHOT.name}` })).toBeNull();
+    expect(screen.queryByText(SNAPSHOT.name)).toBeNull();
+    expect(screen.queryByText(SNAPSHOT.id)).toBeNull();
+
+    await ui.user.click(within(collectionSwitch()).getByRole("button", { name: "Snapshots" }));
+
+    // And back: the Snapshot's pane is the one on screen, with the Draft's
+    // editor gone rather than merely hidden.
+    expect(screen.getByRole("region", { name: "Snapshot detail" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Draft detail" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: `Name for ${DRAFT.name}` })).toBeNull();
+    expect(screen.queryByText("Deliveries to bay 3")).toBeNull();
+  });
+
+  it("opens the chosen Draft in the pane, beside the list rather than below it", async () => {
+    const other: Draft = { ...DRAFT, id: "draft-2", name: "Canteen sign", records: [] };
+    const { ui } = renderLibrary([DRAFT, other]);
+
+    await ui.user.click(within(collectionSwitch()).getByRole("button", { name: "Drafts" }));
+    await screen.findByRole("heading", { name: "Drafts" });
+
+    await ui.user.click(
+      within(draftList()).getByRole("button", { name: /^Canteen sign — 0 Records$/ }),
+    );
+
+    // The pane follows the choice, and the list is untouched.
+    expect(
+      (within(draftPane()).getByRole("textbox", { name: "Name for Canteen sign" }) as
+        HTMLInputElement).value,
+    ).toBe("Canteen sign");
+    expect(within(draftList()).getAllByRole("listitem")).toHaveLength(2);
+    // A Draft with no Records says so, in the pane, rather than showing the
+    // other Draft's Record editor.
+    expect(within(draftPane()).queryByRole("textbox", { name: "Text" })).toBeNull();
   });
 });

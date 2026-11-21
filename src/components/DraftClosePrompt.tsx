@@ -2,7 +2,7 @@ import { AlertTriangle } from "lucide-react";
 import { Button } from "./ui/Button";
 
 interface DraftClosePromptProps {
-  /** Why the last edit could not be written. Never null here — see DraftsPage. */
+  /** Why the last edit could not be written. Never null here — see `DraftsProvider`. */
   problem: string;
   /** Close the window anyway, without another attempt at the save. */
   onQuitAnyway: () => void;

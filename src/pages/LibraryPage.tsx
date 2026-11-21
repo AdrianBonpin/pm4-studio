@@ -25,7 +25,7 @@ import {
   confirmedCopiesLabel,
   writeNotice,
 } from "../lib/writeOutcome";
-import { DraftsPage } from "./DraftsPage";
+import { DraftsCollection } from "./DraftsCollection";
 import type { LibraryState } from "../hooks/useLibrary";
 import type { Snapshot, SnapshotDraft, SnapshotOrder } from "../lib/library";
 import type { WriteResult } from "../types";
@@ -47,14 +47,14 @@ type Collection = "snapshots" | "drafts";
  * Library holds both Collections. Drafts is not a destination any more — the
  * sidebar is five destinations and Drafts is not one of them — so the second
  * Collection lives here, and this one switch is what keeps every saved Draft
- * reachable. Ticket 10 gives both Collections the list-beside-detail shape; this
- * slice gives it to Snapshots.
+ * reachable. Both Collections have the same list-beside-detail shape: the page
+ * has one shape, and a Collection is its contents rather than its layout.
  *
  * Snapshots is master-detail: the list is the left column, the open Snapshot is
  * the right one, and nothing that changes a Snapshot lives in the list. Choosing
  * another Snapshot swaps the pane and leaves the list exactly where it was, so
  * the page no longer reflows under the pointer and the list no longer carries a
- * row's editor inside it.
+ * row's editor inside it. Drafts is the same shape in `DraftsCollection`.
  */
 export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
   const [collection, setCollection] = useState<Collection>("snapshots");
@@ -107,14 +107,14 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
     setPicked(undefined);
   };
 
-  // Drafts, as it stands, inside the Collection it now belongs to. Ticket 10
-  // gives both Collections the list-beside-detail shape; until then this is the
-  // same editor it always was, reached from Library instead of from the sidebar.
+  // Drafts, the other Collection of this page. It owns its own list and its own
+  // selection, because a Draft's list is not a Snapshot's list and the two are
+  // never one collection of things.
   if (collection === "drafts") {
     return (
       <div className="flex flex-col gap-8">
         <CollectionSwitch value={collection} onChange={setCollection} />
-        <DraftsPage connected={connected} />
+        <DraftsCollection connected={connected} />
       </div>
     );
   }
