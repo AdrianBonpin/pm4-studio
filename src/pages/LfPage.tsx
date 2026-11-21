@@ -5,6 +5,7 @@ import { Button } from "../components/ui/Button";
 import { CloneWizard } from "../components/CloneWizard";
 import { Field, Readout, Section } from "../components/Section";
 import { useLfPoller } from "../hooks/useReader";
+import { describeDeviceFailure } from "../lib/readerIdentity";
 import {
   formatSavedAt,
   hex,
@@ -18,9 +19,11 @@ import type { LfCard, WriteResult } from "../types";
 interface LfPageProps {
   connected: boolean;
   onChirp: () => void;
+  /** Surfaces a dead or wedged Reader in the shell's notice strip. */
+  onDeviceError?: (message: string) => void;
 }
 
-export function LfPage({ connected, onChirp }: LfPageProps) {
+export function LfPage({ connected, onChirp, onDeviceError }: LfPageProps) {
   const [reading, setReading] = useState(false);
   const [current, setCurrent] = useState<LfCard | null>(null);
   const [saved, setSaved] = useState<SavedTag[]>(() => loadSavedTags());
@@ -34,11 +37,16 @@ export function LfPage({ connected, onChirp }: LfPageProps) {
   const [writeResult, setWriteResult] = useState<WriteResult | null>(null);
   const [writeErr, setWriteErr] = useState<string | null>(null);
 
-  useLfPoller(reading, connected, (card) => {
-    setCurrent(card);
-    setReading(false);
-    onChirp();
-  });
+  useLfPoller(
+    reading,
+    connected,
+    (card) => {
+      setCurrent(card);
+      setReading(false);
+      onChirp();
+    },
+    onDeviceError,
+  );
 
   const commit = (next: SavedTag[]) => {
     setSaved(next);
@@ -96,7 +104,8 @@ export function LfPage({ connected, onChirp }: LfPageProps) {
       if (res.verified) onChirp();
       else setWriteErr("Write sent, but the tag did not read back the expected id.");
     } catch (e) {
-      setWriteErr(String(e));
+      // A wedged firmware is reported with its remedy, not as a bare timeout.
+      setWriteErr(describeDeviceFailure(e));
     } finally {
       setWriteBusy(false);
     }
@@ -108,7 +117,12 @@ export function LfPage({ connected, onChirp }: LfPageProps) {
         title="Clone a badge"
         hint="Guided copy from an original badge onto a blank tag, with a verified read-back."
       >
-        <CloneWizard connected={connected} onChirp={onChirp} onSaved={save} />
+        <CloneWizard
+          connected={connected}
+          onChirp={onChirp}
+          onSaved={save}
+          onDeviceError={onDeviceError}
+        />
       </Section>
 
       <Section

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { ReaderLimits } from "../components/ReaderLimits";
 import { Section } from "../components/Section";
 import type { RawResponse } from "../types";
 
@@ -146,6 +147,9 @@ export function ToolsPage({ connected }: ToolsPageProps) {
           </div>
         )}
       </Section>
+
+      {/* The one place this Reader's limits are stated. Never per Tag. */}
+      <ReaderLimits />
     </div>
   );
 }

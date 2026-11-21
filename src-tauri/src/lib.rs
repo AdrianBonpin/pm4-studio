@@ -5,7 +5,7 @@ pub mod reader;
 use reader::{DeviceInfo, Frame, HfCard, LfCard, Reader, REPORT_LEN};
 use serde::Serialize;
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{Manager, State};
 
 pub struct AppState {
     reader: Mutex<Option<Reader>>,
@@ -41,6 +41,15 @@ fn with_reader<T>(
             Err(e)
         }
     }
+}
+
+/// Firmware revision of the attached Reader, e.g. `H00S07`.
+///
+/// Bounded: an absent or wedged Reader produces an error instead of a promise
+/// that never settles, so the shell can say "no Reader" or "replug" at once.
+#[tauri::command]
+fn firmware_version(state: State<'_, AppState>) -> Result<String, String> {
+    with_reader(&state, |r| r.version())
 }
 
 #[derive(Serialize)]
@@ -203,11 +212,22 @@ fn send_cmd(
 
 pub fn run() {
     tauri::Builder::default()
+        // Must be the first plugin registered. A second launch raises the
+        // window that already owns the exclusive USB handle instead of opening
+        // a second process that would fail with an opaque access error.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.unminimize();
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             connect,
             disconnect,
             device_info,
+            firmware_version,
             lf_poll,
             hf_poll,
             beep,

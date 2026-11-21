@@ -38,6 +38,9 @@ pub const CMD_BEEP: u16 = 0x0053;
 /// LED off. Confirmed on hardware. This is NOT a beep: an earlier build had
 /// 0x0055 wired to the beeper, which is why the beep never fired.
 pub const CMD_LED_OFF: u16 = 0x0055;
+/// Firmware revision. Verified on hardware: an empty payload gets a 17-byte
+/// reply of ASCII `H00S07` followed by NUL padding and a trailing `0x01`.
+pub const CMD_VERSION: u16 = 0x0054;
 pub const CMD_HF_POLL: u16 = 0x0069;
 pub const CMD_LF_READ: u16 = 0x0072;
 /// LF write. Discovered by probing; see docs/PROTOCOL.md.
@@ -107,6 +110,25 @@ pub fn parse_frame(raw: &[u8]) -> Option<Frame> {
         payload,
         checksum_ok,
     })
+}
+
+/// Decode the firmware revision out of a `0x0054` reply.
+///
+/// The payload is a NUL-terminated ASCII string followed by a trailing flag
+/// byte, so everything from the first NUL on is ignored. Anything that is not
+/// printable ASCII is rejected rather than displayed as a garbage revision.
+pub fn parse_version(payload: &[u8]) -> Option<String> {
+    let end = payload.iter().position(|&b| b == 0).unwrap_or(payload.len());
+    let text = &payload[..end];
+    if text.is_empty() || !text.iter().all(|b| (0x20..=0x7E).contains(b)) {
+        return None;
+    }
+    let s = String::from_utf8_lossy(text).trim().to_string();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s)
+    }
 }
 
 // ---- parsed results ---------------------------------------------------
@@ -220,6 +242,27 @@ impl Reader {
                 None => continue,
             }
         }
+    }
+
+    /// Firmware revision, e.g. `H00S07`. Bounded like every other operation: a
+    /// wedged firmware answers nothing and this returns an error instead of
+    /// leaving the caller waiting.
+    pub fn version(&self) -> Result<String, String> {
+        // A queued reply must never be read as the version.
+        self.drain();
+        let f = self
+            .transact(CMD_VERSION, &[], Some(CMD_VERSION), 1500)?
+            .ok_or_else(|| {
+                "the reader did not report a firmware revision. Unplug it, plug it back in, \
+                 and press Reconnect."
+                    .to_string()
+            })?;
+        parse_version(&f.payload).ok_or_else(|| {
+            format!(
+                "the reader returned an unreadable firmware revision: {}",
+                hex(&f.payload)
+            )
+        })
     }
 
     /// Wake/select handshake. The device simply echoes it back.
@@ -465,6 +508,31 @@ mod tests {
         assert_eq!(p[2], 0x01);
         assert_eq!(p[8], 0x56);
         assert_eq!(u32::from_le_bytes([p[12], p[13], p[14], p[15]]), 0x0053_C7B3);
+    }
+
+    #[test]
+    fn version_frame_matches_capture() {
+        let f = make_frame(CMD_VERSION, &[]);
+        assert_eq!(
+            &f[..7],
+            &[0x55, 0x00, 0x54, 0x00, 0x00, 0xFF, 0x00],
+            "captured 0x0054 frame is 55 00 54 00 00 FF 00"
+        );
+    }
+
+    #[test]
+    fn parses_captured_firmware_revision() {
+        // Real reply from the reader: cmd 0x0054, 17-byte payload, checksum ok.
+        let payload = parse_hex("48 30 30 53 30 37 00 00 00 00 00 00 00 00 00 00 01").unwrap();
+        assert_eq!(parse_version(&payload).as_deref(), Some("H00S07"));
+    }
+
+    #[test]
+    fn rejects_unreadable_version_payloads() {
+        assert_eq!(parse_version(&[]), None);
+        assert_eq!(parse_version(&[0x00, 0x00, 0x00, 0x00]), None);
+        assert_eq!(parse_version(&[0x01, 0x02, 0x03]), None);
+        assert_eq!(parse_version(&[0x20, 0x20]), None);
     }
 
     #[test]
