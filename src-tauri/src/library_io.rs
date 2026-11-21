@@ -291,9 +291,23 @@ pub fn write_text(path: &Path, text: &str) -> Result<(), FileError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::library::{InsertOutcome, SCHEMA_VERSION};
+    use crate::library::{HfFields, InsertOutcome, SCHEMA_VERSION};
 
     const CAPTURED_AT: &str = "2026-11-21T09:30:00.000Z";
+
+    /// A 13.56 MHz read in the shape schema 2 kept: a UID and the raw reply.
+    fn hf_fields(uid: &str) -> HfFields {
+        HfFields {
+            uid: uid.to_string(),
+            raw: "00 01 02".to_string(),
+            atqa: None,
+            sak: None,
+            card_type: None,
+            capacity_bytes: None,
+            ndef_formatted: None,
+            records: None,
+        }
+    }
 
     /// A library with one read of each band, plus a raw-only read that carries
     /// no Tag identity at all: the three shapes an import has to cope with.
@@ -304,7 +318,7 @@ mod tests {
             InsertOutcome::Added(_) => {}
             other => panic!("unexpected {other:?}"),
         }
-        library.add_hf("04 A2 2B 3A 5C 6D 80", "00 01 02", CAPTURED_AT);
+        library.add_hf(hf_fields("04 A2 2B 3A 5C 6D 80"), CAPTURED_AT);
         library.add(Snapshot {
             id: "raw-1".to_string(),
             name: "Unreadable read".to_string(),
@@ -495,7 +509,7 @@ mod tests {
         let mut incoming = Library::empty();
         incoming.add_lf(0x55, 0x0084_8212, "00 01 01", CAPTURED_AT);
         incoming.add_lf(0x55, 0x0053_C7B3, "00 01 01", CAPTURED_AT);
-        incoming.add_hf("04 A2 2B 3A 5C 6D 81", "00 01 03", CAPTURED_AT);
+        incoming.add_hf(hf_fields("04 A2 2B 3A 5C 6D 81"), CAPTURED_AT);
         LibraryStore::new(&source)
             .save(&incoming)
             .expect("write the import file");

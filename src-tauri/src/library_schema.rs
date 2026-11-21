@@ -68,6 +68,7 @@ pub fn lift_to_current(document: Value, found: u32) -> Result<Value, LibraryProb
 fn one_version_up(document: Value, from: u32) -> Result<Value, LibraryProblem> {
     match from {
         1 => v1_to_v2(document),
+        2 => v2_to_v3(document),
         // Unreachable through `lift_to_current`, which walks the versions this
         // build carries and refuses anything older than the first. Kept explicit
         // so a new step cannot be forgotten silently: an unimplemented version
@@ -98,6 +99,30 @@ fn v1_to_v2(document: Value) -> Result<Value, LibraryProblem> {
         .entry("drafts")
         .or_insert_with(|| Value::Array(Vec::new()));
     object.insert("version".to_string(), Value::from(2u32));
+    Ok(Value::Object(object))
+}
+
+/// Schema 2 → 3: the file states the version whose contents it already has.
+///
+/// Schema 3 is the version whose 13.56 MHz Snapshots keep the whole read — the
+/// ATQA, SAK, card type, capacity, NDEF status and the message's Records. V2 is
+/// the version whose report path could not create such a Snapshot at all: the
+/// store exposed only the 125 kHz save, so the `hf` field was never reachable
+/// through the app.
+///
+/// So there is nothing to transform and nothing to fill in. Every key the file
+/// carries is carried over untouched, every entry keeps its place, and a
+/// Snapshot that somehow *is* a 13.56 MHz one — a hand-edited file — keeps the
+/// fields this shape never held **absent**, because absent is the honest answer
+/// and a default would be a plausible number nobody read. A default stamped here
+/// would also make "not recorded" indistinguishable from "recorded, and empty".
+fn v2_to_v3(document: Value) -> Result<Value, LibraryProblem> {
+    let Value::Object(mut object) = document else {
+        return Err(LibraryProblem::Corrupt {
+            detail: "the file is not a JSON object".to_string(),
+        });
+    };
+    object.insert("version".to_string(), Value::from(3u32));
     Ok(Value::Object(object))
 }
 
@@ -167,13 +192,13 @@ mod tests {
     }
 
     #[test]
-    fn a_v1_document_is_lifted_to_v2_with_each_collection_in_its_own_order() {
+    fn a_v1_document_walks_the_whole_chain_to_this_builds_schema() {
         let lifted = lift_to_current(v1_document(), 1).expect("a v1 document lifts");
 
         assert_eq!(
             lifted["version"],
-            json!(2),
-            "the lift states the version it produces"
+            json!(SCHEMA_VERSION),
+            "the walk ends at the version this build writes, not at the first step"
         );
         assert_eq!(
             names(&lifted["snapshots"], "name"),
@@ -238,12 +263,121 @@ mod tests {
     #[test]
     fn a_document_above_this_builds_version_is_never_lifted() {
         assert_eq!(
-            lift_to_current(json!({"version": 3, "snapshots": []}), 3),
+            lift_to_current(json!({"version": 4, "snapshots": []}), 4),
             Err(LibraryProblem::NewerVersion {
-                found: 3,
+                found: 4,
                 supported: SCHEMA_VERSION
             }),
         );
+    }
+
+    /// A library file as the version 2 build wrote it, with the two collections
+    /// deliberately out of id order so a migration that sorts shows itself.
+    fn v2_document() -> Value {
+        json!({
+            "version": 2,
+            "snapshots": [
+                {
+                    "id": "04 A2 2B 3A 5C 6D 80",
+                    "name": "Back gate",
+                    "note": "",
+                    "kind": "HF",
+                    "capturedAt": "2026-11-21T10:00:00.000Z",
+                    "writeCount": 3,
+                    "hf": { "uid": "04 A2 2B 3A 5C 6D 80", "raw": "01 01 04 43 8A 01 22 09" }
+                },
+                {
+                    "id": "55 00 84 82 12",
+                    "name": "Front door",
+                    "note": "gate 3",
+                    "kind": "LF",
+                    "capturedAt": "2026-11-21T09:30:00.000Z",
+                    "writeCount": 2,
+                    "identity": {
+                        "customer": 85,
+                        "data32": 8684050,
+                        "facility": 132,
+                        "card": 33298,
+                        "raw": "00 01 01"
+                    }
+                }
+            ],
+            "drafts": [
+                { "id": "draft-2", "name": "Roof", "updatedAt": "2026-11-21T12:00:00.000Z", "records": [] },
+                { "id": "draft-1", "name": "Lobby", "updatedAt": "2026-11-21T11:00:00.000Z", "records": [] }
+            ]
+        })
+    }
+
+    #[test]
+    fn a_v2_document_is_lifted_to_v3_with_each_collection_in_its_own_order() {
+        let lifted = lift_to_current(v2_document(), 2).expect("a v2 document lifts");
+
+        assert_eq!(lifted["version"], json!(SCHEMA_VERSION));
+        assert_eq!(
+            names(&lifted["snapshots"], "name"),
+            vec!["Back gate".to_string(), "Front door".to_string()],
+            "every Snapshot, in the order the file held it"
+        );
+        assert_eq!(
+            names(&lifted["drafts"], "id"),
+            vec!["draft-2".to_string(), "draft-1".to_string()],
+            "every Draft, in the order the file held it — not sorted"
+        );
+        assert_eq!(
+            lifted["snapshots"][1],
+            v2_document()["snapshots"][1],
+            "a Snapshot is carried over whole, not rebuilt from the fields this build models"
+        );
+    }
+
+    #[test]
+    fn a_v2_hf_snapshot_keeps_the_fields_that_shape_never_carried_absent() {
+        let lifted = lift_to_current(v2_document(), 2).expect("lifts");
+        let hf = &lifted["snapshots"][0]["hf"];
+
+        assert_eq!(hf["uid"], "04 A2 2B 3A 5C 6D 80");
+        assert_eq!(hf["raw"], "01 01 04 43 8A 01 22 09");
+        for key in [
+            "atqa",
+            "sak",
+            "cardType",
+            "capacityBytes",
+            "ndefFormatted",
+            "records",
+        ] {
+            assert!(
+                hf.get(key).is_none(),
+                "{key} was filled in for a Snapshot that never carried it: {hf}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_v2_document_keeps_a_key_this_build_does_not_model() {
+        let mut document = v2_document();
+        document["tags"] = json!(["Front door", "Back gate"]);
+        document["futureCollection"] = json!([{ "kept": true }]);
+
+        let lifted = lift_to_current(document, 2).expect("lifts");
+
+        assert_eq!(lifted["tags"], json!(["Front door", "Back gate"]));
+        assert_eq!(lifted["futureCollection"], json!([{ "kept": true }]));
+    }
+
+    #[test]
+    fn a_document_written_before_drafts_existed_walks_from_one_to_this_builds_schema() {
+        // The chain is not "one step per old file": a v1 document walks 1 → 2 → 3
+        // in one call, gaining the collection v2 promised on the way.
+        let lifted = lift_to_current(
+            json!({"version": 1, "snapshots": [], "tags": ["kept"]}),
+            1,
+        )
+        .expect("lifts");
+
+        assert_eq!(lifted["version"], json!(SCHEMA_VERSION));
+        assert_eq!(lifted["drafts"], json!([]));
+        assert_eq!(lifted["tags"], json!(["kept"]));
     }
 
     #[test]

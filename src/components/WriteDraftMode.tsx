@@ -76,7 +76,7 @@ export function WriteDraftMode({ connected }: WriteDraftModeProps) {
         )}
       </div>
 
-      {chosen !== null && <WriteDraftToTag draft={chosen} connected={connected} />}
+      {chosen !== null && <WriteDraftToTag records={chosen.records} connected={connected} />}
     </div>
   );
 }

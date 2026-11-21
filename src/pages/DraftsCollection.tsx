@@ -397,7 +397,7 @@ function DraftDetail({
       {/* The one way out: the whole message, written to a 13.56 MHz Tag, with its
           own confirmation and read-back. Unchanged by this slice — it moved into
           this pane and nothing else about it did. */}
-      <WriteDraftToTag draft={draft} connected={connected} />
+      <WriteDraftToTag records={draft.records} connected={connected} />
     </section>
   );
 }

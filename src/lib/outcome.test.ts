@@ -20,6 +20,7 @@ import { attemptNotice } from "./batchClone";
 import { blankNotice } from "./blankTag";
 import { eraseNotice } from "./eraseTag";
 import type { BatchAttemptResult, BlankResult, EraseResult, WriteResult } from "../types";
+import type { LibraryView, SaveResult, Snapshot } from "./library";
 
 /**
  * The outcome seam: one typed value, one entry point, two channels.
@@ -44,6 +45,8 @@ const EXPECTED_SEVERITY: Record<OutcomeKind, Severity> = {
   read: "success",
   "beep-test": "success",
   "nothing-latched": "info",
+  saved: "success",
+  "already-saved": "info",
   "read-incomplete": "warning",
   verified: "success",
   blanked: "success",
@@ -143,10 +146,54 @@ function hearSignals(): { symbols: SignalSymbol[]; stop: () => void } {
   return { symbols, stop };
 }
 
+
+/** A Snapshot as a save would return it. */
+const SAVED_SNAPSHOT: Snapshot = {
+  id: "55 00 84 82 12",
+  name: "Front door",
+  note: "",
+  kind: "LF",
+  capturedAt: "2026-11-21T09:30:00.000Z",
+  writeCount: 0,
+  identity: {
+    customer: 0x55,
+    data32: 0x0084_8212,
+    facility: 132,
+    card: 33298,
+    raw: "00 01 01 00",
+  },
+};
+
+/** The library file a save answers with, or the problem that refused it. */
+function savedResult(outcome: SaveResult["outcome"]): SaveResult {
+  const library: LibraryView = {
+    path: "/Users/someone/Library/Application Support/pm4-studio/library.json",
+    version: 3,
+    snapshots: outcome === "refused" ? [] : [SAVED_SNAPSHOT],
+    problem:
+      outcome === "refused"
+        ? {
+            kind: "newerVersion",
+            message:
+              "This library was written by a newer version of PM4 Studio (schema 4; this build " +
+              "understands 3). It has been left exactly as it is, because saving would downgrade it.",
+            detail: null,
+          }
+        : null,
+    migrationWarning: null,
+  };
+  return {
+    outcome,
+    library,
+    snapshot: outcome === "refused" ? null : SAVED_SNAPSHOT,
+  };
+}
+
 describe("the discriminator set", () => {
   it("is closed, and every discriminator is named here deliberately", () => {
     expect([...ALL_OUTCOME_KINDS].sort()).toEqual(
       [
+        "already-saved",
         "announcement",
         "beep-test",
         "blanked",
@@ -163,6 +210,7 @@ describe("the discriminator set", () => {
         "refused",
         "refused-by-build",
         "reset-refused",
+        "saved",
         "skipped",
         "unreadable",
         "unverified",
@@ -673,6 +721,10 @@ describe("every outcome the vocabulary can build", () => {
     outcomes.refusedByReader("the frame was malformed"),
     outcomes.readerFailure("no such device"),
     outcomes.announcement("Saved."),
+    outcomes.librarySaved(savedResult("added")),
+    outcomes.librarySaved(savedResult("duplicate")),
+    outcomes.librarySaved(savedResult("refused")),
+    outcomes.librarySaveFailed("the library file could not be reached"),
     outcomes.beepTest(),
     outcomes.beepTestNoReader(),
     outcomes.beepTestMuted("errors-and-warnings"),
@@ -690,5 +742,60 @@ describe("every outcome the vocabulary can build", () => {
     for (const outcome of built) {
       expect(() => report(outcome)).not.toThrow();
     }
+  });
+});
+
+/**
+ * Keeping a read in the library.
+ *
+ * The store answers with what it did, and that answer is the outcome: a save, a
+ * repeat, and a file this build must not write to are three different things and
+ * must not arrive as one silence. A duplicate is informational and silent — it
+ * changed nothing, which is exactly what silence means (ADR 0009) — while still
+ * being said, because a save that vanishes looks like a save that failed.
+ */
+describe("saving a read to the library", () => {
+  it("reports a save as a success, and sounds one chirp", () => {
+    const { symbols, stop } = hearSignals();
+
+    report(outcomes.librarySaved(savedResult("added")));
+
+    const [toast] = toastStore.getState().toasts;
+    expect(toast?.message).toBe("Saved to the library as Front door.");
+    expect(toast?.kind).toBe("saved");
+    expect(toast?.severity).toBe("success");
+    expect(symbols).toEqual(["done"]);
+    stop();
+  });
+
+  it("reports a repeat read as already saved, visibly and silently", () => {
+    const { symbols, stop } = hearSignals();
+
+    report(outcomes.librarySaved(savedResult("duplicate")));
+
+    const [toast] = toastStore.getState().toasts;
+    expect(toast?.message).toBe("Already in the library as Front door.");
+    expect(toast?.kind).toBe("already-saved");
+    expect(toast?.severity).toBe("info");
+    expect(symbols).toEqual([]);
+    stop();
+  });
+
+  it("reports a file this build must not write to as a refusal, in the file's own words", () => {
+    const outcome = outcomes.librarySaved(savedResult("refused"));
+
+    expect(outcome.kind).toBe("refused");
+    expect(outcome.severity).toBe("error");
+    expect(outcome.message).toContain("newer version of PM4 Studio");
+  });
+
+  it("reports a save that never reached the store, keeping its own words", () => {
+    const outcome = outcomes.librarySaveFailed("  the app data directory is not writable  ");
+
+    expect(outcome.kind).toBe("failed");
+    expect(outcome.operation).toBe("library");
+    expect(outcome.message).toBe("The read could not be saved to the library.");
+    expect(outcome.detail).toBe("the app data directory is not writable");
+    expect(outcomes.librarySaveFailed("").detail).toBeUndefined();
   });
 });

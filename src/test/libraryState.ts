@@ -32,7 +32,7 @@ export const SNAPSHOT: Snapshot = {
 export function libraryView(snapshots: Snapshot[] = [SNAPSHOT]): LibraryView {
   return {
     path: "/Users/someone/Library/Application Support/pm4-studio/library.json",
-    version: 2,
+    version: 3,
     snapshots,
     problem: null,
     migrationWarning: null,
@@ -46,6 +46,7 @@ export function libraryState(overrides: Partial<LibraryState> = {}): LibraryStat
     error: null,
     loading: false,
     saveLf: vi.fn(async () => null),
+    saveHf: vi.fn(async () => null),
     rename: vi.fn(async (_id: string, _name: string) => {}),
     edit: vi.fn(async (_id: string, _draft: { name: string; note: string }) => {}),
     remove: vi.fn(async (_id: string) => {}),

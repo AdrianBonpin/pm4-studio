@@ -6,6 +6,7 @@ import { HfPage } from "./HfPage";
 import { Segmented } from "../components/ui/Segmented";
 import { DraftsProvider } from "../components/DraftsProvider";
 import { fakeBackend, renderUi, type Backend } from "../test/dom";
+import { libraryState } from "../test/libraryState";
 import { NTAG_CAPTURE, NTAG_UID, recordsRead } from "../test/hfState";
 import { ERASE_ACTION_LABEL, eraseConfirmation, type NdefErasePreview } from "../lib/eraseTag";
 import { draftMessageHex, type NdefPreview, type NdefWriteResult } from "../lib/tagWrite";
@@ -129,7 +130,15 @@ function mount({ drafts = [], card = NTAG_CAPTURE, answers = {} }: MountOptions 
 
   function Workspace() {
     const [mode, setMode] = useState<HfMode>("read");
-    return <HfPage connected mode={mode} onModeChange={setMode} onPoll={async () => card} />;
+    return (
+      <HfPage
+        connected
+        mode={mode}
+        onModeChange={setMode}
+        onPoll={async () => card}
+        library={libraryState()}
+      />
+    );
   }
 
   const ui = renderUi(

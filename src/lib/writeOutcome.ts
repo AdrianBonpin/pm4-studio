@@ -29,7 +29,7 @@ export function confirmedCopiesLabel(count: number): string {
 
 /** Shown wherever a count appears: what it takes for one to be added. */
 export const CONFIRMED_COPIES_HINT =
-  "A confirmed copy is a Tag whose read-back proved it carries this Identity. A refused, unverified, or failed write adds nothing to the count.";
+  "A confirmed copy is a Tag whose read-back proved it carries what was written — this Identity on 125 kHz, these Records on 13.56 MHz. A refused, unverified, or failed write adds nothing to the count.";
 
 export type NoticeTone = "ok" | "warn" | "err";
 

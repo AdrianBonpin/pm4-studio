@@ -1,11 +1,15 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import { HfPage } from "./HfPage";
 import { fakeBackend, renderUi } from "../test/dom";
 import { MESSAGE, NTAG_CAPTURE, NTAG_UID, recordsRead } from "../test/hfState";
+import { libraryState, libraryView } from "../test/libraryState";
 import { encodeNdefMessage, type NdefRecord } from "../lib/ndef";
 import { subscribeSignals, type SignalSymbol } from "../lib/signal";
+import { bytesToHex } from "../lib/tagWrite";
+import type { HfSnapshotSave } from "../lib/hfSnapshot";
+import type { SaveResult } from "../lib/library";
 import type { HfCard } from "../types";
 
 /**
@@ -65,7 +69,13 @@ async function readTag(
   const backend = fakeBackend(answers);
   const { symbols, stop } = hearSignals();
   const { user } = renderUi(
-    <HfPage connected mode="read" onModeChange={() => {}} onPoll={async () => card} />,
+    <HfPage
+      connected
+      mode="read"
+      onModeChange={() => {}}
+      onPoll={async () => card}
+      library={libraryState()}
+    />,
   );
   await user.click(screen.getByRole("button", { name: "Read tag" }));
   return { backend, user, symbols, stop };
@@ -247,5 +257,137 @@ describe("a Tag that holds no message", () => {
     expect(field("NDEF formatted")).toBe("yes");
     expect(symbols).toEqual(["done"]);
     stop();
+  });
+});
+
+/**
+ * Ticket 09 — keeping the read.
+ *
+ * Saving is its own operation with its own outcome: a read can succeed and the
+ * library file still refuse to be written, and a repeat read is a third answer
+ * again. What is saved is the whole reading, not the half that happens to be on
+ * screen first.
+ */
+describe("keeping a 13.56 MHz read in the library", () => {
+  const SAVED = {
+    id: "04 43 8A 01 22 09 03",
+    name: "Snapshot 1",
+    note: "",
+    kind: "HF" as const,
+    capturedAt: "2026-11-22T10:00:00.000Z",
+    writeCount: 0,
+    hf: { uid: NTAG_UID, raw: "00 01 02" },
+  };
+
+  async function readInto(saveHf: (read: HfSnapshotSave) => Promise<SaveResult | null>) {
+    fakeBackend({ ntag_records_read: () => recordsRead() });
+    const { symbols, stop } = hearSignals();
+    const library = libraryState({ saveHf });
+    const { user } = renderUi(
+      <HfPage
+        connected
+        mode="read"
+        onModeChange={() => {}}
+        onPoll={async () => NTAG_CAPTURE}
+        library={library}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Read tag" }));
+    await readout().findByText(NTAG_UID);
+    return { user, symbols, stop };
+  }
+
+  it("saves the whole read in one action, and says so", async () => {
+    const saveHf = vi.fn(async (_read: HfSnapshotSave) =>
+      ({ outcome: "added", library: libraryView([SAVED]), snapshot: SAVED }) as SaveResult,
+    );
+    const { user, symbols, stop } = await readInto(saveHf);
+
+    await user.click(screen.getByRole("button", { name: "Save to library" }));
+
+    await waitFor(() => expect(saveHf).toHaveBeenCalledTimes(1));
+    const sent = saveHf.mock.calls[0]?.[0];
+    expect(sent).toEqual({
+      uid: NTAG_UID,
+      raw: bytesToHex(NTAG_CAPTURE.payload),
+      atqa: "44 00",
+      sak: "00",
+      cardType: "MIFARE Ultralight / NTAG21x",
+      capacityBytes: 496,
+      ndefFormatted: true,
+      records: [
+        { kind: "text", fields: { language: "en", text: "hello" } },
+        { kind: "url", fields: { url: "https://devgo.studio" } },
+      ],
+    });
+
+    // One action, one outcome: the line beside the readout and the sound agree.
+    await screen.findByText("Saved to the library as Snapshot 1.");
+    expect(symbols).toEqual(["done", "done"]);
+    stop();
+  });
+
+  it("reports a repeat read as already saved, silently and without adding it twice", async () => {
+    const saveHf = vi.fn(async (_read: HfSnapshotSave) =>
+      ({ outcome: "duplicate", library: libraryView([SAVED]), snapshot: SAVED }) as SaveResult,
+    );
+    const { user, symbols, stop } = await readInto(saveHf);
+
+    await user.click(screen.getByRole("button", { name: "Save to library" }));
+
+    await screen.findByText("Already in the library as Snapshot 1.");
+    // A repeat is informational: it changed nothing, so it sounds nothing
+    // (ADR 0009). The read that preceded it still did.
+    expect(symbols).toEqual(["done"]);
+    stop();
+  });
+
+  it("reports a refused file, and never claims the read was saved", async () => {
+    const saveHf = vi.fn(async (_read: HfSnapshotSave) =>
+      ({
+        outcome: "refused",
+        library: {
+          ...libraryView([]),
+          problem: {
+            kind: "newerVersion",
+            message: "This library was written by a newer version of PM4 Studio.",
+            detail: null,
+          },
+        },
+        snapshot: null,
+      }) as SaveResult,
+    );
+    const { user, symbols, stop } = await readInto(saveHf);
+
+    await user.click(screen.getByRole("button", { name: "Save to library" }));
+
+    await screen.findByText(/newer version of PM4 Studio/);
+    expect(screen.queryByText(/^Saved to the library/)).toBeNull();
+    expect(symbols[symbols.length - 1]).toBe("attention");
+    stop();
+  });
+
+  it("offers the save only once something has been decoded", async () => {
+    fakeBackend({});
+    const { user } = renderUi(
+      <HfPage
+        connected
+        mode="read"
+        onModeChange={() => {}}
+        onPoll={async () => UNKNOWN_CAPTURE}
+        library={libraryState()}
+      />,
+    );
+
+    const before = screen.getByRole("button", { name: "Save to library" }) as HTMLButtonElement;
+    expect(before.disabled).toBe(true);
+
+    await user.click(screen.getByRole("button", { name: "Read tag" }));
+    await screen.findByText("Not decoded");
+
+    // The bytes are on screen, but there is no UID to name a Snapshot with.
+    expect(
+      (screen.getByRole("button", { name: "Save to library" }) as HTMLButtonElement).disabled,
+    ).toBe(true);
   });
 });
