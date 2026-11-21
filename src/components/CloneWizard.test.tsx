@@ -88,8 +88,11 @@ describe("cloning onto the Tag on the reader", () => {
     // And it is rendered by the shared component, in its destructive tone. The
     // clone path once carried its own copy with the milder frame for exactly this
     // case, so the alarm is asserted here rather than left to the other path.
-    expect(container.querySelector(".bg-warn\\/5")).toBeTruthy();
-    expect(container.querySelector("svg")).toBeTruthy();
+    const alarm = container.querySelector('[data-tone="warn"]');
+    expect(alarm).toBeTruthy();
+    // The tone in words and in shape, not only in hue.
+    expect(alarm?.textContent).toContain("Check this");
+    expect(alarm?.querySelector("svg")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 

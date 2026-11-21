@@ -11,12 +11,12 @@
 The sweep runs after the page work rather than before, because sweeping interface that is about to be rewritten does the work twice.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/28
-**Status:** ready
+**Status:** done
 
-- [ ] No notice anywhere is announced only by a border down one side of a rounded box.
-- [ ] Persistent conditions use a full border or a tint, with a leading label or icon carrying the severity as well as colour.
-- [ ] Both light-independent channels are present: the severity is readable to a user who cannot distinguish the accent colours.
-- [ ] Every notice keeps its accessible name and its severity distinction, including the unwritable-library condition and the migration warning.
-- [ ] Anything that could be dismissed before can still be dismissed.
-- [ ] No notice that belonged inline was turned into a transient message, and none that was transient was made permanent.
-- [ ] The design check reports zero occurrences of the rule.
+- [x] No notice anywhere is announced only by a border down one side of a rounded box.
+- [x] Persistent conditions use a full border or a tint, with a leading label or icon carrying the severity as well as colour.
+- [x] Both light-independent channels are present: the severity is readable to a user who cannot distinguish the accent colours.
+- [x] Every notice keeps its accessible name and its severity distinction, including the unwritable-library condition and the migration warning.
+- [x] Anything that could be dismissed before can still be dismissed.
+- [x] No notice that belonged inline was turned into a transient message, and none that was transient was made permanent.
+- [x] The design check reports zero occurrences of the rule.

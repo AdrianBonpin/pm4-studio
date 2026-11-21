@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Check, Layers, RotateCcw } from "lucide-react";
+import { Check, Layers, RotateCcw } from "lucide-react";
 import { Button } from "./ui/Button";
+import { Notice } from "./ui/Notice";
 import { Field, Readout } from "./Section";
 import { beginDeviceOperation } from "../lib/deviceLock";
 import { outcomes, report } from "../lib/outcome";
@@ -122,18 +123,15 @@ export function BatchClone({ source, connected, onExit }: BatchCloneProps) {
         </p>
       </div>
 
-      <div className="border-l-2 border-warn bg-warn/5 px-3 py-2">
-        <p className="flex items-center gap-1.5 text-sm text-warn">
-          <AlertTriangle size={14} /> One tag per attempt
-        </p>
-        <ul className="mt-2 flex flex-col gap-2">
+      <Notice tone="warn" label="Check this" title="One tag per attempt">
+        <ul className="flex flex-col gap-2">
           {BATCH_FACTS.map((fact) => (
             <li key={fact.title} className="text-xs leading-relaxed text-text-muted">
               <span className="text-text">{fact.title}.</span> {fact.detail}
             </li>
           ))}
         </ul>
-      </div>
+      </Notice>
 
       <div className="flex flex-wrap items-center gap-2">
         <Button variant="primary" disabled={!connected || busy} onClick={() => void writeNext()}>

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
+import { Notice, type NoticeTone } from "./ui/Notice";
 import { Section } from "./Section";
 import {
   CLEAR_GATE_WORD,
@@ -137,23 +138,25 @@ function ClearTarget({ children }: { children: string }) {
   );
 }
 
-/** The tone per notice, in the design system's own vocabulary. */
-const NOTICE_TONE: Record<ClearNotice["tone"], string> = {
-  ok: "text-ok",
-  err: "text-err",
-  info: "text-text-muted",
+/** The tone per notice, in the notice treatment's own vocabulary. */
+const NOTICE_TONE: Record<ClearNotice["tone"], NoticeTone> = {
+  ok: "ok",
+  err: "err",
+  info: "muted",
 };
 
 /**
  * What the action did, exactly.
  *
  * The list is built from the report rather than from a count, so a line that
- * says a thing was removed can only appear when it was.
+ * says a thing was removed can only appear when it was. The header is the
+ * notice's leading word — "Cleared all saved data." or "Clearing stopped: …" —
+ * so which of the two happened is said in words and not only in colour, and
+ * `role="status"` keeps it announced as the report of something just done.
  */
 function ClearResult({ notice, report }: { notice: ClearNotice; report: ClearReport }) {
   return (
-    <div className="flex flex-col gap-2 border-l-2 border-border pl-3" role="status">
-      <p className={`text-sm leading-relaxed ${NOTICE_TONE[notice.tone]}`}>{notice.title}</p>
+    <Notice tone={NOTICE_TONE[notice.tone]} role="status" label={notice.title}>
       <p className="max-w-prose text-xs leading-relaxed text-text-muted">{notice.detail}</p>
       {report.removed.length > 0 && (
         <ul className="flex flex-col gap-1">
@@ -170,6 +173,6 @@ function ClearResult({ notice, report }: { notice: ClearNotice; report: ClearRep
           ))}
         </ul>
       )}
-    </div>
+    </Notice>
   );
 }

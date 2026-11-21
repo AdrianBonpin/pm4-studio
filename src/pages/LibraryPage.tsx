@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Check, Copy } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { Notice } from "../components/ui/Notice";
 import { Segmented } from "../components/ui/Segmented";
 import { Section } from "../components/Section";
 import { HfSnapshotReview } from "../components/HfSnapshotReview";
@@ -162,9 +163,9 @@ export function LibraryPage({ connected, library }: LibraryPageProps) {
         {problem && <LibraryProblemBanner problem={problem} />}
 
         {error && (
-          <p className="mb-4 border-l-2 border-err bg-err/5 px-3 py-2 text-xs leading-relaxed text-err">
-            {error}
-          </p>
+          <Notice tone="err" label="Failed" className="mb-4">
+            <p className="text-xs leading-relaxed text-text-muted">{error}</p>
+          </Notice>
         )}
 
         {loading && <p className="text-sm text-text-muted">Reading the library…</p>}

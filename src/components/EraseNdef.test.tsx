@@ -90,3 +90,39 @@ describe("erasing a Tag's content", () => {
     });
   });
 });
+
+/**
+ * Ticket 18: a refusal is a notice that keeps its words and its dismiss control.
+ *
+ * It used to be an amber rule down the left edge of a box with the reason inside
+ * it and a "Dismiss" button underneath. The rule is gone; the word that says
+ * which case this is, the shape beside it and the way out of the state are not,
+ * and the control is driven rather than read out of the markup.
+ */
+describe("a tag an erase would be refused on", () => {
+  const REFUSAL = "the tag is read-only";
+
+  it("says so in words, and is dismissed from the notice itself", async () => {
+    const backend = fakeBackend({
+      hf_ndef_erase_preview: () => ({ ...PREVIEW, canErase: false, refusal: REFUSAL }),
+    });
+    const { user, container } = renderUi(<EraseNdef connected />);
+
+    await user.click(screen.getByRole("button", { name: "Check tag" }));
+
+    // The severity in words, not only in hue, and the reason beneath it.
+    expect(await screen.findByText("Not erased")).toBeTruthy();
+    expect(screen.getByText(new RegExp(REFUSAL))).toBeTruthy();
+    // The shape that says it again, so the tone survives colour blindness.
+    expect(container.querySelector('[data-tone="warn"] svg')).toBeTruthy();
+    // Nothing was erased to find out.
+    expect(backend.callsTo("hf_ndef_erase")).toHaveLength(0);
+
+    // And the notice names what it dismisses.
+    await user.click(screen.getByRole("button", { name: "Dismiss: Not erased" }));
+
+    expect(screen.queryByText("Not erased")).toBeNull();
+    expect(backend.callsTo("hf_ndef_erase")).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Check tag" })).toBeTruthy();
+  });
+});

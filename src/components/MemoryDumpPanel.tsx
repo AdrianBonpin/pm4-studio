@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "./ui/Button";
+import { Notice } from "./ui/Notice";
 import { Field, Section } from "./Section";
 import {
   describeDump,
@@ -110,10 +111,9 @@ export function MemoryDumpPanel({ connected, read, onRead }: MemoryDumpPanelProp
       }
     >
       {error !== null && (
-        <div className="border-l-2 border-err bg-err/5 px-3 py-2">
-          <p className="text-sm text-err">Memory not read</p>
-          <p className="mt-0.5 max-w-prose text-xs leading-relaxed text-text-muted">{error}</p>
-        </div>
+        <Notice tone="err" label="Memory not read">
+          <p className="max-w-prose text-xs leading-relaxed text-text-muted">{error}</p>
+        </Notice>
       )}
 
       {dump === null ? (

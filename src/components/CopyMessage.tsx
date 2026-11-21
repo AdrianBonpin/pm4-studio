@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Check, Copy as CopyIcon, ScanLine } from "lucide-react";
+import { Copy as CopyIcon, ScanLine } from "lucide-react";
 import { Button } from "./ui/Button";
+import { Notice } from "./ui/Notice";
 import { Readout, Section } from "./Section";
 import { beginDeviceOperation } from "../lib/deviceLock";
 import { decodeHfPayload } from "../lib/hfDecoder";
@@ -22,7 +23,6 @@ import {
 } from "../lib/hfCopy";
 import { recordLine } from "../lib/tagRecords";
 import { recordsLabel, type NdefWriteResult } from "../lib/tagWrite";
-import { NOTICE_TONE_CLASS } from "../lib/writeOutcome";
 import { report, outcomes } from "../lib/outcome";
 import type { TagRecordsRead } from "../lib/tagRecords";
 import type { HfCard } from "../types";
@@ -300,9 +300,9 @@ export function CopyMessage({ connected, onPoll }: CopyMessageProps) {
         )}
 
         {error && (
-          <p className="border-l-2 border-err bg-err/5 px-3 py-2 text-xs leading-relaxed text-err">
-            {error}
-          </p>
+          <Notice tone="err" label="Failed">
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">{error}</p>
+          </Notice>
         )}
 
         {held === null && phase === "idle" && (
@@ -374,10 +374,11 @@ export function CopyMessage({ connected, onPoll }: CopyMessageProps) {
         )}
 
         {(phase === "confirm" || phase === "writing") && destination !== null && fit !== null && (
-          <div className="flex flex-col gap-2 border-l-2 border-warn bg-warn/5 px-3 py-2">
-            <p className="flex items-center gap-1.5 text-sm text-warn">
-              <AlertTriangle size={14} /> Replace what tag {destination.uid ?? "unknown"} holds?
-            </p>
+          <Notice
+            tone="warn"
+            label="Check this"
+            title={`Replace what tag ${destination.uid ?? "unknown"} holds?`}
+          >
             <p className="max-w-prose text-sm leading-relaxed text-text">
               Copying writes {recordsLabel(held?.records ?? [])} onto this tag, replacing what it
               holds now: {recordsLabel(destinationRecords)}, {destinationBytes}{" "}
@@ -414,7 +415,7 @@ export function CopyMessage({ connected, onPoll }: CopyMessageProps) {
               The source tag is already off the Reader. Keep the destination on it until the
               result appears; polling is suspended while the write runs.
             </p>
-            <div className="mt-1 flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button
                 variant="danger"
                 disabled={!connected || busy || (unknownFit && !acknowledged)}
@@ -426,7 +427,7 @@ export function CopyMessage({ connected, onPoll }: CopyMessageProps) {
                 Cancel
               </Button>
             </div>
-          </div>
+          </Notice>
         )}
 
         {decision !== null && decision.kind !== "proceed" && (
@@ -452,37 +453,29 @@ function CopyNotice({
   decision: Extract<CopyDecision, { kind: "result" | "refused" | "failed" | "nothing-latched" }>;
 }) {
   if (decision.kind === "nothing-latched") {
+    // Informational, not a failure: the field was empty and nothing was written.
+    // "No tag" is the severity in words — the app's silence, not its alarm.
     return (
-      <div className="border-l-2 border-border bg-surface-raised/40 px-3 py-2">
+      <Notice tone="muted" label="No tag">
         <p className="text-sm text-text-muted">{decision.message}</p>
-        <p className="mt-0.5 max-w-prose text-xs leading-relaxed text-text-muted">
-          {decision.detail}
-        </p>
-      </div>
+        <p className="max-w-prose text-xs leading-relaxed text-text-muted">{decision.detail}</p>
+      </Notice>
     );
   }
 
   const verified = decision.kind === "result" && decision.verification === "verified";
   const tone = verified ? "ok" : decision.kind === "result" ? "warn" : "err";
-  const heading = verified ? "Copied" : decision.kind === "result" ? "Unconfirmed" : "Not copied";
+  const label = verified ? "Copied" : decision.kind === "result" ? "Unconfirmed" : "Not copied";
   const message = decision.kind === "refused" ? decision.refusal.message : decision.message;
   const detail = decision.kind === "refused" ? decision.refusal.detail : decision.detail;
 
   return (
-    <div
-      className={`border-l-2 px-3 py-2 ${
-        tone === "ok" ? "border-ok bg-ok/5" : tone === "warn" ? "border-warn bg-warn/5" : "border-err bg-err/5"
-      }`}
-    >
-      <p className={`flex items-center gap-1.5 text-sm ${NOTICE_TONE_CLASS[tone]}`}>
-        {tone === "ok" ? <Check size={14} /> : <AlertTriangle size={14} />}
-        {heading}
-      </p>
-      <p className="mt-0.5 max-w-prose text-sm leading-relaxed text-text">{message}</p>
+    <Notice tone={tone} label={label}>
+      <p className="max-w-prose text-sm leading-relaxed text-text">{message}</p>
       {detail !== null && (
-        <p className="mt-1 max-w-prose text-xs leading-relaxed text-text-muted">{detail}</p>
+        <p className="max-w-prose text-xs leading-relaxed text-text-muted">{detail}</p>
       )}
-    </div>
+    </Notice>
   );
 }
 

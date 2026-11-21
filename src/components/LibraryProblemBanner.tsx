@@ -1,5 +1,5 @@
-import { AlertTriangle } from "lucide-react";
 import type { LibraryProblem } from "../lib/library";
+import { Notice } from "./ui/Notice";
 
 interface LibraryProblemBannerProps {
   /** The problem the store reported: why the library file must not be written. */
@@ -30,23 +30,33 @@ const PROBLEM_TITLES: Record<LibraryProblem["kind"], string> = {
  * together, so one unreadable file stops every write to either. A page that
  * wants to say something different about a locked file should be changing what
  * the store reports, not adding a second sentence about the same event.
+ *
+ * **The severity is the leading word.** It used to be a red rule down one side,
+ * which said "something is wrong" to a user who can see the hue and nothing at
+ * all to one who cannot. "Saving is off" says the consequence in words, and the
+ * octagon says it again in shape; the sentence further down explains why the file
+ * is protected rather than repeating that saving is disabled.
+ *
+ * `LibraryProblem.kind` decides nothing about the treatment: every kind is the
+ * same lock, so every kind is the same notice. It decides only what the file is
+ * (the title) and, through the store, why (the detail).
  */
 export function LibraryProblemBanner({ problem }: LibraryProblemBannerProps) {
   return (
-    <div className="mb-4 flex items-start gap-3 border-l-2 border-err bg-err/5 px-3 py-2">
-      <AlertTriangle size={15} className="mt-0.5 shrink-0 text-err" />
-      <div className="min-w-0">
-        <p className="text-sm text-err">{PROBLEM_TITLES[problem.kind]}</p>
-        <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
-          {problem.message} Saving is turned off until it is dealt with, so the file on disk is
-          never replaced by an empty one.
+    <Notice
+      tone="err"
+      label="Saving is off"
+      title={PROBLEM_TITLES[problem.kind]}
+      className="mb-4"
+    >
+      <p className="text-xs leading-relaxed text-text-muted">
+        {problem.message} The file on disk is never replaced by an empty one.
+      </p>
+      {problem.detail && (
+        <p className="select-text break-all font-mono text-[11px] text-text-muted">
+          {problem.detail}
         </p>
-        {problem.detail && (
-          <p className="mt-1 select-text break-all font-mono text-[11px] text-text-muted">
-            {problem.detail}
-          </p>
-        )}
-      </div>
-    </div>
+      )}
+    </Notice>
   );
 }
