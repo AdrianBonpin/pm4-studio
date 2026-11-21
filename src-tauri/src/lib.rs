@@ -1,16 +1,18 @@
 //! Tauri command surface for PM4 Studio.
 
 pub mod identity;
+pub mod library;
 pub mod reader;
 pub mod write_guard;
 #[cfg(test)]
 mod test_frames;
 
 use identity::Identity;
+use library::{InsertOutcome, Library, LibraryProblem, LibraryStore, SaveError, Snapshot};
 use reader::{DeviceInfo, Frame, HfCard, LfCard, Reader, REPORT_LEN};
 use serde::Serialize;
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use tauri::{AppHandle, Manager, State};
 
 pub struct AppState {
     reader: Mutex<Option<Reader>>,
@@ -220,6 +222,172 @@ fn send_cmd(
     })
 }
 
+/// Where the library lives: the app data directory Tauri resolves from the
+/// bundle identifier, never a hardcoded path, so a rename of the app moves the
+/// library with it instead of losing it.
+fn library_store(app: &AppHandle) -> Result<LibraryStore, String> {
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("could not resolve the app data directory: {e}"))?;
+    Ok(LibraryStore::new(dir.join("library.json")))
+}
+
+/// Why a library file must not be read or written, in the shape the UI shows.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProblemView {
+    /// "corrupt" | "newerVersion" | "olderVersion" | "unreadable"
+    pub kind: &'static str,
+    pub message: String,
+    pub detail: Option<String>,
+}
+
+impl From<LibraryProblem> for ProblemView {
+    fn from(problem: LibraryProblem) -> Self {
+        let (kind, detail) = match &problem {
+            LibraryProblem::Corrupt { detail } => ("corrupt", Some(detail.clone())),
+            LibraryProblem::NewerVersion { .. } => ("newerVersion", None),
+            LibraryProblem::OlderVersion { .. } => ("olderVersion", None),
+            LibraryProblem::Unreadable { detail } => ("unreadable", Some(detail.clone())),
+        };
+        Self {
+            kind,
+            message: problem.message(),
+            detail,
+        }
+    }
+}
+
+/// The library as the UI renders it. `problem` set means the file was left
+/// alone and nothing may be saved until the user deals with it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryView {
+    pub path: String,
+    /// The schema version this build writes.
+    pub version: u32,
+    pub snapshots: Vec<Snapshot>,
+    pub problem: Option<ProblemView>,
+}
+
+fn loaded_view(store: &LibraryStore, library: Library) -> LibraryView {
+    LibraryView {
+        path: store.path().display().to_string(),
+        version: library.version,
+        snapshots: library.snapshots,
+        problem: None,
+    }
+}
+
+fn refused_view(store: &LibraryStore, problem: LibraryProblem) -> LibraryView {
+    LibraryView {
+        path: store.path().display().to_string(),
+        version: library::SCHEMA_VERSION,
+        snapshots: Vec::new(),
+        problem: Some(problem.into()),
+    }
+}
+
+/// Load the library for writing, or the view that explains why it is read-only.
+fn load_writable(store: &LibraryStore) -> Result<Library, LibraryView> {
+    store.load().map_err(|problem| refused_view(store, problem))
+}
+
+fn commit(store: &LibraryStore, library: &Library) -> Result<(), String> {
+    store.save(library).map_err(|e| match e {
+        SaveError::Refused(problem) => problem.message(),
+        SaveError::Io(detail) => format!("The library could not be saved: {detail}"),
+    })
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveResult {
+    /// "added" | "duplicate" | "refused"
+    pub outcome: &'static str,
+    pub library: LibraryView,
+    /// The Snapshot concerned: the new one, or the one already in the library.
+    pub snapshot: Option<Snapshot>,
+}
+
+/// Read the library. Also works with no Reader attached, which is the point.
+#[tauri::command]
+fn library_load(app: AppHandle) -> Result<LibraryView, String> {
+    let store = library_store(&app)?;
+    Ok(match store.load() {
+        Ok(library) => loaded_view(&store, library),
+        Err(problem) => refused_view(&store, problem),
+    })
+}
+
+/// Save a 125 kHz read as a Snapshot. A read already in the library is reported
+/// as a duplicate instead of being added a second time.
+#[tauri::command]
+fn library_save_lf(
+    app: AppHandle,
+    customer: u8,
+    data32: u32,
+    raw: String,
+    captured_at: String,
+) -> Result<SaveResult, String> {
+    let store = library_store(&app)?;
+    let mut library = match load_writable(&store) {
+        Ok(library) => library,
+        Err(refused) => {
+            return Ok(SaveResult {
+                outcome: "refused",
+                library: refused,
+                snapshot: None,
+            })
+        }
+    };
+
+    match library.add_lf(customer, data32, &raw, &captured_at) {
+        InsertOutcome::Duplicate(existing) => Ok(SaveResult {
+            outcome: "duplicate",
+            library: loaded_view(&store, library),
+            snapshot: Some(existing),
+        }),
+        InsertOutcome::Added(added) => {
+            commit(&store, &library)?;
+            Ok(SaveResult {
+                outcome: "added",
+                library: loaded_view(&store, library),
+                snapshot: Some(added),
+            })
+        }
+    }
+}
+
+/// Rename one Snapshot. The name is user copy, so it is only trimmed.
+#[tauri::command]
+fn library_rename(app: AppHandle, id: String, name: String) -> Result<LibraryView, String> {
+    let store = library_store(&app)?;
+    let mut library = match load_writable(&store) {
+        Ok(library) => library,
+        Err(refused) => return Ok(refused),
+    };
+    if library.rename(&id, &name) {
+        commit(&store, &library)?;
+    }
+    Ok(loaded_view(&store, library))
+}
+
+/// Delete one Snapshot. Permanent, as the spec requires.
+#[tauri::command]
+fn library_delete(app: AppHandle, id: String) -> Result<LibraryView, String> {
+    let store = library_store(&app)?;
+    let mut library = match load_writable(&store) {
+        Ok(library) => library,
+        Err(refused) => return Ok(refused),
+    };
+    if library.remove(&id) {
+        commit(&store, &library)?;
+    }
+    Ok(loaded_view(&store, library))
+}
+
 pub fn run() {
     tauri::Builder::default()
         // Must be the first plugin registered. A second launch raises the
@@ -244,7 +412,11 @@ pub fn run() {
             led_off,
             lf_write,
             raw_send,
-            send_cmd
+            send_cmd,
+            library_load,
+            library_save_lf,
+            library_rename,
+            library_delete
         ])
         .run(tauri::generate_context!())
         .expect("error while running PM4 Studio");
