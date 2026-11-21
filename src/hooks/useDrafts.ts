@@ -16,6 +16,13 @@ export interface DraftsState {
   error: string | null;
   loading: boolean;
   create: (name: string) => Promise<Draft | null>;
+  /**
+   * Create a Draft that already holds `records`, in the order given, and return
+   * it saved. Used when a Tag's Records are loaded into a Draft: the Records
+   * belong to the Draft from the moment it exists, so there is no window in
+   * which an empty Draft is on disk under the tag's name.
+   */
+  createWith: (name: string, records: DraftRecord[]) => Promise<Draft | null>;
   rename: (id: string, name: string) => void;
   setRecords: (id: string, records: DraftRecord[]) => void;
   remove: (id: string) => Promise<void>;
@@ -130,6 +137,41 @@ export function useDrafts(): DraftsState {
     [apply],
   );
 
+  const createWith = useCallback(
+    async (name: string, records: DraftRecord[]): Promise<Draft | null> => {
+      try {
+        const created = await invoke<DraftsView>("draft_create", {
+          name,
+          updatedAt: new Date().toISOString(),
+        });
+        setProblem(created.problem);
+        setError(null);
+        // The store generated the id, so the Draft it just added is the one
+        // this view did not have. Adopting only that leaves every other Draft,
+        // and any edit queued for one, exactly as it is.
+        const known = new Set(draftsRef.current.map((d) => d.id));
+        const added = created.drafts.find((d) => !known.has(d.id));
+        if (!added) {
+          setError("the store did not report the Draft it created");
+          return null;
+        }
+
+        // The Records are written before anything is shown as saved: a Draft
+        // created and left empty would be a worse answer than an error.
+        const filled: Draft = { ...added, records };
+        const saved = await invoke<DraftsView>("draft_save", { draft: filled });
+        setProblem(saved.problem);
+        const stored = saved.drafts.find((d) => d.id === filled.id) ?? filled;
+        apply([...draftsRef.current, stored]);
+        return stored;
+      } catch (e) {
+        setError(String(e));
+        return null;
+      }
+    },
+    [apply],
+  );
+
   const edit = useCallback(
     (id: string, patch: (draft: Draft) => Draft) => {
       const next = draftsRef.current.map((draft) => {
@@ -173,5 +215,5 @@ export function useDrafts(): DraftsState {
     [apply, reload],
   );
 
-  return { drafts, problem, error, loading, create, rename, setRecords, remove, reload };
+  return { drafts, problem, error, loading, create, createWith, rename, setRecords, remove, reload };
 }

@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Section } from "../components/Section";
+import { LoadTagIntoDraft } from "../components/LoadTagIntoDraft";
 import { WriteDraftToTag } from "../components/WriteDraftToTag";
 import { useDrafts } from "../hooks/useDrafts";
 import {
@@ -211,6 +212,13 @@ export function DraftsPage({ connected }: { connected: boolean }) {
           </p>
         )}
       </Section>
+
+      <LoadTagIntoDraft
+        connected={connected}
+        locked={locked}
+        createWith={drafts.createWith}
+        onLoaded={setSelectedId}
+      />
 
       {selected && (
         <Section title="Records" hint={`${DRAFT_NOT_A_TAG_NOTICE} Changes are saved as you edit.`}>
