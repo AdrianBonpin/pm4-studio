@@ -7,6 +7,18 @@
 //! this build can lift, is reported and never overwritten: a clean start on top
 //! of unreadable bytes is data loss.
 //!
+//! **The one exception to that rule: clear-all-saved-data.** A user who asks to
+//! clear every saved thing must be able to do it, including when the library
+//! file is exactly the unreadable file a save would refuse to touch. So there is
+//! one deliberate, user-initiated action that deletes the file rather than
+//! refusing it: the Settings → Data gate that requires the word `clear` to be
+//! typed (see [`crate::clear_data`]). It is an exception to *not destroying* an
+//! unreadable file, and to nothing else: it never writes, it never runs on its
+//! own, and it is unreachable from a save, an import, a migration or a load.
+//! A failed save still refuses and leaves the bytes exactly as they are — clear
+//! is never the fallback that turns a refusal into quiet data loss. Deleting is
+//! not repairing.
+//!
 //! The schema version is a claim about the file's contents, and ADR 0005 makes
 //! it a load-bearing one: an older build refuses a file whose version it does
 //! not understand, instead of deserialising it into a struct that has no room
@@ -47,6 +59,12 @@ use crate::write_outcome::WriteOutcome;
 /// change, and a schema change bumps the version (ADR 0005). Version 1 files are
 /// lifted to 2 on open rather than refused; see [`crate::library_schema`].
 pub const SCHEMA_VERSION: u32 = 2;
+
+/// The library file's name, inside the app data directory.
+///
+/// One name, named once: the store resolves it, and clear-all-saved-data resolves
+/// the same file to remove rather than a second spelling of it.
+pub const FILE_NAME: &str = "library.json";
 
 /// The one serialisation domain that governs the library file.
 ///

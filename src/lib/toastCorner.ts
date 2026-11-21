@@ -108,3 +108,22 @@ export function subscribeToastCorner(listener: () => void): () => void {
 function notifyToastCorner(): void {
   for (const listener of [...listeners]) listener();
 }
+
+/**
+ * Forget the stored corner, falling back to the default.
+ *
+ * This is the clear-all action's half: it removes the key rather than writing the
+ * default over it, because the point is that no choice is stored. The change is
+ * announced, so a rendered corner moves back without a restart.
+ */
+export function resetToastCorner(): void {
+  if (typeof localStorage !== "undefined") {
+    try {
+      localStorage.removeItem(TOAST_CORNER_KEY);
+    } catch {
+      // A storage that refuses to forget leaves the corner where it was; the
+      // clear action's report says the key survived.
+    }
+  }
+  notifyToastCorner();
+}

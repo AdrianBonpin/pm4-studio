@@ -2,6 +2,7 @@
 
 mod atomic_file;
 pub mod author_identity;
+mod clear_data;
 pub mod batch;
 pub mod blank;
 pub mod console;
@@ -968,15 +969,191 @@ fn console_capability() -> console::CapabilityView {
     console::capability_view(console::CAPABILITY)
 }
 
-/// Where the library lives: the app data directory Tauri resolves from the
-/// bundle identifier, never a hardcoded path, so a rename of the app moves the
-/// library with it instead of losing it.
-fn library_store(app: &AppHandle) -> Result<LibraryStore, String> {
-    let dir = app
-        .path()
+/// The app data directory Tauri resolves from the bundle identifier, never a
+/// hardcoded path, so a rename of the app moves everything it saved with it
+/// instead of losing it.
+///
+/// This is the only place the directory is resolved, so the store and the clear
+/// action cannot disagree about where this app keeps its files.
+fn app_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
         .app_data_dir()
-        .map_err(|e| format!("could not resolve the app data directory: {e}"))?;
-    Ok(LibraryStore::new(dir.join("library.json")))
+        .map_err(|e| format!("could not resolve the app data directory: {e}"))
+}
+
+/// Where the library lives: the one file name inside the app data directory.
+fn library_store(app: &AppHandle) -> Result<LibraryStore, String> {
+    Ok(LibraryStore::new(app_data_dir(app)?.join(library::FILE_NAME)))
+}
+
+/// One file the clear action removed, in the shape the webview reports.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedTargetView {
+    /// "libraryFile" | "staleTemp"
+    pub target: &'static str,
+    pub path: String,
+    pub bytes: u64,
+}
+
+/// The file that stopped the clear action, and why it could not be removed.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedTargetView {
+    /// "libraryFile" | "staleTemp"
+    pub target: &'static str,
+    pub path: String,
+    pub reason: String,
+}
+
+/// What clearing every file this app saved came to.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearView {
+    /// True only when every target that existed was removed.
+    pub cleared: bool,
+    /// Exactly what was removed: never a target that was not there.
+    pub removed: Vec<RemovedTargetView>,
+    /// The part that could not be removed. `None` when `cleared` is true.
+    pub blocked: Option<BlockedTargetView>,
+}
+
+impl From<clear_data::Removed> for RemovedTargetView {
+    fn from(removed: clear_data::Removed) -> Self {
+        Self {
+            target: removed.kind.id(),
+            path: removed.path.display().to_string(),
+            bytes: removed.bytes,
+        }
+    }
+}
+
+/// Remove every file this app has saved: the library file, and the temporary
+/// sibling a save may have left beside it.
+///
+/// It takes **no path from input**. The two targets are resolved here from the
+/// app data directory, so there is no argument through which the webview (or
+/// anything else driving this command) can name a file outside this app's own
+/// storage. What is removed, and what refuses the action, is
+/// [`clear_data::clear`]'s to decide; this only resolves and reports.
+///
+/// It runs inside the library's serialisation domain, so it cannot race a save
+/// that is reading and replacing the same file. It is reachable only from the
+/// Settings → Data gate that requires the word `clear`: no save, load, import or
+/// migration calls it, which is what keeps a failed write from turning into a
+/// quiet deletion (see the exception recorded in [`library`]).
+#[tauri::command]
+fn clear_all_saved_data(app: AppHandle) -> Result<ClearView, String> {
+    let dir = app_data_dir(&app)?;
+    let scope = clear_data::ClearScope::resolve(&dir);
+    let outcome = library::serialised(|domain| clear_data::clear(domain, &scope));
+    Ok(match outcome {
+        clear_data::ClearOutcome::Cleared { removed } => ClearView {
+            cleared: true,
+            removed: removed.into_iter().map(RemovedTargetView::from).collect(),
+            blocked: None,
+        },
+        clear_data::ClearOutcome::Refused { blocked, removed } => ClearView {
+            cleared: false,
+            removed: removed.into_iter().map(RemovedTargetView::from).collect(),
+            blocked: Some(BlockedTargetView {
+                target: blocked.kind.id(),
+                path: blocked.path.display().to_string(),
+                reason: blocked.reason,
+            }),
+        },
+    })
+}
+
+/// Which file a reveal should hand to the file manager.
+///
+/// A library nobody has saved yet has no file to select, so the directory it
+/// will be written into is revealed instead: the place is the answer either way,
+/// and revealing a path that does not exist fails.
+fn reveal_target(path: &Path) -> &Path {
+    match path.is_file() {
+        true => path,
+        false => path.parent().unwrap_or(path),
+    }
+}
+
+/// Show the library file in the system file manager.
+///
+/// Takes no path: it reveals the one file the store resolved, so a caller
+/// cannot use it to open something else. The command returns the path it
+/// revealed, because every platform's file manager may be slow to appear and
+/// the page can still state where the file is.
+#[tauri::command]
+fn library_reveal(app: AppHandle) -> Result<String, String> {
+    let store = library_store(&app)?;
+    let target = reveal_target(store.path()).to_path_buf();
+    reveal_in_file_manager(&target).map_err(|e| {
+        format!(
+            "the file manager could not be opened for {}: {e}",
+            target.display()
+        )
+    })?;
+    Ok(store.path().display().to_string())
+}
+
+/// Open the system file manager at one path, selecting it where the platform
+/// can. Spawned, not awaited: the file manager is not this app's child process.
+#[cfg(target_os = "macos")]
+fn reveal_in_file_manager(path: &Path) -> std::io::Result<()> {
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_in_file_manager(path: &Path) -> std::io::Result<()> {
+    std::process::Command::new("explorer")
+        .arg(if path.is_dir() {
+            path.as_os_str().to_owned()
+        } else {
+            format!("/select,{}", path.display()).into()
+        })
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn reveal_in_file_manager(path: &Path) -> std::io::Result<()> {
+    let dir = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    };
+    std::process::Command::new("xdg-open")
+        .arg(dir)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reveal_target;
+
+    #[test]
+    fn a_reveal_selects_the_library_file_when_it_exists() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        std::fs::write(&path, b"{}").expect("library");
+
+        assert_eq!(reveal_target(&path), path, "the file itself is selected");
+    }
+
+    #[test]
+    fn a_reveal_of_a_library_nobody_has_saved_shows_its_directory() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+
+        // Revealing a path that does not exist fails on every platform, and the
+        // answer the user wants is where it will be.
+        assert_eq!(reveal_target(&path), dir.path());
+    }
 }
 
 /// Why a library file must not be read or written, in the shape the UI shows.
@@ -1537,7 +1714,9 @@ pub fn run() {
             library_export,
             library_import_preview,
             library_import_apply,
-            library_pick_file
+            library_pick_file,
+            library_reveal,
+            clear_all_saved_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running PM4 Studio");

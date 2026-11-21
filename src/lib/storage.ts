@@ -9,7 +9,15 @@ export type SavedTag = {
   savedAt: string;
 };
 
-const KEY = "pm4studio.savedTags";
+/**
+ * The legacy saved-reads store's key. Exported because clearing saved data has to
+ * remove this store by name: it is the one thing on the machine written before
+ * the library file existed, and leaving it behind would grow the library back on
+ * the next launch.
+ */
+export const LEGACY_STORE_KEY = "pm4studio.savedTags";
+
+const KEY = LEGACY_STORE_KEY;
 
 type LegacyTag = Partial<SavedTag> & { note?: string };
 

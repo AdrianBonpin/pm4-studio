@@ -12,7 +12,6 @@ import { describeDeviceFailure } from "../lib/readerIdentity";
 import {
   EMPTY_LIBRARY_DETAIL,
   EMPTY_LIBRARY_TITLE,
-  LIBRARY_PLAINTEXT_NOTICE,
   draftIsDirty,
   draftOf,
   filterSnapshots,
@@ -26,16 +25,8 @@ import {
   confirmedCopiesLabel,
   writeNotice,
 } from "../lib/writeOutcome";
-import {
-  describeExport,
-  describeImportApplied,
-  describeImportPreview,
-  nothingToAdd,
-  suggestedExportName,
-} from "../lib/libraryFiles";
 import { DraftsPage } from "./DraftsPage";
 import type { LibraryState } from "../hooks/useLibrary";
-import type { ImportPreview } from "../lib/libraryFiles";
 import type { Snapshot, SnapshotDraft, SnapshotOrder } from "../lib/library";
 import type { WriteResult } from "../types";
 
@@ -67,8 +58,11 @@ type Collection = "snapshots" | "drafts";
  */
 export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
   const [collection, setCollection] = useState<Collection>("snapshots");
-  const { view, error, loading, edit, remove, pickPath, exportTo, previewImport, applyImport, reload } =
-    library;
+  // The library's own file, its export and import, and the action that clears
+  // everything saved are Settings → Data: this page browses what is in the
+  // library, and `reload` is here only because watching a Snapshot's copy count
+  // can change the file underneath the list.
+  const { view, error, loading, edit, remove, reload } = library;
 
   /**
    * Which Snapshot the pane is showing.
@@ -82,13 +76,6 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
   const [picked, setPicked] = useState<string | null | undefined>(undefined);
   const [query, setQuery] = useState("");
   const [order, setOrder] = useState<SnapshotOrder>("name");
-
-  // Export and import. The chosen path is held only until the import is applied
-  // or cancelled; nothing is written before that.
-  const [fileBusy, setFileBusy] = useState(false);
-  const [fileNote, setFileNote] = useState<{ text: string; path?: string } | null>(null);
-  const [importPath, setImportPath] = useState<string | null>(null);
-  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
 
   const all = view?.snapshots ?? [];
   // One pass over the Snapshots already in the view per keystroke, reusing their
@@ -118,60 +105,6 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
     // The Snapshot that was open is gone, so the pane goes back to opening the
     // first one rather than pointing at something that no longer exists.
     setPicked(undefined);
-  };
-
-  const resetImport = () => {
-    setImportPath(null);
-    setImportPreview(null);
-  };
-
-  const exportLibrary = async () => {
-    setFileNote(null);
-    resetImport();
-    setFileBusy(true);
-    try {
-      const path = await pickPath("save", suggestedExportName(new Date()));
-      // Cancelled: nothing was written, so there is nothing to report.
-      if (!path) return;
-      const result = await exportTo(path);
-      if (result) setFileNote({ text: describeExport(result), path: result.path });
-    } finally {
-      setFileBusy(false);
-    }
-  };
-
-  const chooseImport = async () => {
-    setFileNote(null);
-    resetImport();
-    setFileBusy(true);
-    try {
-      const path = await pickPath("open");
-      // Cancelled: the library has not been read or written.
-      if (!path) return;
-      const preview = await previewImport(path);
-      if (preview) {
-        setImportPath(path);
-        setImportPreview(preview);
-      }
-    } finally {
-      setFileBusy(false);
-    }
-  };
-
-  const confirmImport = async () => {
-    if (!importPath) return;
-    setFileBusy(true);
-    try {
-      const result = await applyImport(importPath);
-      if (result) {
-        // The merge keeps every Snapshot already here, so an import never
-        // renames or overwrites one: the applied note says what was added.
-        setFileNote({ text: describeImportApplied(result.preview) });
-        resetImport();
-      }
-    } finally {
-      setFileBusy(false);
-    }
   };
 
   // Drafts, as it stands, inside the Collection it now belongs to. Ticket 10
@@ -327,71 +260,9 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
         )}
       </Section>
 
-      <Section
-        title="Export and import"
-        hint="The whole library in one file: back it up, or move it to another machine. An import adds what is missing and leaves every entry already here exactly as it is."
-      >
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="secondary"
-            disabled={problem !== null || fileBusy}
-            onClick={() => void exportLibrary()}
-          >
-            Export library…
-          </Button>
-          <Button
-            variant="secondary"
-            disabled={problem !== null || fileBusy}
-            onClick={() => void chooseImport()}
-          >
-            Import library…
-          </Button>
-        </div>
-
-        {importPreview && importPath && (
-          <div className="mt-4 flex flex-col gap-3 border-l-2 border-accent bg-accent/5 px-3 py-3">
-            <p className="text-sm leading-relaxed text-text">
-              {describeImportPreview(importPreview)}
-            </p>
-            <code className="select-text break-all font-mono text-[11px] text-text-muted">
-              {importPath}
-            </code>
-            <p className="text-xs leading-relaxed text-text-muted">
-              Nothing has been written yet. Add to library applies the import; Cancel leaves the
-              library exactly as it is.
-            </p>
-            <div className="flex gap-2">
-              <Button
-                variant="primary"
-                disabled={fileBusy || nothingToAdd(importPreview)}
-                onClick={() => void confirmImport()}
-              >
-                {fileBusy ? "Adding…" : "Add to library"}
-              </Button>
-              <Button variant="ghost" disabled={fileBusy} onClick={resetImport}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {fileNote && (
-          <div className="mt-3">
-            <p className="text-xs leading-relaxed text-ok">{fileNote.text}</p>
-            {fileNote.path && (
-              <code className="mt-1 block select-text break-all font-mono text-[11px] text-text-muted">
-                {fileNote.path}
-              </code>
-            )}
-          </div>
-        )}
-      </Section>
-
-      <Section title="Where this is kept" hint={LIBRARY_PLAINTEXT_NOTICE}>
-        <code className="block select-text break-all rounded-lg border border-border bg-canvas px-3 py-2 font-mono text-xs leading-relaxed text-text-muted">
-          {view?.path ?? "the app data directory"}
-        </code>
-      </Section>
+      {/* The whole library's file, its export and import, and clearing saved
+          data are Settings → Data: they act on the library rather than on what is
+          being browsed. This page is for finding things. */}
     </div>
   );
 }
