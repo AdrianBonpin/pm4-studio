@@ -90,6 +90,39 @@ export type BlankResult = {
   message: string | null;
 };
 
+/** What became of one attempt in a Batch Clone.
+ *
+ * `skipped` belongs to the batch path: the Tag in the write position already
+ * presents the Identity being written, so the guard refused and nothing was
+ * written. It is the case a batch hits by leaving a written Tag on the Reader,
+ * and it is never a confirmed copy — otherwise one Tag could be counted twice. */
+export type BatchAttemptOutcome =
+  | "verified"
+  | "skipped"
+  | "unverified"
+  | "refused"
+  | "failed";
+
+/** What became of one attempt in a Batch Clone, as the backend reports it.
+ *
+ * One attempt, not a run: the Identity is held by the webview and passed back in
+ * for each Blank, and this is what came of that one write. */
+export type BatchAttemptResult = {
+  /** The Identity that was written, from the source read once at the start. */
+  customer: number;
+  data32: number;
+  /** See `src/lib/batchClone.ts` for the wording of each outcome. */
+  outcome: BatchAttemptOutcome;
+  /** Why this attempt did not confirm a copy, when it did not. */
+  message: string | null;
+  /** What the Tag read as for this attempt, when it read as anything. */
+  readback: LfCard | null;
+  /** Confirmed copies of this Identity after the attempt; null = no Snapshot. */
+  confirmedCopies: number | null;
+  /** Set when the count could not be written to the library file. */
+  countProblem: string | null;
+};
+
 export type RawResponse = {
   sent: string;
   cmd: number;
