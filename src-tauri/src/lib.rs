@@ -1,7 +1,12 @@
 //! Tauri command surface for PM4 Studio.
 
+pub mod identity;
 pub mod reader;
+pub mod write_guard;
+#[cfg(test)]
+mod test_frames;
 
+use identity::Identity;
 use reader::{DeviceInfo, Frame, HfCard, LfCard, Reader, REPORT_LEN};
 use serde::Serialize;
 use std::sync::Mutex;
@@ -84,7 +89,7 @@ fn device_info(state: State<'_, AppState>) -> Result<Option<DeviceInfo>, String>
     Ok(slot.as_ref().map(|r| r.info.clone()))
 }
 
-/// One 125 kHz poll. `None` = no badge latched on this attempt.
+/// One 125 kHz poll. `None` = no tag latched on this attempt.
 #[tauri::command]
 fn lf_poll(state: State<'_, AppState>) -> Result<Option<LfCard>, String> {
     with_reader(&state, |r| {
@@ -121,18 +126,23 @@ pub struct WriteResult {
     pub verified: bool,
 }
 
-/// Write an EM4100 identity onto the blank 125 kHz tag currently on the reader.
+/// Write an Identity onto the 125 kHz tag currently on the reader.
+///
+/// The Identity is validated before any device access, and the write itself is
+/// the guard's decision: an unreadable tag or a tag that already presents this
+/// Identity is refused, per ADR 0001.
 #[tauri::command]
 fn lf_write(
     state: State<'_, AppState>,
     customer: u8,
     data32: u32,
 ) -> Result<WriteResult, String> {
+    let identity = Identity::new(customer, data32).map_err(|e| e.to_string())?;
     with_reader(&state, |r| {
-        let readback = r.lf_write_verified(customer, data32)?;
+        let readback = r.lf_write_verified(identity)?;
         let verified = readback
             .as_ref()
-            .map(|c| c.customer == customer && c.data32 == data32)
+            .map(|c| c.identity() == identity)
             .unwrap_or(false);
         Ok(WriteResult {
             customer,
