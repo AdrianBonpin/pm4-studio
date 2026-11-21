@@ -12,6 +12,12 @@ export interface DraftsState {
   drafts: Draft[];
   /** Set when the library file must not be written to; saving is turned off. */
   problem: LibraryProblem | null;
+  /**
+   * Set when a file written by an older schema was lifted but the lift could
+   * not be written back. The Drafts are whole and saving is on, so this is a
+   * warning rather than a lock.
+   */
+  migrationWarning: string | null;
   /** A call that failed outright, as opposed to a reported file problem. */
   error: string | null;
   loading: boolean;
@@ -39,6 +45,7 @@ export interface DraftsState {
 export function useDrafts(): DraftsState {
   const [drafts, setDrafts] = useState<Draft[]>([]);
   const [problem, setProblem] = useState<LibraryProblem | null>(null);
+  const [migrationWarning, setMigrationWarning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -101,6 +108,7 @@ export function useDrafts(): DraftsState {
       const view = await invoke<DraftsView>("drafts_load");
       apply(view.drafts);
       setProblem(view.problem);
+      setMigrationWarning(view.migrationWarning);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -215,5 +223,17 @@ export function useDrafts(): DraftsState {
     [apply, reload],
   );
 
-  return { drafts, problem, error, loading, create, createWith, rename, setRecords, remove, reload };
+  return {
+    drafts,
+    problem,
+    migrationWarning,
+    error,
+    loading,
+    create,
+    createWith,
+    rename,
+    setRecords,
+    remove,
+    reload,
+  };
 }

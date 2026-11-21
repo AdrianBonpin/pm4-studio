@@ -16,12 +16,12 @@ only a v1-era build can demonstrate a v2 file being refused, so the mechanism is
 with a fixture claiming one version above what the build understands.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/7
-**Status:** ready
+**Status:** done
 
-- [ ] A file claiming a version above what the build understands is refused and not rewritten.
-- [ ] A version 1 file is migrated on first open with Snapshots and Drafts preserved in order.
-- [ ] After a successful open the file on disk claims version 2.
-- [ ] Migration completes before any edit can be applied to the library.
-- [ ] A failed migration write is reported and the library stays usable in memory.
-- [ ] A library reloads with its Drafts unchanged after a save and restart.
-- [ ] The migration write takes the single serialisation domain from ticket 03.
+- [x] A file claiming a version above what the build understands is refused and not rewritten.
+- [x] A version 1 file is migrated on first open with Snapshots and Drafts preserved in order.
+- [x] After a successful open the file on disk claims version 2.
+- [x] Migration completes before any edit can be applied to the library.
+- [x] A failed migration write is reported and the library stays usable in memory.
+- [x] A library reloads with its Drafts unchanged after a save and restart.
+- [x] The migration write takes the single serialisation domain from ticket 03.

@@ -41,7 +41,7 @@ use serde_json::{Map, Value};
 use crate::identity::{Identity, MAX_DATA32};
 use crate::library::{
     serialised, Domain, IdentityFields, InsertOutcome, Kind, Library, LibraryProblem, LibraryStore,
-    SaveError, Snapshot,
+    Open, SaveError, Snapshot,
 };
 
 /// The keys the old store wrote. A key outside this list has no home in a
@@ -151,7 +151,13 @@ fn migrate_in(
     // either this migration's committed output or the user's own library, and
     // neither may be written into a second time.
     if store.path().exists() {
-        let library = store.load().map_err(MigrationError::Refused)?;
+        // Opened, not merely read: a library written by an older schema is
+        // lifted here too, so the old-store migration cannot become the one
+        // path that leaves a version 1 file claiming version 1.
+        let library = match store.open_in(domain) {
+            Open::Opened { library, .. } => library,
+            Open::Refused(problem) => return Err(MigrationError::Refused(problem)),
+        };
         return Ok(Migration::untouched(
             MigrationStatus::LibraryExists,
             library,

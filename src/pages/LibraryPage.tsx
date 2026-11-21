@@ -78,6 +78,7 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
     [all, query, order],
   );
   const problem = view?.problem ?? null;
+  const migrationWarning = view?.migrationWarning ?? null;
   const searching = query.trim().length > 0;
   const notice = writeResult ? writeNotice(writeResult) : null;
 
@@ -191,6 +192,21 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
             : `${all.length} ${all.length === 1 ? "Snapshot" : "Snapshots"} — click a name to rename it or add a note.`
         }
       >
+        {migrationWarning && (
+          <div className="mb-4 flex items-start gap-3 border-l-2 border-warn bg-warn/5 px-3 py-2">
+            <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warn" />
+            <div className="min-w-0">
+              <p className="text-sm text-warn">
+                This library was upgraded from an older version
+              </p>
+              <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
+                {migrationWarning} Saving is still on: a save writes the upgraded library and
+                corrects the version the file claims.
+              </p>
+            </div>
+          </div>
+        )}
+
         {problem && (
           <div className="mb-4 flex items-start gap-3 border-l-2 border-err bg-err/5 px-3 py-2">
             <AlertTriangle size={15} className="mt-0.5 shrink-0 text-err" />

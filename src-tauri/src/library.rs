@@ -2,9 +2,18 @@
 //!
 //! The file is replaced atomically — a sibling temp file is written and flushed
 //! to disk, then renamed over the library — so an interrupted save leaves the
-//! previous library exactly as it was. A file that cannot be read, or that was
-//! written by a newer schema version, is reported and never overwritten: a
-//! clean start on top of unreadable bytes is data loss.
+//! previous library exactly as it was. A file that cannot be read, that was
+//! written by a newer schema version, or that is older than the oldest schema
+//! this build can lift, is reported and never overwritten: a clean start on top
+//! of unreadable bytes is data loss.
+//!
+//! The schema version is a claim about the file's contents, and ADR 0005 makes
+//! it a load-bearing one: an older build refuses a file whose version it does
+//! not understand, instead of deserialising it into a struct that has no room
+//! for the newer keys and then writing the file back without them. A file one
+//! version behind is lifted on open — see [`LibraryStore::open`] and
+//! [`crate::library_schema`] — so the file's stated version agrees with what it
+//! holds before anything can edit it.
 //!
 //! This module owns the **serialisation domain**: the one lock every write to
 //! the file is performed under, whoever performs it. A save, an import, an
@@ -25,7 +34,11 @@ use crate::identity::Identity;
 use crate::write_outcome::WriteOutcome;
 
 /// The schema version this build writes and understands.
-pub const SCHEMA_VERSION: u32 = 1;
+///
+/// 2 since Drafts were added to the file: a new persisted key is a schema
+/// change, and a schema change bumps the version (ADR 0005). Version 1 files are
+/// lifted to 2 on open rather than refused; see [`crate::library_schema`].
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Suffix of the staging file a write stages before renaming it into place.
 ///
@@ -130,8 +143,10 @@ pub struct Library {
     pub snapshots: Vec<Snapshot>,
     /// Drafts live beside the Snapshots in the same file but in their own
     /// collection: a Snapshot is a record of one read of one Tag, a Draft is an
-    /// editable NDEF message attached to no Tag at all. Defaulted so a file
-    /// written before Drafts existed still reads, at the same schema version.
+    /// editable NDEF message attached to no Tag at all. Defaulted so that a v1
+    /// file — written before Drafts existed — still deserialises once it has
+    /// been lifted; the lift is what makes its absence legitimate, not the
+    /// default on its own (ADR 0005).
     #[serde(default)]
     pub drafts: Vec<Draft>,
 }
@@ -277,7 +292,11 @@ pub enum LibraryProblem {
     Corrupt { detail: String },
     /// Written by a newer schema; rewriting it would downgrade the user's data.
     NewerVersion { found: u64, supported: u32 },
-    /// An older schema this build does not read.
+    /// Older than the oldest schema this build can lift, so this build does not
+    /// read it. It no longer fires for a version this build carries a migration
+    /// from: those are lifted on open. It stays for a file older than the oldest
+    /// migration, because reporting such a file as `Corrupt` would tell the user
+    /// their data is damaged when it is merely old.
     OlderVersion { found: u64, supported: u32 },
     /// The file exists but cannot be read at all, so its contents are unknown.
     Unreadable { detail: String },
@@ -316,6 +335,68 @@ impl LibraryProblem {
     }
 }
 
+/// One library file, decoded.
+///
+/// `library` is always this build's shape: a file one version behind has
+/// already been lifted, so no caller has to know which version it came from.
+#[derive(Debug, Clone, PartialEq)]
+struct Read {
+    library: Library,
+    /// The version the file itself claimed, before any lift.
+    found: u32,
+    /// The file as this build would write it, when it had to be lifted. `None`
+    /// means the file already claims this build's version and must not be
+    /// rewritten just for having been read.
+    lifted: Option<serde_json::Value>,
+}
+
+/// What opening the library came to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Open {
+    /// The library is readable, and any lift of an older file has been attempted.
+    Opened {
+        /// The library as this build reads it — lifted, if the file was older.
+        library: Library,
+        /// Set when the file was written by an older schema and was lifted.
+        migration: Option<Lifted>,
+    },
+    /// The file is not one this build may read, and nothing was written.
+    Refused(LibraryProblem),
+}
+
+/// What lifting an older file to this build's schema came to.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Lifted {
+    /// The file now claims the current schema. `from` is what it claimed before.
+    Written { from: u32 },
+    /// The lift could not be written, so the file still claims `from`.
+    ///
+    /// A failed write, not a failed read: the library was read whole, so the
+    /// app continues with it rather than refusing the user's own data. The next
+    /// successful save writes the lift as part of the save.
+    Unwritten { from: u32, detail: String },
+}
+
+impl Lifted {
+    /// What to tell the user, when there is anything to tell them.
+    ///
+    /// A written lift is silent — the file is correct and nobody needs to know
+    /// it was once older. One that could not be written says so, and says what
+    /// the risk now is and that the library is still usable.
+    pub fn message(&self) -> Option<String> {
+        match self {
+            Lifted::Written { .. } => None,
+            Lifted::Unwritten { from, detail } => Some(format!(
+                "This library was written for schema {from} and has been read as schema {}. \
+                 It could not be rewritten: {detail}. Everything in it is open and usable, \
+                 and saving will correct the file — until then the file still says schema \
+                 {from}, so an older version of PM4 Studio could overwrite it.",
+                SCHEMA_VERSION
+            )),
+        }
+    }
+}
+
 /// The library file on disk, addressed by path so it is testable.
 pub struct LibraryStore {
     path: PathBuf,
@@ -330,16 +411,87 @@ impl LibraryStore {
         &self.path
     }
 
-    /// Load the library, or report why the file must not be touched.
+    /// Open the library as the app does: read it, lift it to this build's
+    /// schema if it was written by an older one, and — when it was lifted —
+    /// write the lift back before returning.
+    ///
+    /// The write is eager, and that is deliberate (ADR 0005). A v1 file holds a
+    /// `drafts` key the v1 format never had; left alone it keeps claiming v1,
+    /// and an older build that meets it deserialises it into a struct with no
+    /// room for Drafts and writes it back without them. Correcting the version
+    /// claim at the earliest possible moment is what closes that window, and the
+    /// earliest possible moment is this one.
+    ///
+    /// A lift that cannot be written is reported, not fatal: the library read
+    /// fine, so the app continues with it in memory and the next save corrects
+    /// the file. Only a file this build must not read is refused.
+    pub fn open(&self) -> Open {
+        serialised(|domain| self.open_in(domain))
+    }
+
+    /// Opening, inside the domain the caller holds.
+    pub(crate) fn open_in(&self, domain: &Domain) -> Open {
+        let read = match self.read() {
+            Ok(read) => read,
+            Err(problem) => return Open::Refused(problem),
+        };
+        let Some(document) = read.lifted else {
+            return Open::Opened {
+                library: read.library,
+                migration: None,
+            };
+        };
+        let migration = match self.write_lift(domain, &document) {
+            Ok(()) => Lifted::Written { from: read.found },
+            Err(detail) => Lifted::Unwritten {
+                from: read.found,
+                detail,
+            },
+        };
+        Open::Opened {
+            library: read.library,
+            migration: Some(migration),
+        }
+    }
+
+    /// Read the library, without writing anything.
+    ///
+    /// An older file is lifted in memory so every caller sees this build's
+    /// shape, but the file itself is left alone: this is the read for a file
+    /// this build did not write — an import source, an export — and for reads
+    /// inside the domain that are about to write anyway. Opening the user's own
+    /// library is [`open`](Self::open), which also corrects an older file's
+    /// version claim.
     pub fn load(&self) -> Result<Library, LibraryProblem> {
+        self.read().map(|read| read.library)
+    }
+
+    /// The read itself: the bytes, decoded and lifted.
+    fn read(&self) -> Result<Read, LibraryProblem> {
         match fs::read(&self.path) {
             Ok(bytes) => parse_library(&bytes),
             // A missing file is a library nobody has written to yet.
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Library::empty()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Read {
+                library: Library::empty(),
+                found: SCHEMA_VERSION,
+                lifted: None,
+            }),
             Err(e) => Err(LibraryProblem::Unreadable {
                 detail: e.to_string(),
             }),
         }
+    }
+
+    /// Write a lifted document over the file, inside the domain.
+    ///
+    /// The document is written as it stands rather than round-tripped through
+    /// [`Library`], so a key this build does not model survives the lift instead
+    /// of being dropped by the struct on the way out. The staging path and the
+    /// rename are the store's own — [`write_atomically`] — so a lift is as
+    /// atomic as every other write, and there is still one writer at a time.
+    fn write_lift(&self, domain: &Domain, document: &serde_json::Value) -> Result<(), String> {
+        let bytes = serde_json::to_vec_pretty(document).map_err(|e| e.to_string())?;
+        write_atomically(domain, &self.path, &bytes).map_err(|e| e.to_string())
     }
 
     /// Replace the library file atomically.
@@ -379,7 +531,13 @@ impl LibraryStore {
         change: impl FnOnce(&mut Library) -> R,
     ) -> Result<(Library, R), SaveError> {
         serialised(|domain| {
-            let mut library = self.load().map_err(SaveError::Refused)?;
+            // Opening is part of the same step, so a lift of an older file is
+            // written before `change` runs: no edit is ever applied to a
+            // library whose file is still about to be rewritten.
+            let mut library = match self.open_in(domain) {
+                Open::Opened { library, .. } => library,
+                Open::Refused(problem) => return Err(SaveError::Refused(problem)),
+            };
             let before = library.clone();
             let result = change(&mut library);
             if library != before {
@@ -393,7 +551,7 @@ impl LibraryStore {
     pub(crate) fn replace(&self, domain: &Domain, library: &Library) -> Result<(), SaveError> {
         // Never replace a file this build cannot read: the bytes on disk may be
         // the user's only copy, and a clean start would destroy them.
-        if let Err(problem) = self.load() {
+        if let Err(problem) = self.read() {
             return Err(SaveError::Refused(problem));
         }
         let staged = self
@@ -649,8 +807,12 @@ impl Library {
 }
 
 /// Decode one library file, deciding first whether this build may read it at all.
-
-fn parse_library(bytes: &[u8]) -> Result<Library, LibraryProblem> {
+///
+/// The version is decided before anything is deserialised, because the answer
+/// changes what is safe to do with the bytes: a file above this build's version
+/// is refused untouched, one below is lifted, and only a file at this build's
+/// version is read as it stands.
+fn parse_library(bytes: &[u8]) -> Result<Read, LibraryProblem> {
     let value: serde_json::Value =
         serde_json::from_slice(bytes).map_err(|e| LibraryProblem::Corrupt {
             detail: e.to_string(),
@@ -666,14 +828,22 @@ fn parse_library(bytes: &[u8]) -> Result<Library, LibraryProblem> {
             supported: SCHEMA_VERSION,
         });
     }
-    if found < u64::from(SCHEMA_VERSION) {
-        return Err(LibraryProblem::OlderVersion {
-            found,
-            supported: SCHEMA_VERSION,
-        });
-    }
-    serde_json::from_value(value).map_err(|e| LibraryProblem::Corrupt {
-        detail: e.to_string(),
+    let found = u32::try_from(found).map_err(|_| LibraryProblem::Corrupt {
+        detail: "the file's schema version is out of range".to_string(),
+    })?;
+
+    let document = match found {
+        current if current == SCHEMA_VERSION => value,
+        older => crate::library_schema::lift_to_current(value, older)?,
+    };
+    let library =
+        serde_json::from_value(document.clone()).map_err(|e| LibraryProblem::Corrupt {
+            detail: e.to_string(),
+        })?;
+    Ok(Read {
+        library,
+        found,
+        lifted: (found != SCHEMA_VERSION).then_some(document),
     })
 }
 
@@ -977,14 +1147,28 @@ mod tests {
 
     #[test]
     fn a_file_from_an_older_schema_is_reported_rather_than_guessed_at() {
+        // `OlderVersion` no longer fires for v1: v1 is lifted (see ADR 0005). It
+        // now means "older than the oldest migration this build carries", which
+        // is a file this build cannot walk up from. It is refused as old rather
+        // than reported as damaged, because nothing about it is damaged.
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("library.json");
-        fs::write(&path, br#"{"version": 0, "snapshots": []}"#).expect("write");
+        let beyond = br#"{"version": 0, "snapshots": []}"#;
+        fs::write(&path, beyond).expect("write");
 
         assert!(matches!(
             LibraryStore::new(&path).load(),
             Err(LibraryProblem::OlderVersion { found: 0, .. })
         ));
+        assert!(matches!(
+            LibraryStore::new(&path).open(),
+            Open::Refused(LibraryProblem::OlderVersion { found: 0, .. })
+        ));
+        assert_eq!(
+            fs::read(&path).expect("read the file"),
+            beyond,
+            "a file this build cannot lift is left exactly as it is"
+        );
     }
 
     #[test]
@@ -1219,7 +1403,7 @@ mod tests {
         library.add_hf("04 A2 2B 3A 5C 6D 80", "00 01 02", CAPTURED_AT);
 
         let bytes = serde_json::to_vec(&library).expect("encode");
-        assert_eq!(parse_library(&bytes), Ok(library));
+        assert_eq!(parse_library(&bytes).map(|read| read.library), Ok(library));
     }
 
     // Ticket 04: the name and note a user gives a Snapshot are the only editable
@@ -1645,10 +1829,11 @@ mod tests {
     }
 
     #[test]
-    fn a_library_file_written_before_drafts_existed_still_reads() {
-        // The shape this build has always written: snapshots and a version, no
-        // drafts. Reading it must not fail, and the schema version must not
-        // move, or every existing library would be refused as an old one.
+    fn a_library_file_written_before_drafts_existed_reads_as_this_builds_schema() {
+        // The shape the first build wrote: snapshots and a version, no drafts.
+        // Reading it must not fail — but it is a version 1 file, and ADR 0005
+        // says a version 1 file is lifted rather than read as if it were
+        // current. Reading alone writes nothing; opening is what rewrites it.
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("library.json");
         fs::write(
@@ -1662,12 +1847,19 @@ mod tests {
         let library = LibraryStore::new(&path)
             .load()
             .expect("an older shape still reads");
-        assert_eq!(library.version, SCHEMA_VERSION);
+        assert_eq!(library.version, SCHEMA_VERSION, "lifted in memory");
         assert_eq!(library.snapshots.len(), 1);
         assert_eq!(library.snapshots[0].name, "Front door");
         assert_eq!(library.drafts, vec![], "no drafts yet");
+        assert_eq!(
+            fs::read(&path).expect("read the file"),
+            br#"{"version": 1, "snapshots": [{"id": "55 00 84 82 12", "name": "Front door",
+                 "note": "", "kind": "LF", "capturedAt": "2026-11-21T09:30:00.000Z",
+                 "writeCount": 0}]}"#,
+            "a read is not a write: the file is left alone until it is opened"
+        );
 
-        // And it may be written again, still at the version this build reads.
+        // Once it is written again it claims the version this build writes.
         LibraryStore::new(&path).save(&library).expect("save");
         assert_eq!(
             LibraryStore::new(&path).load().expect("reload").version,
@@ -1802,6 +1994,335 @@ mod tests {
 
         // And what this build writes, this build reads back unchanged.
         let bytes = serde_json::to_vec(&library).expect("encode");
-        assert_eq!(parse_library(&bytes), Ok(library));
+        assert_eq!(parse_library(&bytes).map(|read| read.library), Ok(library));
+    }
+
+    // Ticket 04 / ADR 0005: the schema version is 2, and a version 1 file is
+    // lifted on the first successful open — eagerly, before the user can edit
+    // anything — so the file's stated version agrees with its contents at the
+    // earliest moment it can. The protection that failed was never the refusal
+    // to rewrite a newer file; it was that nothing ever declared the file newer.
+
+    /// A library file exactly as the version 1 build wrote it — the build that
+    /// added Drafts and left the version at 1. Fixtures for the migration are
+    /// written in that build's own shape and key order, because a migration
+    /// proven against a shape this build invented proves nothing.
+    const V1_WITH_DRAFTS: &str = r#"{
+  "version": 1,
+  "snapshots": [
+    {
+      "id": "55 00 84 82 12",
+      "name": "Front door",
+      "note": "gate 3",
+      "kind": "LF",
+      "capturedAt": "2026-11-21T09:30:00.000Z",
+      "writeCount": 2,
+      "identity": {
+        "customer": 85,
+        "data32": 8684050,
+        "facility": 132,
+        "card": 33298,
+        "raw": "00 01 01"
+      }
+    },
+    {
+      "id": "04 A2 2B 3A 5C 6D 80",
+      "name": "Back gate",
+      "note": "",
+      "kind": "HF",
+      "capturedAt": "2026-11-21T10:00:00.000Z",
+      "writeCount": 0,
+      "hf": { "uid": "04 A2 2B 3A 5C 6D 80", "raw": "00 01 02" }
+    }
+  ],
+  "drafts": [
+    {
+      "id": "draft-2",
+      "name": "Lobby",
+      "updatedAt": "2026-11-21T11:00:00.000Z",
+      "records": [
+        { "kind": "text", "fields": { "language": "en", "text": "Hello" } }
+      ]
+    },
+    {
+      "id": "draft-1",
+      "name": "Roof",
+      "updatedAt": "2026-11-21T12:00:00.000Z",
+      "records": []
+    }
+  ]
+}"#;
+
+    /// The version the migrated file claims once it has been opened.
+    fn version_on_disk(path: &Path) -> u64 {
+        let bytes = fs::read(path).expect("read the library file");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("the file is JSON");
+        value["version"].as_u64().expect("the file claims a version")
+    }
+
+    #[test]
+    fn opening_a_v1_file_lifts_it_and_the_file_then_claims_the_current_version() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        fs::write(&path, V1_WITH_DRAFTS).expect("write a version 1 library");
+
+        let opened = LibraryStore::new(&path).open();
+        let library = match opened {
+            Open::Opened { library, migration } => {
+                assert_eq!(
+                    migration,
+                    Some(Lifted::Written { from: 1 }),
+                    "the lift was written on open"
+                );
+                library
+            }
+            Open::Refused(problem) => panic!("a v1 file is lifted, not refused: {problem:?}"),
+        };
+
+        assert_eq!(library.version, SCHEMA_VERSION);
+        assert_eq!(
+            library
+                .snapshots
+                .iter()
+                .map(|s| s.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Front door", "Back gate"],
+            "every Snapshot, in the order the file held them"
+        );
+        assert_eq!(
+            library
+                .drafts
+                .iter()
+                .map(|d| d.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["draft-2", "draft-1"],
+            "every Draft, in the order the file held them"
+        );
+        assert_eq!(library.drafts[0].records[0].fields["text"], "Hello");
+
+        // The file itself is what the next launch — and an older build — meet.
+        assert_eq!(
+            version_on_disk(&path),
+            u64::from(SCHEMA_VERSION),
+            "after a successful open the file on disk claims the current version"
+        );
+        let reopened = LibraryStore::new(&path).open();
+        match reopened {
+            Open::Opened { library, migration } => {
+                assert_eq!(migration, None, "a v2 file is not migrated again");
+                assert_eq!(library.drafts.len(), 2);
+                assert_eq!(library.snapshots.len(), 2);
+            }
+            Open::Refused(problem) => panic!("the lifted file must read back: {problem:?}"),
+        }
+    }
+
+    #[test]
+    fn opening_a_v1_file_keeps_every_key_this_build_does_not_model() {
+        // The migration lifts the document, not the struct: a collection this
+        // build has never heard of survives being lifted, because dropping it
+        // is the very failure the lift is fixing.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        fs::write(
+            &path,
+            r#"{"version": 1, "snapshots": [], "drafts": [], "futureCollection": [{"kept": true}]}"#,
+        )
+        .expect("write a v1 file with a collection this build does not model");
+
+        assert!(matches!(
+            LibraryStore::new(&path).open(),
+            Open::Opened { .. }
+        ));
+
+        let bytes = fs::read(&path).expect("read the file");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
+        assert_eq!(value["version"], 2);
+        assert_eq!(
+            value["futureCollection"],
+            serde_json::json!([{"kept": true}]),
+            "a key this build does not model is carried through the lift"
+        );
+        assert_eq!(value["drafts"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn a_v1_file_without_drafts_is_lifted_with_an_empty_draft_list() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        fs::write(
+            &path,
+            br#"{"version": 1, "snapshots": [{"id": "55 00 84 82 12", "name": "Front door",
+                 "note": "", "kind": "LF", "capturedAt": "2026-11-21T09:30:00.000Z",
+                 "writeCount": 0}]}"#,
+        )
+        .expect("write a v1 file from before Drafts existed");
+
+        assert!(matches!(
+            LibraryStore::new(&path).open(),
+            Open::Opened { library: Library { drafts, .. }, migration: Some(Lifted::Written { from: 1 }) }
+                if drafts.is_empty()
+        ));
+
+        let bytes = fs::read(&path).expect("read the file");
+        let value: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
+        assert_eq!(value["version"], 2);
+        assert_eq!(
+            value["drafts"],
+            serde_json::json!([]),
+            "the file gains the collection v2 promises, empty"
+        );
+        assert_eq!(value["snapshots"].as_array().expect("snapshots").len(), 1);
+    }
+
+    #[test]
+    fn a_migration_that_cannot_be_written_is_reported_and_the_library_stays_usable() {
+        // A failed *write*, not a failed read: the library was read perfectly,
+        // so refusing to open it would trade a small risk for a guaranteed
+        // loss. The lift is reported, the migrated library is in memory, and
+        // the next save corrects the file.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        fs::write(&path, V1_WITH_DRAFTS).expect("write a version 1 library");
+
+        // The staging path is a directory, so the replacement cannot be staged.
+        // The read is untouched: only the write fails.
+        let mut staged = path.clone().into_os_string();
+        staged.push(TEMP_SUFFIX);
+        let staged = PathBuf::from(staged);
+        fs::create_dir(&staged).expect("block the staging path");
+
+        let (library, migration) = match LibraryStore::new(&path).open() {
+            Open::Opened { library, migration } => (library, migration),
+            Open::Refused(problem) => panic!("a failed write is not a refusal: {problem:?}"),
+        };
+        let message = migration
+            .clone()
+            .expect("the failed lift is reported")
+            .message()
+            .expect("a written lift has nothing to report; this one failed");
+        assert!(matches!(migration, Some(Lifted::Unwritten { from: 1, .. })));
+        assert!(
+            message.contains("could not be rewritten"),
+            "says what happened: {message}"
+        );
+        assert!(
+            message.contains("saving will correct the file"),
+            "says the library is still usable: {message}"
+        );
+
+        // The library in memory is the migrated one, whole.
+        assert_eq!(library.version, SCHEMA_VERSION);
+        assert_eq!(library.drafts.len(), 2);
+        assert_eq!(library.snapshots.len(), 2);
+
+        // The file is still what it was: nothing half-written, nothing lost.
+        assert_eq!(version_on_disk(&path), 1, "the file still claims version 1");
+
+        // Clearing the obstruction lets the next save correct the claim.
+        fs::remove_dir(&staged).expect("clear the obstruction");
+        LibraryStore::new(&path).save(&library).expect("save");
+        assert_eq!(version_on_disk(&path), u64::from(SCHEMA_VERSION));
+        let after = LibraryStore::new(&path).load().expect("reload");
+        assert_eq!(after.drafts, library.drafts);
+        assert_eq!(after.snapshots, library.snapshots);
+    }
+
+    #[test]
+    fn a_change_lifts_a_v1_file_before_the_change_is_applied() {
+        // The migration must complete before any edit can land: an edit written
+        // on top of a file still claiming version 1 is the state that loses
+        // Drafts, so the lift is checked from inside the change itself.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        fs::write(&path, V1_WITH_DRAFTS).expect("write a version 1 library");
+
+        let store = LibraryStore::new(&path);
+        let (library, seen) = store
+            .update(|library| {
+                let on_disk = fs::read(&path).expect("read the file");
+                let value: serde_json::Value =
+                    serde_json::from_slice(&on_disk).expect("the file is JSON");
+                let seen = (
+                    value["version"].as_u64(),
+                    library.version,
+                    library.drafts.len(),
+                );
+                library.add_draft("Roof light", UPDATED_AT);
+                seen
+            })
+            .expect("a change to a v1 library lifts it first");
+
+        assert_eq!(
+            seen,
+            (Some(u64::from(SCHEMA_VERSION)), SCHEMA_VERSION, 2),
+            "the file already claims the current version when the change runs, and the change sees every Draft"
+        );
+        assert_eq!(library.drafts.len(), 3);
+        assert_eq!(version_on_disk(&path), u64::from(SCHEMA_VERSION));
+        let after = LibraryStore::new(&path).load().expect("reload");
+        assert_eq!(
+            after
+                .drafts
+                .iter()
+                .map(|d| d.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["draft-2", "draft-1", "draft-3"],
+            "the migrated Drafts keep their order and the new one follows them"
+        );
+    }
+
+    #[test]
+    fn a_file_above_this_builds_schema_is_refused_by_open_and_never_rewritten() {
+        // The durable form of this test is "a v1-era build refuses a v2 file",
+        // which cannot be written here: the v1-era build no longer exists. The
+        // mechanism is the same one either way, so it is proven with a file
+        // claiming one version above what this build understands — the exact
+        // position a v1-era build is in when it meets a v2 file.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        let above = br#"{"version": 3, "snapshots": [], "drafts": [{"id": "from-the-future"}]}"#;
+        fs::write(&path, above).expect("write a file one version above this build");
+
+        let refused = LibraryStore::new(&path).open();
+        assert_eq!(
+            refused,
+            Open::Refused(LibraryProblem::NewerVersion {
+                found: 3,
+                supported: SCHEMA_VERSION
+            }),
+            "a version this build does not understand is refused, not guessed at"
+        );
+        assert_eq!(
+            fs::read(&path).expect("read the file"),
+            above,
+            "the file is left byte for byte, so its Drafts are still there"
+        );
+    }
+
+    #[test]
+    fn a_library_reloads_with_its_drafts_unchanged_after_a_save_and_restart() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        let store = LibraryStore::new(&path);
+
+        let (_, saved) = store
+            .update(|library| {
+                let mut first = library.add_draft("Lobby", UPDATED_AT);
+                first.records = vec![text_record("en", "Hello"), url_record("https://example.com/x")];
+                library.save_draft(first);
+                library.add_draft("Roof", UPDATED_AT);
+                library.drafts.clone()
+            })
+            .expect("save two Drafts");
+
+        // A fresh handle, as the next launch of the app would use.
+        let reopened = match LibraryStore::new(&path).open() {
+            Open::Opened { library, .. } => library,
+            Open::Refused(problem) => panic!("the saved library must open: {problem:?}"),
+        };
+        assert_eq!(reopened.drafts, saved, "every Draft, and its Records, in order");
+        assert_eq!(reopened.version, SCHEMA_VERSION);
+        assert_eq!(version_on_disk(&path), u64::from(SCHEMA_VERSION));
     }
 }
