@@ -275,8 +275,23 @@ fn draft_key(draft: &Draft) -> String {
 /// Write one library document, atomically: staged beside the target and renamed
 /// over it, so the file the user already had survives a failed write.
 fn write_document(path: &Path, document: &Document) -> Result<(), FileError> {
-    let _staged = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let bytes = serde_json::to_vec_pretty(&document.to_json()).map_err(|e| FileError::Io(e.to_string()))?;
+    write_bytes(path, &bytes)
+}
+
+/// Write one file the user chose, atomically.
+///
+/// The staging-and-rename in `write_bytes` is the same rule a library export
+/// follows, so a dump could not leave a half-written file where a complete one
+/// was promised either.
+pub fn write_text(path: &Path, text: &str) -> Result<(), FileError> {
+    write_bytes(path, text.as_bytes())
+}
+
+/// Stage a file beside its target, flush it, then rename it into place, so the
+/// file the user already had survives a failed write.
+fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), FileError> {
+    let _staged = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent).map_err(|e| {
@@ -285,7 +300,7 @@ fn write_document(path: &Path, document: &Document) -> Result<(), FileError> {
         }
     }
     let staged = staging_path(path);
-    write_and_flush(&staged, &bytes).map_err(|e| FileError::Io(e.to_string()))?;
+    write_and_flush(&staged, bytes).map_err(|e| FileError::Io(e.to_string()))?;
     fs::rename(&staged, path).map_err(|e| FileError::Io(e.to_string()))?;
     if let Some(parent) = path.parent() {
         // Flush the directory entry so the rename itself is durable.
@@ -427,6 +442,40 @@ mod tests {
             vec!["backup.json"],
             "the staging file must not survive an export"
         );
+    }
+
+    #[test]
+    fn a_text_file_is_written_whole_and_leaves_no_staging_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dest = dir.path().join("dumps").join("tag.txt");
+        let text = "PM4 Studio — memory dump\nUID: 04 43 8A 01 22 09 03\n";
+
+        write_text(&dest, text).expect("write a dump file");
+
+        assert_eq!(bytes_at(&dest), text.as_bytes());
+        let names: Vec<String> = fs::read_dir(dest.parent().expect("parent"))
+            .expect("read dir")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert_eq!(names, vec!["tag.txt"], "the staging file is gone");
+    }
+
+    #[test]
+    fn a_failed_text_write_leaves_the_file_that_was_already_there() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        // A directory where the file should go cannot be renamed over.
+        let dest = dir.path().join("tag.txt");
+        fs::create_dir(&dest).expect("a directory in the way");
+
+        let refused = write_text(&dest, "a dump");
+        assert!(matches!(refused, Err(FileError::Io(_))), "got {refused:?}");
+        assert!(dest.is_dir(), "what was there is still there");
     }
 
     // Slice B: the preview says what would happen and writes nothing.

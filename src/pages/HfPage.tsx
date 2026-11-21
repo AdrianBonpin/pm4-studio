@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { MemoryDumpPanel } from "../components/MemoryDumpPanel";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Field, Readout, Section } from "../components/Section";
@@ -157,6 +158,8 @@ export function HfPage({ connected, onPoll, onChirp }: HfPageProps) {
           <RawOnlyReadout reading={reading} />
         )}
       </Section>
+
+      <MemoryDumpPanel connected={connected} />
 
       <Section
         title="Why the decode is provisional"
