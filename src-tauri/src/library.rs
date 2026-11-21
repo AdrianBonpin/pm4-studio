@@ -16,11 +16,17 @@
 //! holds before anything can edit it.
 //!
 //! This module owns the **serialisation domain**: the one lock every write to
-//! the file is performed under, whoever performs it. A save, an import, an
-//! export and a dump all replace the whole file with bytes read moments earlier,
-//! so they must not overlap — two of them reading the same starting state would
+//! the library file is performed under, whoever performs it. A save, an import
+//! and an export all replace the whole file with bytes read moments earlier, so
+//! they must not overlap — two of them reading the same starting state would
 //! each rename a file holding only their own change, and one whole update would
 //! be lost with nothing reported. See [`serialised`].
+//!
+//! The domain is the library file's, and stops there. A file the user chooses —
+//! a memory dump, an export destination — shares no starting state with the
+//! library, so waiting for the library's lock would make a save somewhere else
+//! in the app delay it for no reason. Those writes still stage and rename
+//! atomically ([`write_file_atomically`]); they just do not queue.
 //!
 //! Nothing here touches the Reader, so every test runs against a real temp
 //! directory with no hardware attached.
@@ -50,11 +56,14 @@ const TEMP_SUFFIX: &str = ".tmp";
 /// The one serialisation domain that governs the library file.
 ///
 /// Every write to the file — a save from the store, an import that merges a
-/// document into it, an export or a dump staged beside it — is performed while
-/// this is held. One lock is the whole point: two locks would each be sound on
-/// their own and jointly unsound, which is precisely how two saves overlapping
-/// in time could each read the same starting library and each rename a file
-/// reflecting only its own change.
+/// document into it, an export staged beside it — is performed while this is
+/// held. One lock is the whole point: two locks would each be sound on their own
+/// and jointly unsound, which is precisely how two saves overlapping in time
+/// could each read the same starting library and each rename a file reflecting
+/// only its own change.
+///
+/// What is in scope is the file, not writing as such: a file that is not the
+/// library does not share its starting state and does not queue behind it.
 ///
 /// It is held across a whole read-and-write, not just across the write, because
 /// the write replaces the file with a version read a moment earlier. A lock that
@@ -87,14 +96,26 @@ pub(crate) fn serialised<T>(f: impl FnOnce(&Domain) -> T) -> T {
     f(&Domain { _guard: guard })
 }
 
-/// Write `bytes` to `path` atomically, inside the domain: staged beside the
+/// Replace a library file atomically, inside the domain: staged beside the
 /// target, flushed to disk, renamed over it, and the directory entry flushed.
 ///
-/// This is the only code that replaces a library file, whether the bytes are a
-/// library from a save, a document from an import, or a copy of either for the
-/// user. A crash at any point leaves the old file or the new one, never a torn
-/// one.
+/// This is the only way a library file is replaced — a save, an import, a lift —
+/// and asking for the [`Domain`] is what makes that true, because a write path
+/// that skips the lock does not compile. A crash at any point leaves the old file
+/// or the new one, never a torn one.
 pub(crate) fn write_atomically(_domain: &Domain, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    write_file_atomically(path, bytes)
+}
+
+/// Write `bytes` to `path` atomically, outside the library's domain.
+///
+/// The atomic replace is the same act for every file the app writes, so it is the
+/// same code: staged beside the target, flushed, renamed, directory entry
+/// flushed. What this does *not* take is the library's [`Domain`], because the
+/// file it writes is not the library — a memory dump, a copy of one — and a
+/// write with no starting state in common with the library has nothing to gain
+/// from waiting for a library save to finish.
+pub(crate) fn write_file_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let staged = stage_bytes(path, bytes)?;
     commit_staged(&staged, path)
 }
