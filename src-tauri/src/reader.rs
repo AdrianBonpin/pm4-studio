@@ -30,6 +30,7 @@
 use crate::blank::{self, BlankAttempt, BlankReadback, BlankScan};
 use crate::identity::{Identity, TagPresence};
 use crate::stream::{split_reports, ReportStream};
+use crate::wire_record::Wire;
 use crate::write_guard;
 use hidapi::{HidApi, HidDevice};
 use serde::{Deserialize, Serialize};
@@ -258,6 +259,11 @@ pub struct Reader {
     /// Reports accumulate here across reads, because a frame can span several
     /// of them. See `stream::ReportStream`.
     rx: RefCell<ReportStream>,
+    /// Verbatim traffic kept while a recording is running: every frame written
+    /// and every report read, in wire order. `None` unless
+    /// [`Reader::start_recording`] was called, so the shipping path copies
+    /// nothing and behaves exactly as it did before this field existed.
+    tap: RefCell<Option<Vec<Wire>>>,
 }
 
 impl Reader {
@@ -287,7 +293,30 @@ impl Reader {
             dev,
             info,
             rx: RefCell::new(ReportStream::new()),
+            tap: RefCell::new(None),
         })
+    }
+
+    /// Start keeping every frame sent and every report received, verbatim.
+    ///
+    /// This is observation only: it adds bytes to a log the caller can take with
+    /// [`Reader::recording`] and changes nothing about what is transmitted or
+    /// how. A frame is logged once it has been written in full, so a failed
+    /// write is never recorded as though it crossed the wire.
+    pub fn start_recording(&self) {
+        *self.tap.borrow_mut() = Some(Vec::new());
+    }
+
+    /// What has been recorded so far. `None` when no recording was started.
+    pub fn recording(&self) -> Option<Vec<Wire>> {
+        self.tap.borrow().clone()
+    }
+
+    /// Add one entry to the recording, when one is running.
+    fn note_wire(&self, wire: Wire) {
+        if let Some(log) = self.tap.borrow_mut().as_mut() {
+            log.push(wire);
+        }
     }
 
     /// Write one 64-byte frame. hidapi on macOS expects the report id as the
@@ -332,6 +361,7 @@ impl Reader {
                 .write(&buf)
                 .map_err(|e| format!("USB write failed: {e}"))?;
         }
+        self.note_wire(Wire::Out(frame.to_vec()));
         Ok(())
     }
 
@@ -356,16 +386,24 @@ impl Reader {
         if n == 0 {
             // A poll (`timeout_ms == 0`) asks what is here now; an incomplete
             // frame is not a failure, it is just not finished.
-            return if timeout_ms == 0 {
-                Ok(None)
-            } else {
-                match rx.take_error() {
-                    Some(e) => Err(e.to_string()),
-                    None => Ok(None),
-                }
+            if timeout_ms == 0 {
+                return Ok(None);
+            }
+            // `take_error` clears the buffer either way, so anything it was
+            // holding is gone: a recording keeps that boundary rather than
+            // letting a truncated reply splice onto the next one.
+            let held = rx.buffered();
+            let error = rx.take_error();
+            if held > 0 {
+                self.note_wire(Wire::Break);
+            }
+            return match error {
+                Some(e) => Err(e.to_string()),
+                None => Ok(None),
             };
         }
         rx.push(&buf[..n]);
+        self.note_wire(Wire::In(buf[..n].to_vec()));
         Ok(rx.next_frame())
     }
 
@@ -644,6 +682,9 @@ impl Reader {
     /// spliced onto the next reply, and it was abandoned by its sender anyway.
     pub fn drain(&self) -> usize {
         self.rx.borrow_mut().clear();
+        // Everything pending is dropped here, so a recording marks the break:
+        // bytes either side of it are never one frame.
+        self.note_wire(Wire::Break);
         let mut n = 0;
         let mut buf = [0u8; REPORT_LEN];
         while let Ok(k) = self.dev.read_timeout(&mut buf, 0) {
