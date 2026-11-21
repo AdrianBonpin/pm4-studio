@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PM4 Studio — verification</title>
+    <style>
+      html, body, #root { background-color: #0A0A0B; }
+    </style>
+  </head>
+  <body>
+    <!--
+      The verification entry point, for browser verification only.
+
+      It differs from index.html in exactly one respect: it loads an entry that
+      stands a fixture at the device boundary before the app renders, so both band
+      pages draw a tag with no Reader attached. It is not a production input —
+      `vite build` reads index.html only — and `src/dev/e2e-main.tsx` refuses to
+      install its fixture in a production build even if it were.
+
+      Reproducible field profiles travel in the query string:
+        /e2e.html                     a written-once T5577 and an NTAG215
+        /e2e.html?lf=blank            a writable Blank T5577 instead
+        /e2e.html?lf=none             an empty 125 kHz field
+        /e2e.html?hf=classic          a MIFARE Classic 1K instead of the NTAG
+        /e2e.html?hf=unknown          an ATQA/SAK pair that resolves to nothing
+        /e2e.html?hf=none             an empty 13.56 MHz field
+      Mid-flow swaps (Clone's "take the original off", Copy's observed removal)
+      are made from the hidden field panel: Alt+Shift+D.
+    -->
+    <div id="root"></div>
+    <script type="module" src="/src/dev/e2e-main.tsx"></script>
+  </body>
+</html>

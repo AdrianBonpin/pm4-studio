@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:stub": "vite --open /e2e.html",
     "typecheck": "tsc --noEmit",
     "build": "bun run design:check && bun run typecheck && vite build",
     "test": "vitest run",
