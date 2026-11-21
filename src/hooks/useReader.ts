@@ -101,17 +101,33 @@ export function useReader() {
 }
 
 /**
+ * What a poller's caller wants after a Tag was latched.
+ *
+ * Returning nothing means the reading completed the operation, so the loop
+ * stops — a read loop signals once, on the reading that completes it (spec,
+ * "The audible alphabet"). `"keep-listening"` means the Tag was not the one
+ * being waited for and the loop should ask again after the normal interval: the
+ * flow is still waiting for the user to swap Tags, and a stopped poller is a
+ * flow that can never see the swap.
+ */
+export type PollVerdict = "keep-listening" | void;
+
+/**
  * Polls the 125 kHz field while `active` is true and hands every latched tag to
  * `onTag`. Only one interval ever runs, so the device is never hit twice.
  *
  * A transport failure that means the Reader is gone or wedged stops the loop and
  * is reported through `onFault`, so an empty field is never mistaken for a dead
  * device — and a dead device is never polled forever.
+ *
+ * The loop itself reports nothing. An empty field, a repeat of a Tag the caller
+ * has already rejected, and an iteration nobody was waiting for are background
+ * work: they produce no outcome, no message and no signal.
  */
 export function useLfPoller(
   active: boolean,
   enabled: boolean,
-  onTag: (card: LfCard) => void,
+  onTag: (card: LfCard) => PollVerdict,
   onFault?: (message: string) => void,
 ) {
   const onTagRef = useRef(onTag);
@@ -141,8 +157,10 @@ export function useLfPoller(
         const card = await invoke<LfCard | null>("lf_poll");
         if (cancelled) return;
         if (card) {
-          onTagRef.current(card);
-          return; // caller decides whether to keep polling
+          // The caller decides whether to keep polling: a latch that completed
+          // the operation stops the loop, one that was not the Tag being waited
+          // for asks again after the interval.
+          if (onTagRef.current(card) !== "keep-listening") return;
         }
       } catch (e) {
         // An empty field is silent, not an error. A real transport failure is a

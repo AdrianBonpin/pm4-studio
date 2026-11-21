@@ -85,6 +85,7 @@ describe("a message on screen", () => {
         outcome: "failed",
         verified: false,
         message: null,
+        refusalCause: null,
         confirmedCopies: 0,
         countProblem: null,
       }),

@@ -4,13 +4,12 @@ import { AlertTriangle, Check, Layers, RotateCcw } from "lucide-react";
 import { Button } from "./ui/Button";
 import { Field, Readout } from "./Section";
 import { beginDeviceOperation } from "../lib/deviceLock";
-import { describeDeviceFailure } from "../lib/readerIdentity";
+import { outcomes, report } from "../lib/outcome";
 import {
   BATCH_FACTS,
   FRESH_TAG_PER_ATTEMPT,
   OUTCOME_LABEL,
   OUTCOME_TONE_CLASS,
-  attemptNotice,
   attemptRequest,
   recordAttempt,
   runConfirmedCopies,
@@ -19,18 +18,15 @@ import {
   summarySentence,
   type BatchRun,
 } from "../lib/batchClone";
-import { NOTICE_TONE_CLASS, confirmedCopiesLabel } from "../lib/writeOutcome";
+import { confirmedCopiesLabel } from "../lib/writeOutcome";
 import type { BatchAttemptResult, LfCard } from "../types";
 
 interface BatchCloneProps {
   /** The reading taken once in the wizard. Never re-read while the run is open. */
   source: LfCard;
   connected: boolean;
-  onChirp: () => void;
   /** Back to the wizard, keeping the source reading. */
   onExit: () => void;
-  /** Surfaces a dead or wedged Reader in the shell's notice strip. */
-  onDeviceError?: (message: string) => void;
 }
 
 /**
@@ -40,22 +36,35 @@ interface BatchCloneProps {
  * that same Identity and never taps the source again. That is the several-people
  * case — one read, then one Blank per recipient.
  *
- * Each attempt is sent on its own and reports its own result. A refusal does not
- * end the run; the list keeps every attempt, in order, with its own outcome. Only
- * a verified attempt adds a confirmed copy, so leaving a Tag on the Reader and
- * pressing the button again reports a **skip** instead of counting a second copy:
- * the backend re-reads the Tag in the write position for every attempt, per ADR
- * 0001, and a Tag that already presents this Identity is not written again.
+ * # Every attempt reports itself, through the seam
  *
- * The Reader is held for the whole run (`beginDeviceOperation`), so background
- * polling cannot put a question to it between attempts. Suspending polling is not
- * a nicety: a poll reply read as part of an attempt's exchange has already been
- * mistaken for a write result once.
+ * Each attempt is sent on its own and ends in exactly one outcome, reported the
+ * moment it arrives — the worked fob and the one that was not written are heard
+ * without reading the list, which is what makes a run of twenty usable without
+ * looking at it. The four things an attempt can be stay apart:
+ *
+ *   - `verified` — done: the read-back proved the copy, and only this adds a
+ *     confirmed copy to the run's count;
+ *   - `unverified` — needs you: sent, and the read-back could not confirm it;
+ *   - `skipped` — needs you: the Tag already carries this Identity, so the guard
+ *     refused and nothing was written or counted;
+ *   - `unreadable` / `failed` — attention: nothing could be read, or the write
+ *     could not be sent.
+ *
+ * A refusal or a skip does not end the run: the list keeps every attempt, in
+ * order, with its own result. An attempt the Reader failed outright is recorded
+ * as a failed attempt rather than dropped, so the ledger holds every press and
+ * the count still only rises for a verified write.
+ *
+ * Polling reports nothing here, and the Reader is held for the whole run
+ * (`beginDeviceOperation`), so no background iteration can be mistaken for an
+ * attempt or raise a signal of its own. Suspending polling is not a nicety: a
+ * poll reply read as part of an attempt's exchange has already been mistaken for
+ * a write result once.
  */
-export function BatchClone({ source, connected, onChirp, onExit, onDeviceError }: BatchCloneProps) {
+export function BatchClone({ source, connected, onExit }: BatchCloneProps) {
   const [run, setRun] = useState<BatchRun>(() => startBatch(source));
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
 
   // One hold for the run, released when the user leaves it. Pollers check
   // `isDeviceBusy()` before each tick, so nothing polls while a batch is open.
@@ -66,7 +75,6 @@ export function BatchClone({ source, connected, onChirp, onExit, onDeviceError }
 
   const writeNext = useCallback(async () => {
     setBusy(true);
-    setError(null);
     try {
       // The Identity comes from the held source reading, never from anything
       // read mid-run.
@@ -75,20 +83,29 @@ export function BatchClone({ source, connected, onChirp, onExit, onDeviceError }
         attemptRequest(run),
       );
       setRun((current) => recordAttempt(current, result));
-      if (result.outcome === "verified") onChirp();
+      report(outcomes.batchAttempt(result));
     } catch (e) {
-      // A wedged or absent Reader is reported with its remedy, not as a bare
-      // timeout, and it is not recorded as an attempt: nothing was decided.
-      const message = describeDeviceFailure(e);
-      setError(message);
-      onDeviceError?.(message);
+      // A wedged or absent Reader is a failed attempt, not a silent one: it is
+      // recorded and heard like any other, with the remedy the classification
+      // carries, and it never adds a copy.
+      const failure = outcomes.readerFailure(e);
+      const failed: BatchAttemptResult = {
+        customer: source.customer,
+        data32: source.data32,
+        outcome: "failed",
+        message: failure.message,
+        refusalCause: null,
+        readback: null,
+        confirmedCopies: null,
+        countProblem: null,
+      };
+      setRun((current) => recordAttempt(current, failed));
+      report(failure);
     } finally {
       setBusy(false);
     }
-  }, [onChirp, onDeviceError, run]);
+  }, [source.customer, source.data32, run]);
 
-  const latest = run.attempts[run.attempts.length - 1];
-  const notice = latest ? attemptNotice(latest) : null;
   const copies = runConfirmedCopies(run);
 
   return (
@@ -138,19 +155,6 @@ export function BatchClone({ source, connected, onChirp, onExit, onDeviceError }
         Polls are paused for the length of this run, so the reader answers attempts and nothing
         else.
       </p>
-
-      {error && <p className="text-sm text-err">{error}</p>}
-
-      {notice && (
-        <p className={`flex items-start gap-1.5 text-sm ${NOTICE_TONE_CLASS[notice.tone]}`}>
-          {notice.tone === "ok" ? (
-            <Check size={15} className="mt-0.5 shrink-0" />
-          ) : (
-            <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-          )}
-          <span className="select-text">{notice.text}</span>
-        </p>
-      )}
 
       <div className="flex flex-col gap-3">
         <p className="text-[11px] uppercase tracking-[0.12em] text-text-muted">Attempts</p>

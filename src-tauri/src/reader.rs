@@ -210,7 +210,13 @@ impl LfCard {
 pub enum LfWriteAttempt {
     /// Nothing was transmitted: no Tag could be read in the write position, or
     /// the Tag already presents the Identity being written (ADR 0001).
-    Refused(String),
+    ///
+    /// `cause` says which of the two it was, so the two conditions can be
+    /// worded, sounded and remedied apart (`write_guard::RefusalCause`).
+    Refused {
+        cause: write_guard::RefusalCause,
+        message: String,
+    },
     /// The write command could not be transmitted.
     Failed(String),
     /// The write was transmitted; `None` means the Tag could not be re-read, so
@@ -544,7 +550,9 @@ impl Reader {
     /// performs the exchange only after the guard allows it.
     pub fn lf_write_verified(&self, identity: Identity) -> Result<Option<LfCard>, String> {
         match self.lf_write_attempt(identity) {
-            LfWriteAttempt::Refused(message) | LfWriteAttempt::Failed(message) => Err(message),
+            LfWriteAttempt::Refused { message, .. } | LfWriteAttempt::Failed(message) => {
+                Err(message)
+            }
             LfWriteAttempt::Transmitted(card) => Ok(card),
         }
     }
@@ -560,11 +568,21 @@ impl Reader {
         let current = match self.read_tag_in_position() {
             Ok(current) => current,
             // No reading means the guard cannot be satisfied: nothing is sent.
-            Err(e) => return LfWriteAttempt::Refused(e),
+            // A read that failed outright is the same condition as a read that
+            // found nothing — ADR 0001's first case — so it carries the cause.
+            Err(e) => {
+                return LfWriteAttempt::Refused {
+                    cause: write_guard::RefusalCause::when_unreadable(),
+                    message: e,
+                }
+            }
         };
         let decision = write_guard::decide(current.as_ref().map(LfCard::identity), identity);
-        if let Some(refusal) = decision.refusal_message(current.as_ref().map(LfCard::identity)) {
-            return LfWriteAttempt::Refused(refusal);
+        if let Some(cause) = write_guard::RefusalCause::of(decision) {
+            let message = decision
+                .refusal_message(current.as_ref().map(LfCard::identity))
+                .unwrap_or_else(|| "the write was not attempted".to_string());
+            return LfWriteAttempt::Refused { cause, message };
         }
 
         if let Err(e) = self.lf_write(identity) {

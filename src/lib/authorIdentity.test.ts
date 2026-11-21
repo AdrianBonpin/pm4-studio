@@ -45,6 +45,7 @@ function writeResult(outcome: WriteResult["outcome"]): WriteResult {
     outcome,
     verified: outcome === "verified",
     message: null,
+    refusalCause: null,
     confirmedCopies: 0,
     countProblem: null,
   };

@@ -145,18 +145,23 @@ fn main() {
     // The same guarded path the app uses. Nothing is bypassed.
     println!("sending      : 0x0073 (guarded: the tag is read first) …");
     let attempt = reader.lf_write_attempt(preview.identity);
-    let (evidence, message) = match &attempt {
-        LfWriteAttempt::Refused(why) => (Evidence::Refused, Some(why.clone())),
-        LfWriteAttempt::Failed(why) => (Evidence::NotTransmitted, Some(why.clone())),
+    let (evidence, message, cause) = match &attempt {
+        LfWriteAttempt::Refused { cause, message } => {
+            (Evidence::Refused, Some(message.clone()), Some(*cause))
+        }
+        LfWriteAttempt::Failed(why) => (Evidence::NotTransmitted, Some(why.clone()), None),
         LfWriteAttempt::Transmitted(card) => (
             Evidence::Readback(card.as_ref().map(|c| c.identity())),
+            None,
             None,
         ),
     };
     let outcome = write_outcome::classify(evidence, preview.identity);
 
     match &attempt {
-        LfWriteAttempt::Refused(why) => println!("attempt      : refused ({why})"),
+        LfWriteAttempt::Refused { message, .. } => {
+            println!("attempt      : refused ({message})")
+        }
         LfWriteAttempt::Failed(why) => println!("attempt      : failed ({why})"),
         LfWriteAttempt::Transmitted(card) => println!(
             "read-back    : {}",
@@ -176,6 +181,11 @@ fn main() {
             "no"
         }
     );
+    if let Some(cause) = cause {
+        // Which of ADR 0001's two conditions stopped it, as a value: the two
+        // have different fixes, so a probe run should print which one it hit.
+        println!("refused      : {}", cause.as_str());
+    }
     if let Some(message) = message {
         println!("message      : {message}");
     }
