@@ -4,11 +4,17 @@ import { Button } from "./ui/Button";
 import { Section } from "./Section";
 import { BatchClone } from "./BatchClone";
 import { useLfPoller } from "../hooks/useReader";
+import { outcomes, report } from "../lib/outcome";
 import type { LfCard } from "../types";
 
 interface BatchModeProps {
   connected: boolean;
-  onChirp: () => void;
+  /**
+   * Accepted and unused: the shell's legacy chirp callback. The source read now
+   * reports itself through the outcome seam, and the prop is deleted with the
+   * rest of them in ticket 17.
+   */
+  onChirp?: () => void;
   /** Surfaces a dead or wedged Reader in the shell's notice strip. */
   onDeviceError?: (message: string) => void;
 }
@@ -20,14 +26,16 @@ interface BatchModeProps {
  * wizard, because it is something a user sets out to do — make a fob for each of
  * five people — rather than something discovered halfway through one clone. It
  * still begins with the same thing every write path begins with: a read of the
- * original, taken once, before anything is written.
+ * original, taken once, before anything is written. That read is the operation
+ * the user started, so it reports itself: one reading, one outcome, one signal.
+ * The polling underneath it reports nothing.
  *
  * From that reading on this is `BatchClone` and nothing else. Keeping the split
  * here rather than inside the wizard means the wizard's own flow, its callbacks
  * and the run's attempt-by-attempt reporting are untouched by the page's new
  * shape — the mode only supplies what to write.
  */
-export function BatchMode({ connected, onChirp, onDeviceError }: BatchModeProps) {
+export function BatchMode({ connected, onDeviceError }: BatchModeProps) {
   /** The original, read once. Everything until a new run is started from this. */
   const [source, setSource] = useState<LfCard | null>(null);
   /** True while waiting for the original to be tapped. */
@@ -39,7 +47,7 @@ export function BatchMode({ connected, onChirp, onDeviceError }: BatchModeProps)
     (card) => {
       setSource(card);
       setAwaiting(false);
-      onChirp();
+      report(outcomes.cloneSourceRead(card.id));
     },
     onDeviceError,
   );
@@ -61,9 +69,7 @@ export function BatchMode({ connected, onChirp, onDeviceError }: BatchModeProps)
         <BatchClone
           source={source}
           connected={connected}
-          onChirp={onChirp}
           onExit={startOver}
-          onDeviceError={onDeviceError}
         />
       ) : awaiting ? (
         <div className="flex flex-col gap-3">

@@ -38,6 +38,7 @@ function writeResult(
     outcome,
     verified: outcome === "verified",
     message: null,
+    refusalCause: null,
     confirmedCopies: outcome === "verified" ? 1 : 0,
     countProblem: null,
     ...overrides,

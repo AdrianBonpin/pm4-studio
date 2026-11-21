@@ -27,6 +27,58 @@ pub enum WriteDecision {
     RefuseSameIdentity,
 }
 
+/// Which of ADR 0001's two conditions a refusal came from.
+///
+/// The decision above says *that* a write may not happen; this says *why*, and
+/// the why is what decides the remedy. The two conditions are not variations of
+/// one problem:
+///
+///   * `Unreadable` — nothing could be read in the write position. The fix is
+///     about the Tag being there at all: seat one, or use a Tag that reads.
+///   * `AlreadyCarries` — the Tag was read perfectly well and already presents
+///     the Identity being written. The fix is a different Tag: almost always the
+///     original is still on the Reader.
+///
+/// A single `refused` with prose inside it made the two indistinguishable to
+/// anything but a reader: the sound, the colour and the shape of the message
+/// were the same. Carrying the cause as a value lets the message, the outcome
+/// and the signal agree on which condition fired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusalCause {
+    /// Nothing readable in the write position.
+    Unreadable,
+    /// The Tag in the write position already presents the Identity being written.
+    AlreadyCarries,
+}
+
+impl RefusalCause {
+    /// The stable wire name the UI switches on.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RefusalCause::Unreadable => "unreadable",
+            RefusalCause::AlreadyCarries => "already-carries",
+        }
+    }
+
+    /// The cause behind a decision, or `None` when the decision allows the write.
+    pub fn of(decision: WriteDecision) -> Option<RefusalCause> {
+        match decision {
+            WriteDecision::Proceed => None,
+            WriteDecision::RefuseUnreadable => Some(RefusalCause::Unreadable),
+            WriteDecision::RefuseSameIdentity => Some(RefusalCause::AlreadyCarries),
+        }
+    }
+
+    /// The cause of a read that failed before the guard could decide.
+    ///
+    /// A Tag that could not be read at all is ADR 0001's first case whichever
+    /// way the failure arrived: the guard is given `None` and refuses, and a
+    /// transport error on the read reaches the same place.
+    pub fn when_unreadable() -> RefusalCause {
+        RefusalCause::Unreadable
+    }
+}
+
 impl WriteDecision {
     /// True only for `Proceed`. Every other outcome stops the write.
     pub fn allows_write(self) -> bool {
@@ -131,6 +183,38 @@ mod tests {
             decide(Some(same_card_other_customer), target),
             WriteDecision::Proceed
         );
+    }
+
+    #[test]
+    fn each_refusal_names_its_own_condition() {
+        // The two conditions are two values, not two sentences: a caller can tell
+        // them apart without reading the prose.
+        assert_eq!(
+            RefusalCause::of(WriteDecision::RefuseUnreadable),
+            Some(RefusalCause::Unreadable)
+        );
+        assert_eq!(
+            RefusalCause::of(WriteDecision::RefuseSameIdentity),
+            Some(RefusalCause::AlreadyCarries)
+        );
+        assert_eq!(RefusalCause::of(WriteDecision::Proceed), None);
+    }
+
+    #[test]
+    fn the_causes_carry_distinct_wire_names() {
+        assert_eq!(RefusalCause::Unreadable.as_str(), "unreadable");
+        assert_eq!(RefusalCause::AlreadyCarries.as_str(), "already-carries");
+        assert_ne!(
+            RefusalCause::Unreadable.as_str(),
+            RefusalCause::AlreadyCarries.as_str()
+        );
+    }
+
+    #[test]
+    fn a_read_that_failed_before_the_guard_decided_is_the_unreadable_cause() {
+        // ADR 0001's first case, whichever way it arrives: nothing could be read
+        // in the write position, so the fix is to seat a Tag that reads.
+        assert_eq!(RefusalCause::when_unreadable(), RefusalCause::Unreadable);
     }
 
     #[test]

@@ -60,7 +60,7 @@ use std::time::Duration;
 
 use crate::identity::Identity;
 use crate::reader::{LfCard, Reader};
-use crate::write_guard::{self, WriteDecision};
+use crate::write_guard::{self, RefusalCause, WriteDecision};
 use crate::write_outcome::{self, Evidence, WriteOutcome};
 
 /// What one attempt in a batch produced, before it is judged.
@@ -138,6 +138,11 @@ pub struct BatchVerdict {
     /// What the Tag read as at the last reading taken for this attempt: the
     /// read-back for a transmitted write, or the reading that stopped it.
     pub readback: Option<LfCard>,
+    /// Which of ADR 0001's two refusal conditions stopped this attempt, when one
+    /// did. `None` for an attempt that was transmitted, and for the fail-closed
+    /// shape that should not exist — inventing a cause there would name a
+    /// condition nobody established.
+    pub refusal: Option<RefusalCause>,
 }
 
 /// Judge one attempt against the Identity it was aiming at.
@@ -163,6 +168,7 @@ pub fn verdict(attempt: &BatchAttempt, target: Identity) -> BatchVerdict {
                     .unwrap_or_else(|| target.id())
             )),
             readback: current.clone(),
+            refusal: Some(RefusalCause::AlreadyCarries),
         },
         BatchAttempt::Refused {
             decision: WriteDecision::RefuseUnreadable,
@@ -176,6 +182,7 @@ pub fn verdict(attempt: &BatchAttempt, target: Identity) -> BatchVerdict {
                 current.as_ref().map(LfCard::identity),
             ),
             readback: current.clone(),
+            refusal: Some(RefusalCause::Unreadable),
         },
         // `WriteDecision::Proceed` is not a refusal, so a `Refused` carrying it
         // cannot have come from the guard. Treated as a refusal anyway: the
@@ -189,11 +196,15 @@ pub fn verdict(attempt: &BatchAttempt, target: Identity) -> BatchVerdict {
                     .to_string(),
             ),
             readback: current.clone(),
+            // No cause: `Proceed` is not a refusal, so nothing here established
+            // which condition fired. The fail-closed outcome stands on its own.
+            refusal: None,
         },
         BatchAttempt::Failed(why) => BatchVerdict {
             outcome: BatchOutcome::Write(WriteOutcome::Failed),
             message: Some(why.clone()),
             readback: None,
+            refusal: None,
         },
         BatchAttempt::Transmitted(readback) => {
             let read_back = readback.as_ref().map(LfCard::identity);
@@ -202,6 +213,8 @@ pub fn verdict(attempt: &BatchAttempt, target: Identity) -> BatchVerdict {
                 outcome: BatchOutcome::Write(outcome),
                 message: readback_message(outcome, read_back, target),
                 readback: readback.clone(),
+                // Nothing was refused: the write went out, whatever came back.
+                refusal: None,
             }
         }
     }
@@ -504,6 +517,49 @@ mod tests {
     }
 
     // ---- the identical-Tag hazard ----------------------------------------
+
+    // ---- which refusal condition fired -----------------------------------
+
+    #[test]
+    fn the_two_refusal_conditions_carry_different_causes() {
+        // Two problems, two fixes: a skip is a Tag already carrying the Identity
+        // (change the Tag), a refusal is a Tag that read as nothing (seat a Tag).
+        let skip = verdict(&already_written(), target());
+        let refusal = verdict(&nothing_readable(), target());
+        assert_eq!(skip.refusal, Some(RefusalCause::AlreadyCarries));
+        assert_eq!(refusal.refusal, Some(RefusalCause::Unreadable));
+        assert_ne!(skip.refusal, refusal.refusal);
+    }
+
+    #[test]
+    fn a_transmitted_attempt_carries_no_refusal_cause() {
+        // Whatever the read-back said, nothing was refused: naming a cause here
+        // would blame a condition the guard never raised.
+        for attempt in [
+            transmitted(Some(written_card())),
+            transmitted(None),
+            transmitted(Some(other_card())),
+            BatchAttempt::Failed("no device".to_string()),
+        ] {
+            assert_eq!(verdict(&attempt, target()).refusal, None);
+        }
+    }
+
+    #[test]
+    fn the_skip_refusal_is_the_cause_in_the_guard_itself() {
+        // The cause is not re-derived here: it comes from the same decision the
+        // guard made, so the two can never disagree about which condition fired.
+        let decision = write_guard::decide(Some(written_card().identity()), target());
+        assert_eq!(
+            RefusalCause::of(decision),
+            verdict(&already_written(), target()).refusal
+        );
+        let unreadable = write_guard::decide(None, target());
+        assert_eq!(
+            RefusalCause::of(unreadable),
+            verdict(&nothing_readable(), target()).refusal
+        );
+    }
 
     #[test]
     fn a_tag_already_presenting_the_target_is_skipped_and_says_so() {

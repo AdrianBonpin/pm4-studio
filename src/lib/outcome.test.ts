@@ -6,6 +6,7 @@ import {
   report,
   severityOf,
   signalFor,
+  signalOf,
   type Outcome,
   type OutcomeKind,
   type Severity,
@@ -14,9 +15,10 @@ import { subscribeSignals, type SignalSymbol } from "./signal";
 import { toastStore } from "./toastStore";
 import { BUILD_REFUSAL_LABEL } from "./consoleRefusal";
 import { writeNotice } from "./writeOutcome";
+import { attemptNotice } from "./batchClone";
 import { blankNotice } from "./blankTag";
 import { eraseNotice } from "./eraseTag";
-import type { BlankResult, EraseResult, WriteResult } from "../types";
+import type { BatchAttemptResult, BlankResult, EraseResult, WriteResult } from "../types";
 
 /**
  * The outcome seam: one typed value, one entry point, two channels.
@@ -48,6 +50,8 @@ const EXPECTED_SEVERITY: Record<OutcomeKind, Severity> = {
   unverified: "warning",
   refused: "error",
   failed: "error",
+  skipped: "warning",
+  unreadable: "error",
   "reset-refused": "error",
   "refused-by-build": "error",
   "reader-absent": "warning",
@@ -73,7 +77,26 @@ function writeResult(outcome: WriteResult["outcome"], overrides: Partial<WriteRe
     outcome,
     verified: outcome === "verified",
     message: null,
+    refusalCause: null,
     confirmedCopies: outcome === "verified" ? 1 : 0,
+    countProblem: null,
+    ...overrides,
+  };
+}
+
+/** One batch attempt, as `lf_clone_attempt` reports it. */
+function attempt(
+  outcome: BatchAttemptResult["outcome"],
+  overrides: Partial<BatchAttemptResult> = {},
+): BatchAttemptResult {
+  return {
+    customer: 0x55,
+    data32: 0x0084_8212,
+    outcome,
+    message: null,
+    refusalCause: null,
+    readback: null,
+    confirmedCopies: null,
     countProblem: null,
     ...overrides,
   };
@@ -127,6 +150,8 @@ describe("the discriminator set", () => {
         "refused",
         "refused-by-build",
         "reset-refused",
+        "skipped",
+        "unreadable",
         "unverified",
         "verified",
       ].sort(),
@@ -347,6 +372,137 @@ describe("a device failure", () => {
     expect(outcome.kind).toBe("reader-failure");
     expect(outcome.severity).toBe("error");
     expect(outcome.message).toBe("something the classifier does not know");
+  });
+});
+
+describe("the two conditions a write can be refused on", () => {
+  /** Nothing readable in the write position. */
+  const unreadable = () =>
+    writeResult("refused", {
+      refusalCause: "unreadable",
+      message: "could not read the tag on the reader, so refusing to write blind.",
+    });
+
+  /** The Tag already presents the Identity being written. */
+  const alreadyCarries = () =>
+    writeResult("refused", {
+      refusalCause: "already-carries",
+      message: "the tag on the reader already reads as 55 00 84 82 12.",
+    });
+
+  it("are two discriminators, not one refusal with two sentences", () => {
+    const a = outcomes.write("clone", unreadable());
+    const b = outcomes.write("clone", alreadyCarries());
+    expect(a.kind).toBe("unreadable");
+    expect(b.kind).toBe("skipped");
+    expect(a.kind).not.toBe(b.kind);
+    expect(a.message).not.toBe(b.message);
+  });
+
+  it("sound different, because the fixes are different", () => {
+    // "seat a tag that reads" and "this is the original, swap it" are two
+    // different errands. One is an error; the other is a skip, which needs you
+    // but means nothing failed.
+    const unreadableSignal = signalOf(outcomes.write("clone", unreadable()));
+    const skipSignal = signalOf(outcomes.write("clone", alreadyCarries()));
+    expect(unreadableSignal).toBe("attention");
+    expect(skipSignal).toBe("needs-you");
+    expect(unreadableSignal).not.toBe(skipSignal);
+  });
+
+  it("is still a plain refusal when no cause was reported", () => {
+    // Fail safe: an older reply, or a refusal whose cause nobody established,
+    // keeps the error rather than being softened into a skip.
+    const unknown = outcomes.write("clone", writeResult("refused", { message: "no" }));
+    expect(unknown.kind).toBe("refused");
+    expect(unknown.severity).toBe("error");
+  });
+
+  it("never reclassifies a transmitted write from a stray cause", () => {
+    // Only a refused write can name a cause: a verified or unknown write is
+    // whatever its outcome said, whatever field arrived beside it.
+    for (const result of ["verified", "unverified", "failed"] as const) {
+      const outcome = outcomes.write("clone", writeResult(result, { refusalCause: "already-carries" }));
+      expect(outcome.kind).not.toBe("skipped");
+    }
+  });
+});
+
+describe("the reads a clone is made of", () => {
+  it("reports the source and the destination as their own reads", () => {
+    const source = outcomes.cloneSourceRead("55 00 84 82 12");
+    const dest = outcomes.cloneDestinationRead("77 00 AB CD EF");
+
+    expect(source.kind).toBe("read");
+    expect(dest.kind).toBe("read");
+    expect(source.operation).toBe("clone");
+    expect(dest.operation).toBe("clone");
+    // Two reads, two messages: the wizard never reports the same sentence for
+    // two different steps.
+    expect(source.message).toContain("55 00 84 82 12");
+    expect(dest.message).toContain("77 00 AB CD EF");
+    expect(source.message).not.toBe(dest.message);
+    // Both are a completed read, so both are one chirp.
+    expect(signalOf(source)).toBe("done");
+    expect(signalOf(dest)).toBe("done");
+  });
+
+  it("names the original left on the reader as a skip, not as a failed read", () => {
+    const outcome = outcomes.cloneSourceStillInPlace("55 00 84 82 12");
+
+    expect(outcome.kind).toBe("skipped");
+    expect(outcome.operation).toBe("clone");
+    expect(outcome.severity).toBe("warning");
+    expect(outcome.message).toContain("55 00 84 82 12");
+    expect(outcome.message).toMatch(/original/i);
+    expect(outcome.detail).toMatch(/nothing was written/i);
+    expect(signalOf(outcome)).toBe("needs-you");
+  });
+});
+
+describe("one batch attempt", () => {
+  const verified = attempt("verified", { readback: null, confirmedCopies: 2 });
+  const skipped = attempt("skipped", {
+    refusalCause: "already-carries",
+    message: "the tag on the reader already reads as 55 00 84 82 12, so nothing was written.",
+  });
+  const refused = attempt("refused", {
+    refusalCause: "unreadable",
+    message: "could not read the tag on the reader, so refusing to write blind.",
+  });
+  const unverified = attempt("unverified", { message: "the tag could not be read back" });
+  const failed = attempt("failed", { message: "the device is unplugged" });
+
+  it("takes its vocabulary from the batch's own notice", () => {
+    for (const result of [verified, skipped, refused, unverified, failed]) {
+      const outcome = outcomes.batchAttempt(result);
+      expect(outcome.message).toBe(attemptNotice(result).text);
+      expect(outcome.operation).toBe("batch");
+    }
+  });
+
+  it("keeps a skip, a refusal and a verified write three distinguishable results", () => {
+    const results = [verified, skipped, refused].map((r) => outcomes.batchAttempt(r));
+
+    expect(results.map((o) => o.kind)).toEqual(["verified", "skipped", "unreadable"]);
+    // Three different messages...
+    expect(new Set(results.map((o) => o.message)).size).toBe(3);
+    // ...and three different sounds, so which fob worked is audible.
+    expect(results.map((o) => signalOf(o))).toEqual(["done", "needs-you", "attention"]);
+    expect(new Set(results.map((o) => signalOf(o))).size).toBe(3);
+  });
+
+  it("never lets a skip or a refusal be heard as a copy", () => {
+    for (const result of [skipped, refused, unverified, failed]) {
+      expect(signalOf(outcomes.batchAttempt(result))).not.toBe("done");
+    }
+  });
+
+  it("reports an unknown attempt as needs-you rather than as a failure", () => {
+    const outcome = outcomes.batchAttempt(unverified);
+    expect(outcome.kind).toBe("unverified");
+    expect(outcome.severity).toBe("warning");
+    expect(signalOf(outcome)).toBe("needs-you");
   });
 });
 
