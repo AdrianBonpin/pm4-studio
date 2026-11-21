@@ -158,6 +158,12 @@ export interface DraftsView {
   drafts: Draft[];
   /** Set when the library file must not be written to; nothing may be saved. */
   problem: import("./library").LibraryProblem | null;
+  /**
+   * Set when a file written by an older schema was lifted but the lift could
+   * not be written back. The Drafts here are whole and saving is allowed, so
+   * this is a warning rather than a lock.
+   */
+  migrationWarning: string | null;
 }
 
 /** Shown in the Drafts section header, so an empty list is not a blank screen. */

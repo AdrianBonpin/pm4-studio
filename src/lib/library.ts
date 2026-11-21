@@ -62,6 +62,13 @@ export interface LibraryView {
   version: number;
   snapshots: Snapshot[];
   problem: LibraryProblem | null;
+  /**
+   * Set when a file written by an older schema was lifted to this build's
+   * schema but the lift could not be written back. The library in memory is the
+   * lifted one and saving is allowed — a save is what corrects the file — so
+   * this is a warning, not a lock. Null when there is nothing to say.
+   */
+  migrationWarning: string | null;
 }
 
 /** What a save did. "duplicate" means the read was already in the library. */

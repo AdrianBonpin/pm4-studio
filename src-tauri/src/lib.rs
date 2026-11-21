@@ -7,6 +7,7 @@ pub mod identity;
 pub mod library;
 pub mod library_io;
 pub mod library_migration;
+pub mod library_schema;
 pub mod memory_dump;
 pub mod ntag;
 pub mod password;
@@ -23,7 +24,7 @@ use batch::BatchAttempt;
 use blank::BlankAttempt;
 use identity::Identity;
 use library::{
-    Draft, InsertOutcome, Library, LibraryProblem, LibraryStore, SaveError, Snapshot,
+    Draft, InsertOutcome, Library, LibraryProblem, LibraryStore, Open, SaveError, Snapshot,
     WriteCountOutcome,
 };
 use library_io::{FileError, ImportPreview};
@@ -979,6 +980,11 @@ pub struct LibraryView {
     pub version: u32,
     pub snapshots: Vec<Snapshot>,
     pub problem: Option<ProblemView>,
+    /// Set when an older library was lifted to this build's schema but the lift
+    /// could not be written back. The library in memory is the lifted one and
+    /// saving is allowed; the file still carries the older version claim until
+    /// a save corrects it, which is what there is to say.
+    pub migration_warning: Option<String>,
 }
 
 fn loaded_view(store: &LibraryStore, library: Library) -> LibraryView {
@@ -987,6 +993,19 @@ fn loaded_view(store: &LibraryStore, library: Library) -> LibraryView {
         version: library.version,
         snapshots: library.snapshots,
         problem: None,
+        migration_warning: None,
+    }
+}
+
+/// The view for an open library: the same as a loaded one, plus whatever the
+/// lift of an older file has to report.
+fn opened_view(store: &LibraryStore, open: Open) -> LibraryView {
+    match open {
+        Open::Opened { library, migration } => LibraryView {
+            migration_warning: migration.and_then(|lift| lift.message()),
+            ..loaded_view(store, library)
+        },
+        Open::Refused(problem) => refused_view(store, problem),
     }
 }
 
@@ -996,6 +1015,7 @@ fn refused_view(store: &LibraryStore, problem: LibraryProblem) -> LibraryView {
         version: library::SCHEMA_VERSION,
         snapshots: Vec::new(),
         problem: Some(problem.into()),
+        migration_warning: None,
     }
 }
 
@@ -1048,13 +1068,14 @@ pub struct SaveResult {
 }
 
 /// Read the library. Also works with no Reader attached, which is the point.
+///
+/// This is the app's open: a file written by an older schema is lifted here and
+/// the lift is written back before the view is returned, so the version the
+/// user's file claims is the version it holds (ADR 0005).
 #[tauri::command]
 fn library_load(app: AppHandle) -> Result<LibraryView, String> {
     let store = library_store(&app)?;
-    Ok(match store.load() {
-        Ok(library) => loaded_view(&store, library),
-        Err(problem) => refused_view(&store, problem),
-    })
+    Ok(opened_view(&store, store.open()))
 }
 
 /// Save a 125 kHz read as a Snapshot. A read already in the library is reported
@@ -1203,12 +1224,28 @@ pub struct DraftsView {
     /// Set when the file must not be written to; nothing may be saved until the
     /// user deals with it.
     pub problem: Option<ProblemView>,
+    /// Set when an older library was lifted but the lift could not be written.
+    /// The Drafts are here, whole, and saving is allowed.
+    pub migration_warning: Option<String>,
 }
 
 fn drafts_view(library: Library) -> DraftsView {
     DraftsView {
         drafts: library.drafts,
         problem: None,
+        migration_warning: None,
+    }
+}
+
+/// The Drafts view for an open library: the same as a loaded one, plus whatever
+/// the lift of an older file has to report.
+fn opened_drafts_view(open: Open) -> DraftsView {
+    match open {
+        Open::Opened { library, migration } => DraftsView {
+            migration_warning: migration.and_then(|lift| lift.message()),
+            ..drafts_view(library)
+        },
+        Open::Refused(problem) => refused_drafts_view(problem),
     }
 }
 
@@ -1216,18 +1253,19 @@ fn refused_drafts_view(problem: LibraryProblem) -> DraftsView {
     DraftsView {
         drafts: Vec::new(),
         problem: Some(problem.into()),
+        migration_warning: None,
     }
 }
 
 /// Read the Drafts. Works with no Reader attached, which is the point of a
 /// Draft: it is composed before any Tag is in hand.
+///
+/// Opening, not merely reading: whichever page the user reaches first, a file
+/// written by an older schema is lifted and the lift written back here too.
 #[tauri::command]
 fn drafts_load(app: AppHandle) -> Result<DraftsView, String> {
     let store = library_store(&app)?;
-    Ok(match store.load() {
-        Ok(library) => drafts_view(library),
-        Err(problem) => refused_drafts_view(problem),
-    })
+    Ok(opened_drafts_view(store.open()))
 }
 
 /// Create an empty Draft. The id comes from the store, never from the UI.

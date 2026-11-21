@@ -31,8 +31,12 @@ const DRAFT: Draft = {
   records: [],
 };
 
-function view(drafts: Draft[], problem: LibraryProblem | null = null): DraftsView {
-  return { drafts, problem };
+function view(
+  drafts: Draft[],
+  problem: LibraryProblem | null = null,
+  migrationWarning: string | null = null,
+): DraftsView {
+  return { drafts, problem, migrationWarning };
 }
 
 describe("deleting a Draft", () => {
@@ -53,5 +57,37 @@ describe("deleting a Draft", () => {
     });
     // That Draft, and no other.
     expect(backend.callsTo("draft_delete")[0]?.args).toEqual({ id: DRAFT.id });
+  });
+});
+
+/**
+ * Ticket 04 / ADR 0005: a version 1 library is lifted on open, and a lift that
+ * cannot be written is reported. The Drafts are the reason the version exists —
+ * they are the collection an older build would have dropped — so the page says
+ * when the file still carries the older claim, and stays usable.
+ */
+describe("a library lifted from an older schema", () => {
+  const WARNING =
+    "This library was written for schema 1 and has been read as schema 2. It could not be rewritten: permission denied. Everything in it is open and usable, and saving will correct the file.";
+
+  it("shows every Draft and reports the lift that could not be written", async () => {
+    fakeBackend({ drafts_load: () => view([DRAFT], null, WARNING) });
+
+    renderUi(<DraftsPage connected={false} />);
+
+    expect(await screen.findByText(DRAFT.name)).toBeTruthy();
+    expect(screen.getByText(/could not be rewritten/)).toBeTruthy();
+    // A warning, not a lock: the file was read whole, so saving stays on.
+    const create = screen.getByRole("button", { name: "New Draft" });
+    expect((create as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("says nothing when the lift was written", async () => {
+    fakeBackend({ drafts_load: () => view([DRAFT]) });
+
+    renderUi(<DraftsPage connected={false} />);
+
+    expect(await screen.findByText(DRAFT.name)).toBeTruthy();
+    expect(screen.queryByText(/could not be rewritten/)).toBeNull();
   });
 });

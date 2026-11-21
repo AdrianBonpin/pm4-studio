@@ -35,6 +35,7 @@ export function libraryView(snapshots: Snapshot[] = [SNAPSHOT]): LibraryView {
     version: 2,
     snapshots,
     problem: null,
+    migrationWarning: null,
   };
 }
 
