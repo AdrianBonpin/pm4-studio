@@ -8,10 +8,10 @@
 - S6 Card type resolver — catches table errors, family-only results and unknown-pair handling; misses vendor-specific SAK variants.
 
 **Tracker:** None
-**Status:** ready
+**Status:** done
 
-- [ ] Known pairs resolve to the correct family, proven against a table written independently of the implementation.
-- [ ] Pairs that identify only a family return the family with no capacity.
-- [ ] Unknown pairs return nothing rather than an approximate match.
-- [ ] No capacity is produced for a family whose size requires a command this Reader lacks.
-- [ ] Each family's result states which technologies are plausible for it.
+- [x] Known pairs resolve to the correct family, proven against a table written independently of the implementation.
+- [x] Pairs that identify only a family return the family with no capacity.
+- [x] Unknown pairs return nothing rather than an approximate match.
+- [x] No capacity is produced for a family whose size requires a command this Reader lacks.
+- [x] Each family's result states which technologies are plausible for it.
