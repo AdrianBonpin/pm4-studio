@@ -74,7 +74,7 @@ then confirm what is being replaced.
 
 The spike proved one page only. Ticket 18 wrote, on NTAG215 `04 43 7B 01 CC 09 03`:
 
-| Pages marked `2` in one request | Message | Result |
+| Pages marked `2` in one request | Message | Result as recorded |
 |---|---|---|
 | 4, 5, 6 | 9-byte Text Record | verified, read back byte for byte |
 | 4 … 16 | 47-byte Text Record | verified, read back byte for byte |
@@ -82,8 +82,10 @@ The spike proved one page only. Ticket 18 wrote, on NTAG215 `04 43 7B 01 CC 09 0
 
 The third row is the replacing case: the request covers the union of both regions
 and the old message's tail is zeroed, confirmed by a read from a separate process.
-The transcript is in `docs/PROTOCOL.md` under `0x0082`, and the open problem it
-answers is marked solved there.
+The record of these three requests is in `docs/PROTOCOL.md` under `0x0082`, where it
+is labelled **PROVISIONAL**: what the run reported is recorded, but not the requests
+and replies themselves, so open problem 2 stays open there and the first criterion
+above stays unchecked for the same reason.
 
 Unexercised and left unchecked deliberately: a message filling the whole 496 bytes,
 and a page reporting state `4` mid-write.

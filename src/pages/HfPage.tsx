@@ -9,6 +9,7 @@ import {
   HF_POLL_LAYOUT,
   decodeHfPayload,
   hexBytes,
+  capacityForReading,
   ndefField,
   ndefStatusFor,
   uidMatchesMemory,
@@ -73,8 +74,12 @@ function DecodedReadout({
   memory: TagRecordsRead | null;
 }) {
   const { cardType } = reading;
-  const capacity =
-    cardType.capacityBytes === null ? "not determined" : `${cardType.capacityBytes} bytes`;
+  // The published table gives capacity for a fixed-size family; the families it
+  // withholds it for get it from the Capability Container of the memory read
+  // above, which is the same read that settles NDEF. "not determined" is only
+  // shown when neither has produced a number.
+  const capacityBytes = capacityForReading(cardType, memory);
+  const capacity = capacityBytes === null ? "not determined" : `${capacityBytes} bytes`;
   // The poll cannot say whether the Tag is NDEF formatted; a memory read of the
   // same Tag can. Without one the row is omitted rather than greyed out.
   const ndef = ndefStatusFor(memory?.ndef.outcome ?? null);
@@ -92,7 +97,7 @@ function DecodedReadout({
         <Field
           label="Capacity"
           value={capacity}
-          tone={cardType.capacityBytes === null ? "muted" : "default"}
+          tone={capacityBytes === null ? "muted" : "default"}
         />
         <Field label="ATQA" value={hexBytes(reading.atqa)} />
         <Field label="SAK" value={hexBytes([reading.sak])} />

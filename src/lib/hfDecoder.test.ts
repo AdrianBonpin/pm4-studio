@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   decodeHfPayload,
+  capacityForReading,
   ndefField,
   ndefStatusFor,
   uidMatchesMemory,
 } from "./hfDecoder";
+import type { CardType } from "./cardType";
+import type { TagRecordsRead } from "./tagRecords";
 
 /**
  * Seam S5 — the HF decoder.
@@ -177,6 +180,45 @@ describe("NDEF formatting, once the tag's memory has been read", () => {
     for (const outcome of [null, "message", "empty", "missing", "notFormatted", "unreadable"] as const) {
       expect(ndefStatusFor(outcome).note.trim()).not.toBe("");
     }
+  });
+});
+
+describe("the capacity a readout shows", () => {
+  /** A family whose size the published table fixes (MIFARE Classic 1K). */
+  const CLASSIC: CardType = {
+    family: "MIFARE Classic 1K",
+    variants: ["MIFARE Classic 1K"],
+    capacityBytes: 1024,
+    technologies: ["ISO/IEC 14443-3A", "MIFARE Classic"],
+    nfcForumTagType: null,
+  };
+  /** The Ultralight/NTAG21x family, whose size only the tag's own CC settles. */
+  const NTAG: CardType = {
+    family: "MIFARE Ultralight / NTAG21x",
+    variants: ["NTAG213/215/216"],
+    capacityBytes: null,
+    technologies: ["ISO/IEC 14443-3A", "MIFARE Ultralight"],
+    nfcForumTagType: 2,
+  };
+
+  const memory = (capacityBytes: number | null): TagRecordsRead =>
+    ({ ndef: { outcome: "message", capacityBytes } }) as TagRecordsRead;
+
+  it("uses the table's fixed size when the family has one", () => {
+    expect(capacityForReading(CLASSIC, null)).toBe(1024);
+    expect(capacityForReading(CLASSIC, memory(496))).toBe(1024);
+  });
+
+  it("takes the tag's Capability Container once its memory has been read", () => {
+    // The recorded NTAG215 read: CC `E1 10 3E 00` is 496 bytes of user memory.
+    expect(capacityForReading(NTAG, memory(496))).toBe(496);
+  });
+
+  it("reports no number only while nothing has produced one", () => {
+    // Not a field the Reader cannot fill: an unread Ultralight is a value still
+    // unknown, and one memory read settles it.
+    expect(capacityForReading(NTAG, null)).toBeNull();
+    expect(capacityForReading(NTAG, memory(null))).toBeNull();
   });
 });
 

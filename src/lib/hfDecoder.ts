@@ -39,7 +39,7 @@
  */
 
 import { resolveCardType, type CardType } from "./cardType";
-import type { TagNdefOutcome } from "./tagRecords";
+import type { TagNdefOutcome, TagRecordsRead } from "./tagRecords";
 
 /** The 13.56 MHz poll reply is 19 payload bytes. */
 export const HF_POLL_PAYLOAD_LEN = 19;
@@ -164,6 +164,24 @@ export function ndefStatusFor(outcome: TagNdefOutcome | null): NdefStatus {
 export function ndefField(status: NdefStatus): { label: string; value: string } | null {
   if (status.formatted === null) return null;
   return { label: "NDEF formatted", value: status.formatted ? "yes" : "no" };
+}
+
+/**
+ * The capacity a readout can show, in bytes, or `null` when nothing has produced one.
+ *
+ * User story 56 again: capacity must not become a permanently greyed row. It is
+ * not one of the fields this Reader cannot produce — the published table gives it
+ * for a family whose size is fixed, and for the families the table withholds it
+ * for (Ultralight/NTAG21x, DESFire) the Tag's own Type 2 Capability Container
+ * gives it, in the same memory read that settles NDEF. So a muted "not determined"
+ * means "not produced yet", never "impossible", and it is only shown when neither
+ * source has answered.
+ */
+export function capacityForReading(
+  cardType: CardType,
+  memory: TagRecordsRead | null,
+): number | null {
+  return cardType.capacityBytes ?? memory?.ndef.capacityBytes ?? null;
 }
 
 /**
