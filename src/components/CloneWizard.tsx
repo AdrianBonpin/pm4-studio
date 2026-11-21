@@ -5,6 +5,7 @@ import { Button } from "./ui/Button";
 import { Field, Readout } from "./Section";
 import { useLfPoller } from "../hooks/useReader";
 import { describeDeviceFailure } from "../lib/readerIdentity";
+import { confirmedCopiesLabel, writeNotice } from "../lib/writeOutcome";
 import type { LfCard, WriteResult } from "../types";
 
 type Step = "idle" | "awaitSource" | "sourceReady" | "awaitDest" | "writing" | "done" | "failed";
@@ -64,7 +65,8 @@ export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: Clon
           onChirp();
         } else {
           setStep("failed");
-          setErr("The write was sent but the blank did not read back the expected id.");
+          // The notice names the actual outcome: refused, unknown, or not sent.
+          setErr(writeNotice(res).text);
         }
       } catch (e) {
         setStep("failed");
@@ -198,6 +200,11 @@ export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: Clon
             <Check size={15} /> Cloned and verified
           </p>
           <Readout value={result?.readback?.id ?? source?.id} />
+          {result && result.confirmedCopies !== null && (
+            <p className="text-xs text-text-muted">
+              {confirmedCopiesLabel(result.confirmedCopies)} in the library.
+            </p>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <Field
               label="Facility / card"

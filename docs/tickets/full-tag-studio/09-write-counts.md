@@ -8,10 +8,10 @@
 - S8 Library store with S4 Write guard — catches the counting rules and their persistence; misses nothing new.
 
 **Tracker:** None
-**Status:** ready
+**Status:** done
 
-- [ ] A verified write increments the Snapshot's count.
-- [ ] A refused write does not increment it.
-- [ ] A write that transmitted but could not be read back does not increment it.
-- [ ] The count survives restart.
-- [ ] The count is presented as confirmed copies, not as attempts.
+- [x] A verified write increments the Snapshot's count.
+- [x] A refused write does not increment it.
+- [x] A write that transmitted but could not be read back does not increment it.
+- [x] The count survives restart.
+- [x] The count is presented as confirmed copies, not as attempts.

@@ -16,6 +16,12 @@ import {
   snapshotTitle,
   sortSnapshots,
 } from "../lib/library";
+import {
+  CONFIRMED_COPIES_HINT,
+  NOTICE_TONE_CLASS,
+  confirmedCopiesLabel,
+  writeNotice,
+} from "../lib/writeOutcome";
 import type { LibraryState } from "../hooks/useLibrary";
 import type { Snapshot, SnapshotDraft, SnapshotOrder } from "../lib/library";
 import type { WriteResult } from "../types";
@@ -57,6 +63,7 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
   );
   const problem = view?.problem ?? null;
   const searching = query.trim().length > 0;
+  const notice = writeResult ? writeNotice(writeResult) : null;
 
   const commitEdit = (snapshot: Snapshot) => {
     if (!editing) return;
@@ -94,8 +101,9 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
         data32: target.identity.data32,
       });
       setWriteResult(res);
+      // Only a confirmed copy changes the count, so only then is the list stale.
       if (res.verified) onChirp();
-      else setWriteErr("Write sent, but the tag did not read back the expected id.");
+      if (res.confirmedCopies !== null) void library.reload();
     } catch (e) {
       setWriteErr(describeDeviceFailure(e));
     } finally {
@@ -328,6 +336,16 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
                         {snapshot.note}
                       </p>
                     )}
+                    {snapshot.identity && (
+                      <p
+                        className="mt-0.5 text-[11px] text-text-muted"
+                        title={CONFIRMED_COPIES_HINT}
+                      >
+                        <span className="border-b border-dotted border-text-muted/40">
+                          {confirmedCopiesLabel(snapshot.writeCount)}
+                        </span>
+                      </p>
+                    )}
                   </div>
 
                   {!confirming && (
@@ -384,9 +402,14 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
               </Button>
             </div>
             {writeErr && <p className="text-xs text-err">{writeErr}</p>}
-            {writeResult?.verified && (
-              <p className="text-xs text-ok">
-                Verified — the tag now reads {writeResult.readback?.id}.
+            {notice && (
+              <p className={`text-xs leading-relaxed ${NOTICE_TONE_CLASS[notice.tone]}`}>
+                {notice.text}
+              </p>
+            )}
+            {writeResult?.countProblem && (
+              <p className="text-xs leading-relaxed text-err">
+                The confirmed-copy count could not be saved: {writeResult.countProblem}
               </p>
             )}
           </div>
