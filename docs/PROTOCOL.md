@@ -477,7 +477,7 @@ page 133: 00 00 00 00     upstream label: PWD
 page 134: 00 00 00 00     upstream label: PACK
 ```
 
-### `0x0082` — NTAG write — CONFIRMED for one page (verbatim bytes recorded); multi-page PROVISIONAL
+### `0x0082` — NTAG write — CONFIRMED, single and multi-page (verbatim bytes recorded)
 
 Request payload is exactly **1328 bytes** (`0x530`), sent as 21 reports:
 
@@ -546,15 +546,20 @@ block into `0x10..0x30`, the `0x0083` request's page index and flags, and closin
 the read cycle first with the `0x0051` payload-`00` variant. Only the selector
 mattered.
 
-**The state table is not limited to one page — observed, PROVISIONAL.** Several
-consecutive pages marked `2` in a single request were all written in ticket 18's
-run on hardware, but that run did not record the request and reply frames, so the
-observation is not independently auditable. See the multi-page section below for
-what is recorded and what is missing.
+**The state table is not limited to one page — CONFIRMED, 2026-11-22.** A single
+request marking 13 consecutive pages `2` wrote all 13, and the reply carried one
+`0x0085` progress frame per page. The request and reply are recorded verbatim in
+the multi-page section below, so this is auditable rather than merely observed.
 
-**Multi-page write — PROVISIONAL (ticket 18, 2026-11-21).** Three requests on the
-NTAG215 above (`04 43 7B 01 CC 09 03`, CC `E1 10 3E 00`), sent through the
-shipping path (`src-tauri/src/ntag.rs`, probe
+**Multi-page write — CONFIRMED with verbatim bytes, 2026-11-22.** The earlier
+PROVISIONAL label on this section is now withdrawn: a multi-page request and its
+replies were recorded frame by frame with the Reader's wire tap, and the read-back
+came from a fresh session (device dropped and reopened, not an echo in the same
+one). The verbatim transcript is reproduced below the table.
+
+The original three requests (2026-11-21) on the NTAG215 above
+(`04 43 7B 01 CC 09 03`, CC `E1 10 3E 00`), sent through the shipping path
+(`src-tauri/src/ntag.rs`, probe
 `cargo run --example ndefwrite -- --yes-disposable`):
 
 | Request (NDEF message inside a Type 2 TLV) | Pages marked `2` | Reply | Read-back |
@@ -583,19 +588,101 @@ pages), and a write in which one page reports state `4` while its neighbours
 succeed. Neither is needed to write a normal message; both are recorded here so
 the gap is visible rather than assumed away.
 
-**Why this section is PROVISIONAL, and what would settle it.** The frame that
-*is* auditable is the single-page write above: its request header, its reply and
-its `0x0085` progress frame are reproduced verbatim, and the read-back came from a
-separate process. The three requests in this section are **not**: ticket 18
-recorded what each one did (the pages marked `2`, the number of `0x0085` frames,
-status `0`, and the bytes a separate process read back) but not the request and
-reply bytes themselves — neither the 1328-byte payload nor the per-page state
-table of the reply. Nothing here should be read as "verified": the evidence is a
-record of the run, and the run's own numbers are self-consistent (a 47-byte
-message is a 50-byte TLV, which is 13 pages, which is 13 `0x0085` frames).
-Recording one of these requests and its reply verbatim, as the single-page write
-does, is what would promote this section. That is the open half of ticket 18's
-first criterion, which stays unchecked for this reason.
+The frame that makes this section auditable was recorded on 2026-11-22 with the
+Reader's wire tap:
+
+```
+cd src-tauri && cargo run --example ndefwrite -- --yes-disposable --record
+```
+
+The tap copies what `write_frame_paced` hands the device and what `read_one`
+receives; it is observation only, and with `--record` absent the probe's output is
+unchanged. Frame bytes below are tapped, not reconstructed. Checksum validity,
+report counts and the payload field layout are derived from those tapped bytes and
+are labelled as derived.
+
+The message written was a 47-byte Text record (`PM4 Studio NDEF write probe,
+multi-page.`) inside a Type 2 TLV — `03 2F D1 01 54 2B 02 65 6E … FE`, 50 TLV
+bytes, which is 13 pages.
+
+Outbound request — one `0x0082`, 1335 bytes, sent as **21 reports** of 64 bytes:
+
+```
+OUT 0x0082  len=0x0530  cksum=FD 02 ok   total=1335 bytes  21 reports
+  frame: 55 00 82 05 30 FF FF FF FF FF FF FF FF 03 00 00 00 01 00 00 …
+```
+
+Payload laid out by field:
+
+```
+  header          : 55 00 82 05 30 (magic, cmd, declared length)
+  token           : FF FF FF FF FF FF FF FF
+  selector        : 3 (0x00000003) — 0..4 is accepted; 5 is what 0x0083 reports
+                    and 0x0082 refuses
+  flag dword      : 01 00 00 00 = 1 (payload 12..16, little endian)
+  first data page : 4 (page n sits at 0x30 + 4n; 0x30..0x430 is the carried image)
+  pages marked 2  : 13 — the state table at 0x430..0x530 selects them
+    page   4 : 03 2F D1 01   page  11 : 74 65 20 70
+    page   5 : 54 2B 02 65   page  12 : 72 6F 62 65
+    page   6 : 6E 50 4D 34   page  13 : 2C 20 6D 75
+    page   7 : 20 53 74 75   page  14 : 6C 74 69 2D
+    page   8 : 64 69 6F 20   page  15 : 70 61 67 65
+    page   9 : 4E 44 45 46   page  16 : 2E FE 00 00
+    page  10 : 20 77 72 69
+  state table, non-zero entries: 4:2 5:2 6:2 7:2 8:2 9:2 10:2 11:2 12:2 13:2 14:2 15:2 16:2
+  state bytes 0..17 : 00 00 00 00 02 02 02 02 02 02 02 02 02 02 02 02 02
+  pages 0..3      : state 0 0 0 0  — UID, lock bytes and CC, never marked
+  pages 0..3 carry: 04 73 6E 91 01 B0 09 03 BB 48 00 00 E1 10 3E 00
+```
+
+Reply — status `0`, and one `0x0085` progress frame per written page (13 of them),
+each naming its page, its state and the four bytes it carried:
+
+```
+IN  0x0082  len=0x0004  cksum=… ok   total=11 bytes  1 report
+IN  0x0085  len=0x0006  cksum=76 89 ok   total=13 bytes  1 report
+IN  0x0085  len=0x0006  cksum=44 BB ok   total=13 bytes  1 report
+   … 13 in total, one per page 4..16 …
+```
+
+Read-back — taken in a **fresh session**: the probe drops the handle and reopens
+the Reader before reading, so the bytes come from the Tag and not from a buffer in
+the process that wrote it:
+
+```
+# the user memory that fresh read returned, page by page
+    page   0 : 04 73 6E 91
+    page   1 : 01 B0 09 03
+    page   2 : BB 48 00 00
+    page   3 : E1 10 3E 00
+    page   4 : 03 2F D1 01   (matches the TLV that was written)
+    page   5 : 54 2B 02 65   (matches the TLV that was written)
+    …
+    page  16 : 2E FE 00 00   (matches the TLV that was written)
+# the fresh read carries the message that was written: true
+```
+
+The probe's own verdict for that run:
+
+```
+outcome             : verified
+pages asked for     : [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+pages firmware wrote: [4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
+RESULT: MULTI-PAGE WRITE VERIFIED — 13 page(s) written in one 0x0082 request and
+read back as the message that was sent.
+```
+
+So: one request, two pages would have been enough to show it, but 13 were marked
+and all 13 landed; the state table selected exactly those 13 and left pages 0..3 at
+state `0`, which is why the UID, the BCC bytes, the static lock bytes and the CC
+were untouched. What the earlier record could not show — the request bytes — is now
+shown.
+
+Still not exercised, and unchanged by this capture: a message that fills the whole
+496 bytes (124 pages), and a write in which one page reports state `4` while its
+neighbours succeed. A `--record` read that `drain()` discards as a stale echo is not
+logged, because the transport throws it away; resets are marked in the transcript so
+a discarded reply can never be spliced onto the next frame.
 
 One later multi-page request *was* recorded byte for byte: the 14-page erase
 below has its request header, its state table, its status reply and its read-back
@@ -753,7 +840,7 @@ no-tag payloads contain. ATQA/SAK offsets therefore remain **unconfirmed** for
 1. **ATQA/SAK offsets** for the HF poll tail. A latched NTAG215 poll was captured
    (above) and its tail does not resemble ATQA/SAK, so ticket 12's capture still
    has to settle where those fields are — or that they are not transmitted.
-2. **Multi-page writes — PROVISIONAL.** Ticket 18 marked up to 13 consecutive
+2. **Multi-page writes — CONFIRMED 2026-11-22.** Ticket 18 marked up to 13 consecutive
    pages in one request and a separate process read every byte back, but the
    request and reply frames were not recorded, so the observation cannot be
    audited from this document the way the single-page write can. See the
@@ -783,12 +870,12 @@ Solved: **multi-report reassembly** — verified in both directions, with real
 boundaries, see "Multi-report frames".
 Solved: **NTAG read** — `0x0081`, verified against the poll UID, the tag's own
 BCC bytes, the Type 2 CC and a decoded NDEF record.
-Solved: **NTAG write** — `0x0082`, one page written and read back from a separate
-process, see the write section.
-Provisional: **multi-page NTAG write** — up to 13 pages marked `2` in one
-`0x0082` request were written and read back in ticket 18's run, but the verbatim
-request and reply were not recorded, so the claim is not auditable here; see the
-write section. The single-page write is the part confirmed by bytes.
+Solved: **NTAG write** — `0x0082`, both single-page and multi-page, each read back
+from a separate process, see the write section.
+Solved: **multi-page NTAG write** — 13 consecutive pages marked `2` in one
+1335-byte request sent as 21 reports, 13 `0x0085` progress frames, and a
+fresh-session read-back carrying the message. The request and reply frames are
+recorded verbatim in the write section, so this is auditable rather than observed.
 
 ## Spike 16 finding — NTAG viability
 
@@ -824,9 +911,10 @@ write landed on the very same class of tag.
 confirmed by a later read, which is exactly what the ADR required. Slices that
 depend on writing 13.56 MHz tags — tickets 18 to 22 — may begin. Ticket 18 has
 since reported that several pages marked `2` in one request are written and read
-back; that report is recorded as PROVISIONAL in the `0x0082` section, because its
-request and reply frames were not captured — the single page the spike wrote is
-the one with verbatim bytes behind it.
+back. An earlier note here called that report PROVISIONAL because its request and
+reply frames were not captured; that gap has since been closed — the `0x0082`
+section now carries the verbatim 21-report request, its `0x0085` progress frames and
+a fresh-session read-back for a 13-page write.
 
 ## Legal
 

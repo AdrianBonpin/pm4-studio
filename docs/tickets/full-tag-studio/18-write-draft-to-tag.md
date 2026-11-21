@@ -8,21 +8,21 @@
 - S7 NDEF codec with S8 Library store — catches the encode-then-verify round trip and outcome classification; misses real tag behaviour beyond the write itself.
 
 **Tracker:** None
-**Status:** done — the write path is integrated; the multi-page hardware claim is
-recorded but its raw frames are not, so that one criterion is left unchecked
+**Status:** done — verified on hardware on 2026-11-22 with the request and reply
+recorded verbatim
 
-- [ ] Writing a Draft lands its Records and a read-back returns them.
-      UNCHECKED at integration. The record shows 13 pages (4..16) marked `2` in one
-      request, 13 `0x0085` frames, and a separate-process read-back of
-      `03 09 D1 01 / 54 05 02 65 / 6E 68 69 FE` on pages 4..6 with pages 7..16 zero.
-      That is specific and self-consistent (47-byte message, 50-byte TLV, 13 pages,
-      matching the probe's built-in text). What is missing is the *verbatim* request
-      and reply — the byte range and the page-state table — which the single-page
-      write above does record in full. PROTOCOL.md now says the same thing in every
-      place: the single-page write is CONFIRMED by verbatim bytes, and multi-page is
-      PROVISIONAL with exactly this gap named, including its `0x0082` heading, open
-      problem 2 and the Solved/Provisional summary. Not accepted as proven without
-      those bytes.
+- [x] Writing a Draft lands its Records and a read-back returns them.
+      VERIFIED 2026-11-22. At integration this was left unchecked because the run
+      recorded what each request did but not the request bytes themselves, and a
+      claim without bytes is an illustration, not evidence. The gap is now closed:
+      the Reader's wire tap records what `write_frame_paced` hands the device and
+      what `read_one` receives, and a 13-page write was captured frame by frame. One
+      `0x0082` of 1335 bytes sent as 21 reports, the payload laid out by field
+      (token, selector `3`, flag dword, first data page `4`, 13 pages marked state
+      `2`, pages 0..3 at state `0`), 13 `0x0085` progress frames, and a read-back
+      taken in a fresh session — device dropped and reopened — returning the message
+      that was sent. The probe's own verdict: `MULTI-PAGE WRITE VERIFIED`. The
+      transcript is in `docs/PROTOCOL.md` under `0x0082`.
 - [x] The confirmation names the existing content being replaced, or states the tag appears empty.
       `replacementSentence` in `src/lib/tagWrite.ts`: "The tag appears empty, so nothing is
       being replaced", or "Writing replaces what the tag holds now: 1 Record: URL
@@ -82,10 +82,10 @@ The spike proved one page only. Ticket 18 wrote, on NTAG215 `04 43 7B 01 CC 09 0
 
 The third row is the replacing case: the request covers the union of both regions
 and the old message's tail is zeroed, confirmed by a read from a separate process.
-The record of these three requests is in `docs/PROTOCOL.md` under `0x0082`, where it
-is labelled **PROVISIONAL**: what the run reported is recorded, but not the requests
-and replies themselves, so open problem 2 stays open there and the first criterion
-above stays unchecked for the same reason.
+Those three requests are recorded in `docs/PROTOCOL.md` under `0x0082`. They were
+labelled PROVISIONAL at integration because the request and reply bytes were not
+kept; a later run with the wire tap recorded them, so that label has been withdrawn
+and open problem 2 is closed.
 
 Unexercised and left unchecked deliberately: a message filling the whole 496 bytes,
 and a page reporting state `4` mid-write.
