@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "../lib/platform";
+import { migrateLegacyReads } from "../lib/libraryMigration";
 import type { LibraryView, SaveResult } from "../lib/library";
 import type { LfCard } from "../types";
 
@@ -40,6 +41,11 @@ export function useLibrary(): LibraryState {
     try {
       setView(await invoke<LibraryView>("library_load"));
       setError(null);
+      // Hand the old webview store's saved reads over on every launch; the file
+      // store migrates only while its file does not exist yet, so this can
+      // neither duplicate nor overwrite. The old store is only ever read.
+      const migrated = await migrateLegacyReads();
+      if (migrated) setView(migrated.library);
     } catch (e) {
       setError(String(e));
     } finally {

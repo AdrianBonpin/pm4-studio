@@ -2,6 +2,7 @@
 
 pub mod identity;
 pub mod library;
+pub mod library_migration;
 pub mod reader;
 pub mod stream;
 pub mod write_guard;
@@ -389,6 +390,71 @@ fn library_delete(app: AppHandle, id: String) -> Result<LibraryView, String> {
     Ok(loaded_view(&store, library))
 }
 
+/// What one migration run did, in the shape the webview reads it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MigrationView {
+    /// "migrated" | "libraryExists" | "nothingToMigrate" | "refused"
+    pub status: &'static str,
+    /// Snapshots this run wrote.
+    pub migrated: usize,
+    /// Of those, the ones preserved without an Identity because they could not be decoded.
+    pub raw_only: usize,
+    /// Stored reads the library already held, so they were not added twice.
+    pub already_present: usize,
+    /// Array elements that were not stored reads at all.
+    pub skipped: usize,
+    /// Snapshot fields the old store never recorded.
+    pub missing: Vec<&'static str>,
+    /// Old-store keys this app has no home for.
+    pub unmapped: Vec<String>,
+    pub library: LibraryView,
+}
+
+/// Move the old webview store's saved reads into the library, once.
+///
+/// The webview reads its own `localStorage` and hands the parsed entries over;
+/// this writes them into the library file only while that file does not exist, so
+/// a restart cannot duplicate them and a failed run simply repeats on the next
+/// launch. The old store is never cleared or marked, so nothing is lost if this
+/// fails. See `library_migration` for the field-by-field mapping.
+#[tauri::command]
+fn library_migrate_legacy(
+    app: AppHandle,
+    entries: Vec<serde_json::Value>,
+    now: String,
+) -> Result<MigrationView, String> {
+    let store = library_store(&app)?;
+    match library_migration::migrate(&store, &entries, &now) {
+        Ok(run) => Ok(MigrationView {
+            status: run.status.as_str(),
+            migrated: run.migrated,
+            raw_only: run.raw_only,
+            already_present: run.already_present,
+            skipped: run.skipped,
+            missing: run.missing,
+            unmapped: run.unmapped,
+            library: loaded_view(&store, run.library),
+        }),
+        // The file is not one this build may read, so it was left exactly as it
+        // is. The view says so, as it does for every other library operation.
+        Err(library_migration::MigrationError::Refused(problem)) => Ok(MigrationView {
+            status: "refused",
+            migrated: 0,
+            raw_only: 0,
+            already_present: 0,
+            skipped: 0,
+            missing: library_migration::MISSING_FIELDS.to_vec(),
+            unmapped: Vec::new(),
+            library: refused_view(&store, problem),
+        }),
+        Err(library_migration::MigrationError::Io(detail)) => Err(format!(
+            "The saved reads from the old version could not be moved into the library. \
+             They have not been changed. {detail}"
+        )),
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         // Must be the first plugin registered. A second launch raises the
@@ -417,7 +483,8 @@ pub fn run() {
             library_load,
             library_save_lf,
             library_rename,
-            library_delete
+            library_delete,
+            library_migrate_legacy
         ])
         .run(tauri::generate_context!())
         .expect("error while running PM4 Studio");
