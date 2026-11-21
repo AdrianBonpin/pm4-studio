@@ -11,7 +11,8 @@ mod test_frames;
 
 use identity::Identity;
 use library::{
-    InsertOutcome, Library, LibraryProblem, LibraryStore, SaveError, Snapshot, WriteCountOutcome,
+    Draft, InsertOutcome, Library, LibraryProblem, LibraryStore, SaveError, Snapshot,
+    WriteCountOutcome,
 };
 use reader::{DeviceInfo, Frame, HfCard, LfCard, LfWriteAttempt, Reader, REPORT_LEN};
 use write_outcome::Evidence;
@@ -553,6 +554,84 @@ fn library_migrate_legacy(
     }
 }
 
+/// Drafts, in their own shape. They live in the same file as the Snapshots but
+/// are a separate collection, so the Drafts page never has to be told what a
+/// Snapshot is and the library page never lists a Draft.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DraftsView {
+    pub drafts: Vec<Draft>,
+    /// Set when the file must not be written to; nothing may be saved until the
+    /// user deals with it.
+    pub problem: Option<ProblemView>,
+}
+
+fn drafts_view(library: Library) -> DraftsView {
+    DraftsView {
+        drafts: library.drafts,
+        problem: None,
+    }
+}
+
+fn refused_drafts_view(problem: LibraryProblem) -> DraftsView {
+    DraftsView {
+        drafts: Vec::new(),
+        problem: Some(problem.into()),
+    }
+}
+
+/// Read the Drafts. Works with no Reader attached, which is the point of a
+/// Draft: it is composed before any Tag is in hand.
+#[tauri::command]
+fn drafts_load(app: AppHandle) -> Result<DraftsView, String> {
+    let store = library_store(&app)?;
+    Ok(match store.load() {
+        Ok(library) => drafts_view(library),
+        Err(problem) => refused_drafts_view(problem),
+    })
+}
+
+/// Create an empty Draft. The id comes from the store, never from the UI.
+#[tauri::command]
+fn draft_create(app: AppHandle, name: String, updated_at: String) -> Result<DraftsView, String> {
+    let store = library_store(&app)?;
+    let mut library = match store.load() {
+        Ok(library) => library,
+        Err(problem) => return Ok(refused_drafts_view(problem)),
+    };
+    library.add_draft(&name, &updated_at);
+    commit(&store, &library)?;
+    Ok(drafts_view(library))
+}
+
+/// Replace one Draft whole: name and Records in the order given.
+#[tauri::command]
+fn draft_save(app: AppHandle, draft: Draft) -> Result<DraftsView, String> {
+    let store = library_store(&app)?;
+    let mut library = match store.load() {
+        Ok(library) => library,
+        Err(problem) => return Ok(refused_drafts_view(problem)),
+    };
+    if library.save_draft(draft) {
+        commit(&store, &library)?;
+    }
+    Ok(drafts_view(library))
+}
+
+/// Delete one Draft. The file is rewritten, so the delete survives a restart.
+#[tauri::command]
+fn draft_delete(app: AppHandle, id: String) -> Result<DraftsView, String> {
+    let store = library_store(&app)?;
+    let mut library = match store.load() {
+        Ok(library) => library,
+        Err(problem) => return Ok(refused_drafts_view(problem)),
+    };
+    if library.remove_draft(&id) {
+        commit(&store, &library)?;
+    }
+    Ok(drafts_view(library))
+}
+
 pub fn run() {
     tauri::Builder::default()
         // Must be the first plugin registered. A second launch raises the
@@ -583,7 +662,11 @@ pub fn run() {
             library_rename,
             library_edit,
             library_delete,
-            library_migrate_legacy
+            library_migrate_legacy,
+            drafts_load,
+            draft_create,
+            draft_save,
+            draft_delete
         ])
         .run(tauri::generate_context!())
         .expect("error while running PM4 Studio");

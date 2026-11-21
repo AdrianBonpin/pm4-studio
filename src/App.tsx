@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Library as LibraryIcon, Nfc, Radio, Terminal, X } from "lucide-react";
+import { FileText, Library as LibraryIcon, Nfc, Radio, Terminal, X } from "lucide-react";
 import { Badge } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
 import { Toggle } from "./components/ui/Toggle";
@@ -13,11 +13,12 @@ import {
 } from "./lib/readerIdentity";
 import { isMacOS, isTauri } from "./lib/platform";
 import { HfPage } from "./pages/HfPage";
+import { DraftsPage } from "./pages/DraftsPage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { LfPage } from "./pages/LfPage";
 import { ToolsPage } from "./pages/ToolsPage";
 
-type Page = "lf" | "hf" | "library" | "tools";
+type Page = "lf" | "hf" | "drafts" | "library" | "tools";
 
 const STATUS_COLOR = {
   idle: "#A1A1AA",
@@ -55,6 +56,13 @@ const PAGES: {
     title: "13.56 MHz",
     subtitle: "ISO14443-A tags. Read the UID and the card type the pair identifies.",
     icon: Radio,
+  },
+  {
+    id: "drafts",
+    label: "Drafts",
+    title: "Drafts",
+    subtitle: "NDEF messages you are composing. Not attached to any Tag.",
+    icon: FileText,
   },
   {
     id: "library",
@@ -224,6 +232,7 @@ export default function App() {
                   onChirp={chirp}
                 />
               )}
+              {page === "drafts" && <DraftsPage />}
               {page === "library" && (
                 <LibraryPage connected={connected} library={library} onChirp={chirp} />
               )}
