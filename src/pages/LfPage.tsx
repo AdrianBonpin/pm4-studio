@@ -216,15 +216,12 @@ export function LfPage({ connected, onChirp }: LfPageProps) {
                           setEditingId(t.id);
                           setDraftName(t.name);
                         }}
-                        className="group flex cursor-pointer items-center gap-1.5 text-left"
+                        aria-label={`Rename ${t.name || t.id}`}
+                        title="Rename"
+                        className="-mx-1 flex cursor-pointer items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-surface-raised"
                       >
-                        <span className="truncate text-sm text-text">
-                          {t.name || t.id}
-                        </span>
-                        <Pencil
-                          size={11}
-                          className="shrink-0 text-text-muted opacity-0 transition-opacity group-hover:opacity-100"
-                        />
+                        <span className="truncate text-sm text-text">{t.name || t.id}</span>
+                        <Pencil size={11} className="shrink-0 text-text-muted" />
                       </button>
                     )}
 
@@ -238,6 +235,7 @@ export function LfPage({ connected, onChirp }: LfPageProps) {
                   <div className="flex shrink-0 items-center gap-1">
                     <button
                       aria-label={`Copy ${t.id}`}
+                      title="Copy id"
                       onClick={() => void copyId(t.id)}
                       className="cursor-pointer rounded-md p-1.5 text-text-muted transition-colors hover:bg-surface-raised hover:text-text"
                     >
@@ -245,6 +243,7 @@ export function LfPage({ connected, onChirp }: LfPageProps) {
                     </button>
                     <button
                       aria-label={`Delete ${t.name || t.id}`}
+                      title="Delete"
                       onClick={() => remove(t.id)}
                       className="cursor-pointer rounded-md p-1.5 text-text-muted transition-colors hover:bg-surface-raised hover:text-err"
                     >
