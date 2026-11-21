@@ -10,14 +10,14 @@
 - Outcome seam (existing) — catches an operation that reports nothing; misses whether the two device transactions both happened.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/15
-**Status:** ready
+**Status:** done
 
-- [ ] One action performs the poll and the message read and presents a single readout.
-- [ ] The readout lists the Records as rows carrying kind, a short summary, encoded size and validity, in the tag's own order.
-- [ ] A tag whose family is not NDEF capable says so and offers no message read.
-- [ ] A reply that cannot be decoded shows raw bytes and the reason, and offers no message read.
-- [ ] When the poll succeeds and the message read fails, the identity it did get is shown together with the reason the Records are absent. Nothing is hidden and nothing is dressed up as complete.
-- [ ] Capacity comes from the published table where the pair determines it, otherwise from the tag's Capability Container, otherwise it is stated as not determined.
-- [ ] NDEF status comes from the message or the container, never from the poll.
-- [ ] A message read of a different tag never attaches itself to this reading.
-- [ ] The whole operation reports exactly one outcome, and the audible symbol distinguishes "read fully" from "read, but check this".
+- [x] One action performs the poll and the message read and presents a single readout.
+- [x] The readout lists the Records as rows carrying kind, a short summary, encoded size and validity, in the tag's own order.
+- [x] A tag whose family is not NDEF capable says so and offers no message read.
+- [x] A reply that cannot be decoded shows raw bytes and the reason, and offers no message read.
+- [x] When the poll succeeds and the message read fails, the identity it did get is shown together with the reason the Records are absent. Nothing is hidden and nothing is dressed up as complete.
+- [x] Capacity comes from the published table where the pair determines it, otherwise from the tag's Capability Container, otherwise it is stated as not determined.
+- [x] NDEF status comes from the message or the container, never from the poll.
+- [x] A message read of a different tag never attaches itself to this reading.
+- [x] The whole operation reports exactly one outcome, and the audible symbol distinguishes "read fully" from "read, but check this".

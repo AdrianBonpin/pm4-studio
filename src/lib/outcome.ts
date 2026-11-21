@@ -65,6 +65,11 @@ export type OutcomeOperation =
 export type OutcomeKind =
   /** A Tag was read; the read is the whole result. */
   | "read"
+  /** A read that finished but whose result wants checking: it got part of what
+   *  it went for, and says why the rest is missing. Distinct from `read` because
+   *  the sound has to be (ADR 0009), and distinct from `failed` because something
+   *  was obtained and is on screen. */
+  | "read-incomplete"
   /** There was no Tag in the field. Nothing happened, and that is not an error. */
   | "nothing-latched"
   /** A write whose read-back proved it. */
@@ -102,6 +107,7 @@ export type OutcomeKind =
 /** Every discriminator, for the exhaustiveness tests and for documentation. */
 export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
   "read",
+  "read-incomplete",
   "nothing-latched",
   "verified",
   "blanked",
@@ -125,6 +131,7 @@ export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
  */
 const SEVERITY_OF: Record<OutcomeKind, Severity> = {
   read: "success",
+  "read-incomplete": "warning",
   "nothing-latched": "info",
   verified: "success",
   blanked: "success",
@@ -238,6 +245,39 @@ export const outcomes = {
   /** A Tag was read and the read is the result: `Read 55 00 84 82 12.` */
   tagRead(operation: "read" | "hf-read", identity: string): Outcome {
     return make("read", operation, `Read ${identity}.`);
+  },
+
+  /**
+   * A 13.56 MHz read that fetched everything it went for: the identity and,
+   * where the family can hold one, the message.
+   *
+   * `held` says what the message half turned out to be, because that answer is
+   * part of the complete read rather than a caveat: "2 Records", "an empty
+   * message", "no NFC Forum tag type". It is written by `lib/hfRead.ts` from the
+   * same value the readout renders, so the message and the screen cannot say
+   * different things.
+   */
+  hfRead(identity: string, held: string): Outcome {
+    return make("read", "hf-read", `Read ${identity} — ${held}.`);
+  },
+
+  /**
+   * A 13.56 MHz read that finished but wants checking: the poll decoded and the
+   * message half did not come back, or came back in a shape this build cannot
+   * read. It is a warning rather than a failure because the identity it did get
+   * is on screen — and rather than a success because the Records are not.
+   *
+   * `identity` is null when the poll itself is what could not be read; the line
+   * then says that rather than pretending a UID. `reason` is kept as the detail,
+   * because it is the part a user needs to act on and it must survive from the
+   * failure that produced it.
+   */
+  hfReadIncomplete(identity: string | null, reason: string): Outcome {
+    const message =
+      identity === null
+        ? "The poll reply could not be decoded."
+        : `Read ${identity}, but its Records could not be read.`;
+    return make("read-incomplete", "hf-read", message, { detail: reason });
   },
 
   /**

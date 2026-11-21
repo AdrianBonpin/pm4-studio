@@ -41,6 +41,7 @@ const EXPECTED_SEVERITY: Record<OutcomeKind, Severity> = {
   read: "success",
   "beep-test": "success",
   "nothing-latched": "info",
+  "read-incomplete": "warning",
   verified: "success",
   blanked: "success",
   erased: "success",
@@ -118,6 +119,7 @@ describe("the discriminator set", () => {
         "failed",
         "nothing-latched",
         "read",
+        "read-incomplete",
         "reader-absent",
         "reader-claimed",
         "reader-failure",
@@ -195,6 +197,40 @@ describe("report", () => {
     expect(toastStore.getState().toasts).toHaveLength(1);
     expect(symbols).toEqual([]);
     stop();
+  });
+});
+
+describe("a 13.56 MHz read", () => {
+  it("that fetched everything it went for is one success", () => {
+    const outcome = outcomes.hfRead("04 43 8A 01 22 09 03", "2 Records");
+
+    expect(outcome.kind).toBe("read");
+    expect(outcome.operation).toBe("hf-read");
+    expect(outcome.severity).toBe("success");
+    expect(outcome.message).toBe("Read 04 43 8A 01 22 09 03 — 2 Records.");
+    expect(signalFor(severityOf(outcome.kind))).toBe("done");
+  });
+
+  it("that finished but needs checking is its own warning, not a success", () => {
+    const outcome = outcomes.hfReadIncomplete(
+      "04 43 8A 01 22 09 03",
+      "the memory read timed out",
+    );
+
+    expect(outcome.kind).toBe("read-incomplete");
+    expect(outcome.operation).toBe("hf-read");
+    expect(outcome.severity).toBe("warning");
+    expect(outcome.message).toBe("Read 04 43 8A 01 22 09 03, but its Records could not be read.");
+    expect(outcome.detail).toBe("the memory read timed out");
+    expect(signalFor(severityOf(outcome.kind))).toBe("needs-you");
+  });
+
+  it("keeps read-fully and read-but-check distinguishable to the ear", () => {
+    const done = signalFor(severityOf(outcomes.hfRead("04 43", "no Records").kind));
+    const check = signalFor(
+      severityOf(outcomes.hfReadIncomplete(null, "no card type resolved").kind),
+    );
+    expect(done).not.toBe(check);
   });
 });
 

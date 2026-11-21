@@ -1,28 +1,35 @@
 import { useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { EraseNdef } from "../components/EraseNdef";
 import { MemoryDumpPanel } from "../components/MemoryDumpPanel";
 import { PasswordProtection } from "../components/PasswordProtection";
-import { Badge } from "../components/ui/Badge";
+import { Badge, type BadgeTone } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Field, Readout, Section } from "../components/Section";
 import { variantsNote } from "../lib/cardType";
 import {
   decodeHfPayload,
   hexBytes,
-  capacityForReading,
   ndefField,
-  ndefStatusFor,
-  uidMatchesMemory,
   type HfRawOnlyReason,
   type HfReading,
 } from "../lib/hfDecoder";
+import {
+  assembleHfRead,
+  hfReadOutcome,
+  readsMessage,
+  type HfMessage,
+  type HfMessageState,
+  type HfRead,
+  type HfRecordsAttempt,
+} from "../lib/hfRead";
+import { report, outcomes } from "../lib/outcome";
 import type { TagRecordsRead } from "../lib/tagRecords";
 import type { HfCard } from "../types";
 
 interface HfPageProps {
   connected: boolean;
   onPoll: () => Promise<HfCard | null>;
-  onChirp: () => void;
 }
 
 /** Short label per fallback reason. The sentence under it says what happened. */
@@ -33,6 +40,28 @@ const REASON_LABEL: Record<HfRawOnlyReason, string> = {
   "empty-uid": "no UID in reply",
   "unsupported-uid-width": "unexpected UID length",
   "unknown-card-type": "unknown card type",
+};
+
+/**
+ * How each message-state that is *not* a list of Records presents itself.
+ *
+ * The badge and its sentence are decided here rather than inline in the markup so
+ * every state gets one, and so "there are no Records because the Tag holds none"
+ * cannot be styled like "the Records could not be read" — that difference is the
+ * whole point of the section.
+ */
+const MESSAGE_STATE: Record<
+  Exclude<HfMessageState, "records" | "undecoded-reply" | "nothing-latched">,
+  { label: string; tone: BadgeTone }
+> = {
+  "empty-message": { label: "empty message", tone: "muted" },
+  "no-ndef-tlv": { label: "no message", tone: "muted" },
+  "not-formatted": { label: "not NDEF formatted", tone: "muted" },
+  "not-ndef-capable": { label: "not NDEF capable", tone: "muted" },
+  undecodable: { label: "undecodable message", tone: "warn" },
+  unreadable: { label: "unreadable message", tone: "warn" },
+  "read-failed": { label: "records not read", tone: "warn" },
+  "other-tag": { label: "different tag", tone: "warn" },
 };
 
 /**
@@ -58,26 +87,130 @@ function RawPayload({ raw }: { raw: string }) {
   );
 }
 
-/** One resolved reading: the card type its ATQA/SAK pair identifies. */
-function DecodedReadout({
-  reading,
-  memory,
-}: {
-  reading: Extract<HfReading, { state: "decoded" }>;
-  /** The last memory read on this page, when it describes this Tag. */
-  memory: TagRecordsRead | null;
-}) {
+/** A reply that could not be decoded: the bytes and the reason, no fields. */
+function RawOnlyReadout({ reading }: { reading: Extract<HfReading, { state: "raw" }> }) {
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-mono text-sm text-text-muted">Not decoded</span>
+        <Badge label={REASON_LABEL[reading.reason]} tone="warn" />
+      </div>
+      <p className="max-w-prose text-sm leading-relaxed text-text-muted">{reading.detail}</p>
+      <p className="max-w-prose text-xs leading-relaxed text-text-muted">
+        No message read was attempted, because there is no decoded UID to match one against.
+      </p>
+      <RawPayload raw={reading.raw} />
+    </div>
+  );
+}
+
+/** One Record as a row: position, kind, summary, encoded size and validity. */
+function RecordsTable({ message }: { message: HfMessage }) {
+  const invalid = message.rows.filter((row) => !row.valid);
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="overflow-x-auto rounded-lg border border-border bg-canvas">
+        <table className="min-w-full text-[11px] leading-relaxed">
+          <thead>
+            <tr className="text-[10px] uppercase tracking-[0.12em] text-text-muted">
+              <th scope="col" className="px-3 py-2 text-left font-normal">
+                #
+              </th>
+              <th scope="col" className="px-2 py-2 text-left font-normal">
+                kind
+              </th>
+              <th scope="col" className="px-2 py-2 text-left font-normal">
+                summary
+              </th>
+              <th scope="col" className="px-2 py-2 text-right font-normal">
+                size
+              </th>
+              <th scope="col" className="px-3 py-2 text-right font-normal">
+                valid
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {message.rows.map((row) => (
+              <tr key={row.position} className="border-t border-border/60">
+                <td className="whitespace-nowrap px-3 py-1 font-mono text-text-muted">
+                  {row.position}
+                </td>
+                <td className="whitespace-nowrap px-2 py-1 text-text">{row.kind}</td>
+                <td className="px-2 py-1 font-mono text-accent-muted">
+                  {row.summary === "" ? "—" : row.summary}
+                </td>
+                <td className="whitespace-nowrap px-2 py-1 text-right font-mono text-text-muted">
+                  {row.bytes === null ? "—" : `${row.bytes} B`}
+                </td>
+                <td
+                  className={`whitespace-nowrap px-3 py-1 text-right ${
+                    row.valid ? "text-text-muted" : "text-warn"
+                  }`}
+                >
+                  {row.valid ? "yes" : "no"}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {invalid.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {invalid.map((row) => (
+            <p
+              key={row.position}
+              className="max-w-prose text-xs leading-relaxed text-warn"
+            >
+              Record {row.position} cannot be encoded again by this build: {row.problem}
+            </p>
+          ))}
+        </div>
+      )}
+      <p className="max-w-prose text-xs leading-relaxed text-text-muted">{message.note}</p>
+    </div>
+  );
+}
+
+/** The message half: the Records as rows, or the honest reason there are none. */
+function MessageSection({ message }: { message: HfMessage }) {
+  if (message.state === "records") return <RecordsTable message={message} />;
+  if (message.state === "undecoded-reply" || message.state === "nothing-latched") return null;
+
+  const state = MESSAGE_STATE[message.state];
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">
+          Records
+        </span>
+        <Badge label={state.label} tone={state.tone} />
+      </div>
+      <p className="max-w-prose text-sm leading-relaxed text-text-muted">{message.note}</p>
+      {message.reason !== null && message.state !== "read-failed" && (
+        <p className="max-w-prose select-text break-words text-xs leading-relaxed text-text-muted">
+          {message.reason}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** One resolved reading, and everything the two transactions settled about it. */
+function HfReadout({ read }: { read: HfRead }) {
+  if (read.reading === null) {
+    return <Readout placeholder="No tag in the field." />;
+  }
+  if (read.reading.state === "raw") {
+    return <RawOnlyReadout reading={read.reading} />;
+  }
+
+  const reading = read.reading;
   const { cardType } = reading;
-  // The published table gives capacity for a fixed-size family; the families it
-  // withholds it for get it from the Capability Container of the memory read
-  // above, which is the same read that settles NDEF. "not determined" is only
-  // shown when neither has produced a number.
-  const capacityBytes = capacityForReading(cardType, memory);
-  const capacity = capacityBytes === null ? "not determined" : `${capacityBytes} bytes`;
+  const capacity = read.capacityBytes === null ? "not determined" : `${read.capacityBytes} bytes`;
   // The poll cannot say whether the Tag is NDEF formatted; a memory read of the
   // same Tag can. Without one the row is omitted rather than greyed out.
-  const ndef = ndefStatusFor(memory?.ndef.outcome ?? null);
-  const ndefRow = ndefField(ndef);
+  const ndefRow = ndefField(read.ndef);
 
   return (
     <div className="flex flex-col gap-5">
@@ -90,7 +223,7 @@ function DecodedReadout({
         <Field
           label="Capacity"
           value={capacity}
-          tone={capacityBytes === null ? "muted" : "default"}
+          tone={read.capacityBytes === null ? "muted" : "default"}
         />
         <Field label="ATQA" value={hexBytes(reading.atqa)} />
         <Field label="SAK" value={hexBytes([reading.sak])} />
@@ -111,78 +244,106 @@ function DecodedReadout({
         </p>
       )}
 
-      <p className="text-xs leading-relaxed text-text-muted">{ndef.note}</p>
+      <p className="max-w-prose text-xs leading-relaxed text-text-muted">{read.ndef.note}</p>
+
+      <MessageSection message={read.message} />
 
       <RawPayload raw={reading.raw} />
     </div>
   );
 }
 
-/** A reply that could not be decoded: the bytes and the reason, no fields. */
-function RawOnlyReadout({ reading }: { reading: Extract<HfReading, { state: "raw" }> }) {
-  return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="font-mono text-sm text-text-muted">Not decoded</span>
-        <Badge label={REASON_LABEL[reading.reason]} tone="warn" />
-      </div>
-      <p className="max-w-prose text-sm leading-relaxed text-text-muted">{reading.detail}</p>
-      <RawPayload raw={reading.raw} />
-    </div>
-  );
-}
-
-export function HfPage({ connected, onPoll, onChirp }: HfPageProps) {
+/**
+ * The 13.56 MHz page.
+ *
+ * Read is **one action**: it polls the field and, when the poll produced a Tag
+ * whose family can carry a message, reads that message in the same operation.
+ * The two transactions are separate and either can fail, so the readout always
+ * shows what was obtained and says why anything is missing
+ * (`lib/hfRead.ts` owns that decision). Exactly one outcome is reported for the
+ * whole action, so the sound and the message cannot disagree.
+ */
+export function HfPage({ connected, onPoll }: HfPageProps) {
   const [busy, setBusy] = useState(false);
-  const [reading, setReading] = useState<HfReading | null>(null);
+  const [read, setRead] = useState<HfRead | null>(null);
   const [polled, setPolled] = useState(false);
-  /** The last memory read on this page. Owned here because the reading above
-   *  uses it: a memory read of the same Tag is what settles its NDEF status. */
-  const [memory, setMemory] = useState<TagRecordsRead | null>(null);
+  /** The memory dump shown below, which a standalone read can refresh without
+   *  rewriting the reading above it. */
+  const [dumpRead, setDumpRead] = useState<TagRecordsRead | null>(null);
 
-  const poll = async () => {
+  const readTag = async () => {
     setBusy(true);
-    const card = await onPoll();
-    setPolled(true);
-    // A null card means the Reader latched nothing, which is not a decode
-    // result; anything else is decoded, including replies of the wrong shape.
-    setReading(card ? decodeHfPayload(card.payload) : null);
-    if (card) onChirp();
-    setBusy(false);
-  };
+    try {
+      let card: HfCard | null;
+      try {
+        card = await onPoll();
+      } catch (error) {
+        // The Reader itself failed; that is the whole outcome and there is no
+        // reading to show beside it.
+        report(outcomes.readerFailure(error));
+        setPolled(true);
+        return;
+      }
+      setPolled(true);
 
-  // A memory read describes one Tag. Applying it to a reading of a different Tag
-  // would put one tag's formatting on another tag's row, so it is matched by UID
-  // and dropped when it does not describe the reading above it.
-  const readingUid = reading?.state === "decoded" ? reading.uid : "";
-  const memoryForReading =
-    memory && uidMatchesMemory(readingUid, memory.dump.tag.uid) ? memory : null;
+      const reading = card === null ? null : decodeHfPayload(card.payload);
+      let attempt: HfRecordsAttempt = { state: "not-attempted" };
+
+      // A message read only happens for a Tag it can describe: a decoded reply
+      // and a family with an NFC Forum tag type. Offering it otherwise would be
+      // offering a transaction that cannot work.
+      if (reading !== null && readsMessage(reading)) {
+        try {
+          attempt = {
+            state: "read",
+            read: await invoke<TagRecordsRead>("ntag_records_read", {
+              capturedAt: new Date().toISOString(),
+            }),
+          };
+        } catch (error) {
+          attempt = { state: "failed", reason: reasonOf(error) };
+        }
+      }
+
+      const result = assembleHfRead(reading, attempt);
+      setRead(result);
+      // Keep the dump panel on the same read, so the bytes and the readout are
+      // one transaction's evidence rather than two that might disagree.
+      setDumpRead(result.memory);
+      report(hfReadOutcome(result));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-8">
       <Section
         title="Read a tag"
-        hint="13.56 MHz ISO14443-A. Single poll of the field."
+        hint="13.56 MHz ISO14443-A. One action: poll the Tag, then read its NDEF message."
         actions={
-          <Button variant="primary" disabled={!connected || busy} onClick={() => void poll()}>
-            {busy ? "Polling…" : "Poll tag"}
+          <Button variant="primary" disabled={!connected || busy} onClick={() => void readTag()}>
+            {busy ? "Reading…" : "Read tag"}
           </Button>
         }
       >
-        {reading === null ? (
-          <Readout placeholder={polled ? "No tag in the field." : "No tag polled yet."} />
-        ) : reading.state === "decoded" ? (
-          <DecodedReadout reading={reading} memory={memoryForReading} />
+        {read === null ? (
+          <Readout placeholder={polled ? "No tag in the field." : "No tag read yet."} />
         ) : (
-          <RawOnlyReadout reading={reading} />
+          <HfReadout read={read} />
         )}
       </Section>
 
-      <MemoryDumpPanel connected={connected} read={memory} onRead={setMemory} />
+      <MemoryDumpPanel connected={connected} read={dumpRead} onRead={setDumpRead} />
 
       <PasswordProtection connected={connected} />
 
       <EraseNdef connected={connected} />
     </div>
   );
+}
+
+/** A failure's own words, so the readout quotes it rather than summarising it. */
+function reasonOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
