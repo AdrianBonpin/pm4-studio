@@ -27,15 +27,9 @@ use std::fs;
 use std::path::Path;
 
 use crate::library::{
-    serialised, write_atomically, Domain, Draft, Library, LibraryProblem, LibraryStore, Snapshot,
+    document_from, serialised, write_atomically, Domain, Draft, Library, LibraryProblem, LibraryStore,
+    Snapshot, TYPED_KEYS,
 };
-
-/// Top-level keys the typed half of a library owns.
-///
-/// Drafts are here because this build's schema has them: they are read, merged
-/// and written as typed entries, never as an opaque blob that could drift from
-/// what the store itself would write.
-const TYPED_KEYS: [&str; 3] = ["version", "snapshots", "drafts"];
 
 /// One library document as a file holds it.
 ///
@@ -66,23 +60,10 @@ impl Document {
     /// The document as it is written to a file.
     ///
     /// The typed keys are written in the order the store itself writes them, so
-    /// a library file and its export are the same file.
+    /// a library file and its export are the same file — and through the store's
+    /// own writer, so neither can start carrying a key the other drops.
     pub fn to_json(&self) -> Value {
-        let mut object = Map::new();
-        object.insert("version".to_string(), Value::from(self.library.version));
-        object.insert(
-            "snapshots".to_string(),
-            serde_json::to_value(&self.library.snapshots)
-                .expect("a Snapshot is always serialisable"),
-        );
-        object.insert(
-            "drafts".to_string(),
-            serde_json::to_value(&self.library.drafts).expect("a Draft is always serialisable"),
-        );
-        for (key, value) in &self.rest {
-            object.insert(key.clone(), value.clone());
-        }
-        Value::Object(object)
+        document_from(&self.library, &self.rest)
     }
 }
 
