@@ -69,6 +69,8 @@ export function useDrafts(): DraftsState {
   const unsaved = useRef(new Set<string>());
   /** The settle in flight, so two exits at the same moment write nothing twice. */
   const settling = useRef<Promise<string | null> | null>(null);
+  /** The read in flight, so a second caller joins it rather than reading again. */
+  const reading = useRef<Promise<void> | null>(null);
 
   const apply = useCallback((next: Draft[]) => {
     draftsRef.current = next;
@@ -206,8 +208,8 @@ export function useDrafts(): DraftsState {
   useEffect(() => () => void settle(), [settle]);
 
   /**
-   * Read the list again, and show what the file holds without losing an edit
-   * that is on its way to it.
+   * Read the list, and show what the file holds without losing an edit that is
+   * on its way to it.
    *
    * A read is not atomic with the writes around it, so two things are needed.
    * First, everything queued is written before the read is asked for: a read
@@ -218,7 +220,7 @@ export function useDrafts(): DraftsState {
    * read went out, because an edit typed while the read is in flight can reach
    * the file before the reply lands, and that reply predates it.
    */
-  const reload = useCallback(async () => {
+  const readOnce = useCallback(async () => {
     if (!isTauri()) {
       setError("Drafts are read through the desktop app; this preview cannot reach them.");
       setLoading(false);
@@ -247,6 +249,33 @@ export function useDrafts(): DraftsState {
       setLoading(false);
     }
   }, [apply, settle]);
+
+  /**
+   * `readOnce`, but one at a time.
+   *
+   * The queue is the app's, so the list is read once when the app starts; the
+   * page reads it again on mount because the list can change elsewhere and the
+   * page must be fresh when the user opens it. At launch both of those happen in
+   * the same commit, asking the same question of the same file, and issuing two
+   * reads answered it twice for no fresher answer — the second reply could only
+   * be the same bytes or older ones. A caller arriving while a read is out joins
+   * it, which is also the honest answer: what the file held when it was asked is
+   * what it is being told.
+   *
+   * The page's reason for reading stands unchanged: a read asked for *later* —
+   * when the section is opened after an import — finds nothing in flight and is a
+   * fresh read.
+   */
+  const reload = useCallback((): Promise<void> => {
+    if (reading.current) return reading.current;
+    const run = readOnce();
+    reading.current = run;
+    const done = () => {
+      if (reading.current === run) reading.current = null;
+    };
+    void run.then(done, done);
+    return run;
+  }, [readOnce]);
 
   useEffect(() => {
     void reload();

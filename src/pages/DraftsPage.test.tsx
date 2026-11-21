@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import { DraftsPage } from "./DraftsPage";
@@ -146,6 +147,64 @@ describe("deleting a Draft", () => {
     expect(backend.callsTo("draft_delete").map((call) => call.args)).toEqual([{ id: OTHER.id }]);
   });
 });
+
+/**
+ * The list is read once on the way up, not once per reader.
+ *
+ * The queue is the app's — it lives above the router — so the list is already
+ * read when the app starts. The page reads it again on mount because the list
+ * can change elsewhere (an import adds Drafts), and that is the reason the page
+ * must be fresh when the user gets there. At launch those two are the same
+ * question asked in the same commit, so they are one read: a second one could
+ * only answer it again, with the same bytes.
+ */
+describe("reading the list", () => {
+  it("reads it once when the app opens, not once per reader", async () => {
+    const backend = fakeBackend({ drafts_load: () => view([DRAFT]) });
+
+    renderDraftsPage();
+
+    expect(await screen.findByText(DRAFT.name)).toBeTruthy();
+    // Both readers ask in the same commit, so a second read would already have
+    // been sent by now.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(backend.callsTo("drafts_load")).toHaveLength(1);
+  });
+
+  it("reads it again when the section is opened, so a Draft added elsewhere is there", async () => {
+    // The reason the page reads at all: the list can change while the page is
+    // somewhere else — an import adds Drafts — so opening the section must not
+    // show what the queue read at launch.
+    const backend = fakeBackend({ drafts_load: () => view([DRAFT]) });
+    const { user } = renderUi(<SectionThatOpens />);
+    await waitFor(() => {
+      expect(backend.callsTo("drafts_load")).toHaveLength(1);
+    });
+
+    // Something else wrote a Draft to the library while this section was closed.
+    backend.answer("drafts_load", () => view([DRAFT, OTHER]));
+    await user.click(screen.getByRole("button", { name: "Drafts" }));
+
+    expect(await screen.findByText(OTHER.name)).toBeTruthy();
+    expect(backend.callsTo("drafts_load")).toHaveLength(2);
+  });
+});
+
+/**
+ * The app's shape: the queue and the guard mounted once, one section on screen.
+ *
+ * Starting on another section is what the sidebar does, and it is the case that
+ * decides whether opening Drafts reads the list again.
+ */
+function SectionThatOpens() {
+  const [open, setOpen] = useState(false);
+  return (
+    <DraftsProvider>
+      <button onClick={() => setOpen(true)}>Drafts</button>
+      {open ? <DraftsPage connected={false} /> : <p>Snapshots</p>}
+    </DraftsProvider>
+  );
+}
 
 /**
  * Ticket 04 / ADR 0005: a version 1 library is lifted on open, and a lift that
