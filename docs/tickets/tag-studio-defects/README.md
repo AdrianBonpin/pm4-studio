@@ -51,13 +51,15 @@ Two structural observations from the review of these tickets. Neither has a user
 impact, neither belongs to a defect these tickets fix, and each is better as its own
 ticket than as scope added here.
 
-- **Splitting `src-tauri/src/library.rs`.** 2328 lines when this was recorded (most of
-  them tests). The serialisation domain — `Domain`, `serialised`, `write_atomically`,
-  the staging and commit helpers — and the atomic-write rules are separable from the
-  store that uses them, and the `Library` value type is separable from the store as
-  well. The file is cohesive today and the split is a move, not a redesign; doing it
-  here would have put a large mechanical diff underneath the behaviour fixes and made
-  both harder to review.
+- **Splitting `src-tauri/src/library.rs`.** 2513 lines at the commit that recorded
+  this (`4e3c20e`); 2328 is what it was at the review baseline it was first
+  measured at (`e9ef17f`), and it grew between the two as tickets landed. The
+  serialisation domain — `Domain`, `serialised`, `write_atomically` — and the
+  atomic-write rules are separable from the store that uses them, and the
+  `Library` value type is separable from the store as well. The file is cohesive
+  today and the split is a move, not a redesign; doing it here would have put a
+  large mechanical diff underneath the behaviour fixes and made both harder to
+  review.
 - **Any further reduction of `src/pages/DraftsPage.tsx`.** The two extractions this
   review asked for (the row delete confirmation and the migration warning) took the
   duplicated markup out, and the queue and close guard moved above the page. What is

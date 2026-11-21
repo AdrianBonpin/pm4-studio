@@ -28,9 +28,10 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
+use crate::atomic_file::{commit_staged, stage_bytes};
 use crate::library::{
-    document_from, serialised, write_atomically, write_file_atomically, Domain, Draft, Library,
-    LibraryProblem, LibraryStore, Snapshot, TYPED_KEYS,
+    document_from, serialised, write_atomically, Domain, Draft, Library, LibraryProblem,
+    LibraryStore, Snapshot, TYPED_KEYS,
 };
 
 /// One library document as a file holds it.
@@ -272,13 +273,19 @@ fn write_document(domain: &Domain, path: &Path, document: &Document) -> Result<(
 
 /// Write one file the user chose, atomically.
 ///
-/// The staging-and-rename in `write_file_atomically` is the same rule a library
-/// export follows, so a dump could not leave a half-written file where a
+/// The same staging-and-rename a library export uses, composed out of
+/// [`crate::atomic_file`], so a dump could not leave a half-written file where a
 /// complete one was promised either. It is deliberately outside the library's
 /// serialisation domain: the file is not the library, so a dump the user saved
 /// would otherwise wait behind a library save it shares nothing with.
+///
+/// The two steps are written out rather than called through one helper because
+/// the crate has no token-free "write this path" function to reach for — see that
+/// module's own note. This is the one place that composes them outside the
+/// library, and what it writes is a path the user picked in a save dialog.
 pub fn write_text(path: &Path, text: &str) -> Result<(), FileError> {
-    write_file_atomically(path, text.as_bytes()).map_err(|e| FileError::Io(e.to_string()))
+    let staged = stage_bytes(path, text.as_bytes()).map_err(|e| FileError::Io(e.to_string()))?;
+    commit_staged(&staged, path).map_err(|e| FileError::Io(e.to_string()))
 }
 
 #[cfg(test)]

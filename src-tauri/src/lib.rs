@@ -1,5 +1,6 @@
 //! Tauri command surface for PM4 Studio.
 
+mod atomic_file;
 pub mod author_identity;
 pub mod batch;
 pub mod blank;

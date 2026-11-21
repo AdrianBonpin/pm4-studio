@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from "react";
 import { describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import { DraftsPage } from "./DraftsPage";
@@ -144,6 +145,102 @@ describe("deleting a Draft", () => {
     });
     // One removal was asked for, and it named the row whose control was used.
     expect(backend.callsTo("draft_delete").map((call) => call.args)).toEqual([{ id: OTHER.id }]);
+  });
+});
+
+/**
+ * The list is read once on the way up, not once per reader.
+ *
+ * The queue is the app's — it lives above the router — so the list is already
+ * read when the app starts. The page reads it again on mount because the list
+ * can change elsewhere (an import adds Drafts), and that is the reason the page
+ * must be fresh when the user gets there. At launch those two are the same
+ * question asked in the same commit, so they are one read: a second one could
+ * only answer it again, with the same bytes.
+ */
+describe("reading the list", () => {
+  it("reads it once when the app opens, not once per reader", async () => {
+    const backend = fakeBackend({ drafts_load: () => view([DRAFT]) });
+
+    renderDraftsPage();
+
+    expect(await screen.findByText(DRAFT.name)).toBeTruthy();
+    // Both readers ask in the same commit, so a second read would already have
+    // been sent by now.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(backend.callsTo("drafts_load")).toHaveLength(1);
+  });
+
+  it("reads it again when the section is opened, so a Draft added elsewhere is there", async () => {
+    // The reason the page reads at all: the list can change while the page is
+    // somewhere else — an import adds Drafts — so opening the section must not
+    // show what the queue read at launch.
+    const backend = fakeBackend({ drafts_load: () => view([DRAFT]) });
+    const { user } = renderUi(<SectionThatOpens />);
+    await waitFor(() => {
+      expect(backend.callsTo("drafts_load")).toHaveLength(1);
+    });
+
+    // Something else wrote a Draft to the library while this section was closed.
+    backend.answer("drafts_load", () => view([DRAFT, OTHER]));
+    await user.click(screen.getByRole("button", { name: "Drafts" }));
+
+    expect(await screen.findByText(OTHER.name)).toBeTruthy();
+    expect(backend.callsTo("drafts_load")).toHaveLength(2);
+  });
+});
+
+/**
+ * The app's shape: the queue and the guard mounted once, one section on screen.
+ *
+ * Starting on another section is what the sidebar does, and it is the case that
+ * decides whether opening Drafts reads the list again.
+ */
+function SectionThatOpens() {
+  const [open, setOpen] = useState(false);
+  return (
+    <DraftsProvider>
+      <button onClick={() => setOpen(true)}>Drafts</button>
+      {open ? <DraftsPage connected={false} /> : <p>Snapshots</p>}
+    </DraftsProvider>
+  );
+}
+
+/**
+ * The library file cannot be written: Drafts and Snapshots live in one file, so
+ * one lock covers both, and it is reported the same way on both pages.
+ *
+ * This is the same defect class the migration warning had — the same state of
+ * the same file rendered twice, and the two copies drifted — so the page renders
+ * `LibraryProblemBanner` and the assertions here are the treatment it must have
+ * on either page: what the file is, the store's reason, the store's detail, and
+ * saving turned off.
+ */
+describe("a library that cannot be written", () => {
+  const DETAIL = "/Users/ada/Library/Application Support/pm4-studio/library.json";
+
+  it("reports it with the store's reason and detail, and turns saving off", async () => {
+    fakeBackend({
+      drafts_load: () =>
+        view(
+          [DRAFT],
+          {
+            kind: "newerVersion",
+            message: "The file claims schema 3, which this build does not write.",
+            detail: DETAIL,
+          },
+        ),
+    });
+
+    renderDraftsPage();
+
+    expect(await screen.findByText(/newer version of PM4 Studio/)).toBeTruthy();
+    expect(screen.getByText(/claims schema 3/)).toBeTruthy();
+    // The detail the store reported, which the Drafts page used to drop.
+    expect(screen.getByText(DETAIL)).toBeTruthy();
+
+    const create = screen.getByRole("button", { name: "New Draft" });
+    expect((create as HTMLButtonElement).disabled).toBe(true);
   });
 });
 
