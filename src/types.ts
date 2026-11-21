@@ -190,3 +190,39 @@ export type RawResponse = {
   checksum_ok: boolean;
   raw: string;
 };
+
+/**
+ * What the raw console's build may send. The backend answers this before the
+ * console is used, so the console marks itself from the actual capability
+ * rather than from an assumption of its own (ADR 0006): a development build
+ * must not display the shipped build's read-only warning.
+ */
+export type ConsoleCapability = {
+  /** True in a release build: only `commands` are sent. */
+  readOnly: boolean;
+  /** The commands a release build sends, by id and name. Empty otherwise. */
+  commands: ConsoleCommand[];
+};
+
+/** One command a release build's raw console sends. */
+export type ConsoleCommand = {
+  /** The command id as it appears in a frame, e.g. `0x0081`. */
+  cmd: string;
+  /** What it does, e.g. `NTAG read`. */
+  name: string;
+};
+
+/**
+ * A frame this build refused to send, as it arrives across the IPC boundary.
+ *
+ * `kind` is what lets the console show it as a limit of the build. A
+ * write-guard refusal arrives as plain text instead, because it is about the
+ * Tag in position — the two must not look like one another.
+ */
+export type BuildRefusal = {
+  kind: "refusedByBuild";
+  /** The refused command, e.g. `0x0073`. */
+  cmd: string;
+  /** Why it was refused, in the backend's words. */
+  message: string;
+};
