@@ -185,6 +185,7 @@ export default function App() {
                   reader={{ connected, info: reader.info, firmware: reader.firmware }}
                   quietLevel={quietLevel}
                   onQuietLevelChange={setQuietLevel}
+                  library={library}
                 />
               )}
             </div>

@@ -9,15 +9,15 @@
 - Library store (existing) — catches that the clear path cannot become a fallback for a failed save; misses nothing currently covered.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/17
-**Status:** ready
+**Status:** done
 
-- [ ] The library file's location is shown on the page and can be revealed in the file manager.
-- [ ] Export and import are reachable from Settings and behave as they do today: an export re-imports identically, an import adds what is missing and leaves existing entries untouched.
-- [ ] One clear-all action removes the library file, any stale temporary sibling left beside it, the legacy saved-reads store, and this app's preference keys.
-- [ ] The action is gated by typing the word `clear`. A second click is not the gate.
-- [ ] The action reports exactly what it removed.
-- [ ] If any target cannot be removed the action refuses and says so rather than completing partially, and it names which part it could not remove.
-- [ ] It accepts no path from input and follows no symlink, so it cannot reach anything outside this app's own storage.
-- [ ] It is unreachable as a fallback from a failed save or an unreadable file; it is only ever user-initiated from this group.
-- [ ] After clearing, the app shows its first-run state without needing a restart, and a cleared preference falls back to its documented default.
-- [ ] Deleting a file is a deliberate, documented exception to the never-destroy-an-unreadable-file rule, not a second write path. The exception is written down where the rule lives.
+- [x] The library file's location is shown on the page and can be revealed in the file manager.
+- [x] Export and import are reachable from Settings and behave as they do today: an export re-imports identically, an import adds what is missing and leaves existing entries untouched.
+- [x] One clear-all action removes the library file, any stale temporary sibling left beside it, the legacy saved-reads store, and this app's preference keys.
+- [x] The action is gated by typing the word `clear`. A second click is not the gate.
+- [x] The action reports exactly what it removed.
+- [x] If any target cannot be removed the action refuses and says so rather than completing partially, and it names which part it could not remove.
+- [x] It accepts no path from input and follows no symlink, so it cannot reach anything outside this app's own storage.
+- [x] It is unreachable as a fallback from a failed save or an unreadable file; it is only ever user-initiated from this group.
+- [x] After clearing, the app shows its first-run state without needing a restart, and a cleared preference falls back to its documented default.
+- [x] Deleting a file is a deliberate, documented exception to the never-destroy-an-unreadable-file rule, not a second write path. The exception is written down where the rule lives.

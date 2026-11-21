@@ -41,6 +41,7 @@ import type {
 } from "../types";
 import { attemptNotice } from "./batchClone";
 import { blankNotice } from "./blankTag";
+import { describeClearReport, type ClearReport } from "./clearData";
 import { BUILD_REFUSAL_DETAIL, BUILD_REFUSAL_LABEL } from "./consoleRefusal";
 import { eraseNotice } from "./eraseTag";
 import { QUIET_LEVEL_LABEL, type QuietLevel } from "./quietLevel";
@@ -89,6 +90,9 @@ export type OutcomeKind =
   | "blanked"
   /** An erase that cleared the Tag's NDEF content. */
   | "erased"
+  /** Saved data was cleared from this machine, by the one action allowed to.
+   *  About this app's storage, never about a Tag: erasing a Tag is `erased`. */
+  | "data-cleared"
   /** Sent, but the read-back could not confirm it. The Tag's state is unknown. */
   | "unverified"
   /** Stopped before anything was sent: the guard, the tag or the frame refused. */
@@ -143,6 +147,7 @@ export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
   "verified",
   "blanked",
   "erased",
+  "data-cleared",
   "unverified",
   "refused",
   "failed",
@@ -169,6 +174,7 @@ const SEVERITY_OF: Record<OutcomeKind, Severity> = {
   verified: "success",
   blanked: "success",
   erased: "success",
+  "data-cleared": "success",
   unverified: "warning",
   refused: "error",
   failed: "error",
@@ -563,6 +569,22 @@ export const outcomes = {
    */
   announcement(message: string, detail?: string): Outcome {
     return make("announcement", "preferences", message, detail === undefined ? {} : { detail });
+  },
+
+  /**
+   * What clearing every saved thing came to, in the words the Settings page
+   * shows. One report, one sentence source: the inline block and the message
+   * cannot tell the user different things about the same action.
+   *
+   * The kind follows the report's tone rather than being chosen here: a clear is
+   * a success, "there was nothing saved" is informational and silent, and a
+   * refusal is an error that names the part it could not remove.
+   */
+  dataCleared(report: ClearReport): Outcome {
+    const notice = describeClearReport(report);
+    const kind: OutcomeKind =
+      notice.tone === "ok" ? "data-cleared" : notice.tone === "info" ? "announcement" : "refused";
+    return make(kind, "preferences", notice.title, { detail: notice.detail });
   },
 
   /**

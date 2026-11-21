@@ -24,12 +24,24 @@
  * through the same seam, and ticket 17 deletes it. And the level's own migration
  * lives in `lib/quietLevel`, which reads the boolean preference this replaced
  * rather than reinterpreting it.
+ *
+ * Clear-all-saved-data is the third thing here: it removes the stored keys this
+ * preference is read from, so the hook listens for that and returns the level to
+ * its documented default in the window that is already open — without writing the
+ * default back, because the point of clearing is that no choice is stored.
  */
 
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { legacyChirp } from "../lib/outcome";
-import { audibleAt, loadQuietLevel, saveQuietLevel, type QuietLevel } from "../lib/quietLevel";
+import { subscribePreferenceReset } from "../lib/preferences";
+import {
+  DEFAULT_QUIET_LEVEL,
+  audibleAt,
+  loadQuietLevel,
+  saveQuietLevel,
+  type QuietLevel,
+} from "../lib/quietLevel";
 import { createSignalQueue, type SignalTimers } from "../lib/signalQueue";
 import { subscribeSignals } from "../lib/signal";
 
@@ -75,6 +87,15 @@ export function useBeep(options: UseBeepOptions = {}) {
     // The timers are a test seam and do not change over a component's life, so the
     // subscriber is installed once and removed with the shell.
   }, []);
+
+  // Clear-all-saved-data removes the keys this preference is read from, so the
+  // level shown in Settings has to fall back with them. Set here rather than
+  // re-read from storage, because there is nothing left in storage to read, and
+  // deliberately not saved: a cleared preference must stay cleared.
+  useEffect(
+    () => subscribePreferenceReset(() => setQuietLevelState(DEFAULT_QUIET_LEVEL)),
+    [],
+  );
 
   const setQuietLevel = useCallback((level: QuietLevel) => {
     setQuietLevelState(level);
