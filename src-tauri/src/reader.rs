@@ -21,6 +21,8 @@
 //! covered. For every command this app sends the payload is far below that, so
 //! a plain XOR is exact.
 
+use crate::identity::Identity;
+use crate::write_guard;
 use hidapi::{HidApi, HidDevice};
 use serde::{Deserialize, Serialize};
 
@@ -131,6 +133,34 @@ pub struct LfCard {
     pub facility: u8,
     pub card: u16,
     pub raw: String,
+}
+
+impl LfCard {
+    /// A reading from a `0x0072` payload, or `None` when the payload carries no
+    /// Identity. The decode itself lives in the Identity codec.
+    pub fn from_payload(payload: &[u8]) -> Option<Self> {
+        let identity = Identity::from_read_payload(payload)?;
+        Some(Self::from_identity(identity, payload))
+    }
+
+    /// This reading's Identity.
+    pub fn identity(&self) -> Identity {
+        Identity {
+            customer: self.customer,
+            data32: self.data32,
+        }
+    }
+
+    fn from_identity(identity: Identity, payload: &[u8]) -> Self {
+        LfCard {
+            customer: identity.customer,
+            data32: identity.data32,
+            id: identity.id(),
+            facility: identity.facility(),
+            card: identity.card(),
+            raw: hex(payload),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -245,101 +275,60 @@ impl Reader {
         Ok(())
     }
 
-    /// 125 kHz read. One poll attempt; `None` means no badge latched.
+    /// 125 kHz read. One poll attempt; `None` means no tag latched.
     pub fn lf_read_once(&self) -> Result<Option<LfCard>, String> {
         let f = match self.transact(CMD_LF_READ, &[0x00, 0x01], Some(CMD_LF_READ), 1500)? {
             Some(f) => f,
             None => return Ok(None),
         };
-        let p = &f.payload;
-        // 24-byte payload, validity flag at payload[2], customer byte at
-        // payload[8], data32 little endian at payload[12..16].
-        if p.len() < 0x18 || p[2] != 0x01 {
-            return Ok(None);
-        }
-        let customer = p[8];
-        let data32 = u32::from_le_bytes([p[12], p[13], p[14], p[15]]);
-        if data32 == 0 {
-            return Ok(None);
-        }
-        let be = data32.to_be_bytes();
-        let id = format!(
-            "{:02X} {:02X} {:02X} {:02X} {:02X}",
-            customer, be[0], be[1], be[2], be[3]
-        );
-        Ok(Some(LfCard {
-            customer,
-            data32,
-            id,
-            facility: ((data32 >> 16) & 0xFF) as u8,
-            card: (data32 & 0xFFFF) as u16,
-            raw: hex(&f.payload),
-        }))
+        Ok(LfCard::from_payload(&f.payload))
     }
 
-    /// Write an EM4100 identity onto a blank 125 kHz tag.
+    /// Write an Identity onto a 125 kHz Tag with command `0x0073`.
     ///
-    /// Command 0x0073 with a 24-byte payload. The write layout is shifted +4
-    /// relative to the read layout (see docs/PROTOCOL.md):
-    ///   [1] = 0x01, [2] = 0x01   enable flags, required
-    ///   [8]  = customer byte
-    ///   [12] = customer byte
-    ///   [16..20] = data32, little endian
-    ///
-    /// A shorter payload wedges the firmware (stop responding to HID reports
-    /// until the reader is replugged), so the length must stay 24.
-    pub fn lf_write(&self, customer: u8, data32: u32) -> Result<(), String> {
-        let le = data32.to_le_bytes();
-        let mut p = [0u8; 24];
-        p[1] = 0x01;
-        p[2] = 0x01;
-        p[8] = customer;
-        p[12] = customer;
-        p[16..20].copy_from_slice(&le);
-
-        self.write_raw(&make_frame(CMD_LF_WRITE, &p))?;
+    /// The payload comes from the Identity codec, which owns the write layout
+    /// and refuses an Identity it cannot encode. This method only transmits it,
+    /// and it transmits nothing when the codec refuses.
+    pub fn lf_write(&self, identity: Identity) -> Result<(), String> {
+        // Fixed-size array: the compiler, not a runtime check, keeps this 24
+        // bytes. A shorter payload wedges the firmware until it is replugged.
+        let payload = identity.write_payload().map_err(|e| e.to_string())?;
+        self.write_raw(&make_frame(CMD_LF_WRITE, &payload))?;
         // The firmware emits a burst of acknowledgement frames after a write.
         std::thread::sleep(std::time::Duration::from_millis(600));
         self.drain();
         Ok(())
     }
 
-    /// Wake, write, then read the tag back so callers can verify the result.
-    ///
-    /// Fails closed on two conditions:
-    ///  1. The tag on the reader cannot be read at all. We refuse to write blind,
-    ///     because we would not know whether we were about to overwrite the
-    ///     user's original badge.
-    ///  2. The tag already reads as the id being written — that is almost
-    ///     certainly the ORIGINAL badge left in place, and writing to it has
-    ///     been observed to lock a T5577 permanently.
-    pub fn lf_write_verified(&self, customer: u8, data32: u32) -> Result<Option<LfCard>, String> {
-        let mut current: Option<LfCard> = None;
+    /// Read the tag currently in the write position, retrying briefly because a
+    /// tag that was just placed needs a moment to be seen.
+    fn read_tag_in_position(&self) -> Result<Option<LfCard>, String> {
         for attempt in 0..10 {
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
             self.wake().ok();
             if let Some(c) = self.lf_read_once()? {
-                current = Some(c);
-                break;
+                return Ok(Some(c));
             }
         }
-        let current = current.ok_or_else(|| {
-            "could not read the tag on the reader, so refusing to write blind. \
-             Put a blank 125 kHz tag on the reader and try again."
-                .to_string()
-        })?;
+        Ok(None)
+    }
 
-        if current.customer == customer && current.data32 == data32 {
-            return Err(format!(
-                "the tag on the reader already reads as {} — that looks like the original \
-                 badge. Take it off and put a blank tag on instead.",
-                current.id
-            ));
+    /// Wake, write, then read the tag back so callers can verify the result.
+    ///
+    /// The decision to write at all is `write_guard`'s, and it fails closed on
+    /// the two conditions in ADR 0001: nothing readable in the write position,
+    /// or a tag that already presents the Identity being written. This method
+    /// performs the exchange only after the guard allows it.
+    pub fn lf_write_verified(&self, identity: Identity) -> Result<Option<LfCard>, String> {
+        let current = self.read_tag_in_position()?;
+        let decision = write_guard::decide(current.as_ref().map(LfCard::identity), identity);
+        if let Some(refusal) = decision.refusal_message(current.as_ref().map(LfCard::identity)) {
+            return Err(refusal);
         }
 
-        self.lf_write(customer, data32)?;
+        self.lf_write(identity)?;
         for _ in 0..8 {
             self.wake().ok();
             if let Some(c) = self.lf_read_once()? {
@@ -432,6 +421,8 @@ pub fn parse_hex(s: &str) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::{Identity, IdentityError, LF_WRITE_PAYLOAD_LEN, MAX_DATA32};
+    use crate::test_frames;
 
     #[test]
     fn checksum_matches_known_frames() {
@@ -454,11 +445,7 @@ mod tests {
 
     #[test]
     fn parses_em4100_lf_response() {
-        // Real frame captured from hardware (valid card).
-        let raw = parse_hex(
-            "55 00 72 00 18 00 01 01 00 00 00 00 00 56 00 00 00 b3 c7 53 00 00 00 c8 42 00 00 00 00 04 fb",
-        )
-        .unwrap();
+        let raw = parse_hex(test_frames::LF_READ_CARD_PRESENT).unwrap();
         let f = parse_frame(&raw).unwrap();
         assert!(f.checksum_ok);
         let p = &f.payload;
@@ -469,13 +456,61 @@ mod tests {
 
     #[test]
     fn parses_live_no_card_response() {
-        // Real frame captured from the user's reader with no badge present.
-        let raw = parse_hex(
-            "55 00 72 00 18 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 C8 42 00 00 00 00 74 8B",
-        )
-        .unwrap();
+        let raw = parse_hex(test_frames::LF_READ_NO_CARD).unwrap();
         let f = parse_frame(&raw).unwrap();
         assert!(f.checksum_ok);
-        assert_eq!(f.payload[2], 0x00, "validity flag clear means no card");
+        assert_eq!(f.payload[2], 0x00, "validity flag clear means no tag");
+    }
+
+    #[test]
+    fn a_stored_read_capture_reports_the_same_values_as_before() {
+        let payload = test_frames::payload(test_frames::LF_READ_CARD_PRESENT);
+        let card = LfCard::from_payload(&payload).expect("a latched tag is a reading");
+        assert_eq!(card.customer, 0x56);
+        assert_eq!(card.data32, 0x0053_C7B3);
+        assert_eq!(card.id, "56 00 53 C7 B3");
+        assert_eq!(card.facility, 0x53);
+        assert_eq!(card.card, 0xC7B3);
+        assert_eq!(card.raw, hex(&payload), "raw is the payload as captured");
+    }
+
+    #[test]
+    fn a_stored_no_card_capture_reports_no_reading() {
+        let payload = test_frames::payload(test_frames::LF_READ_NO_CARD);
+        assert!(LfCard::from_payload(&payload).is_none());
+    }
+
+    #[test]
+    fn the_clone_path_sends_the_payload_the_device_accepted() {
+        // The read-back of a written tag, encoded for writing again, must be
+        // byte-identical to the frame the device accepted in docs/PROTOCOL.md.
+        let identity = LfCard::from_payload(&test_frames::payload(test_frames::LF_WRITE_READBACK))
+            .expect("read-back is a reading")
+            .identity();
+        let frame = make_frame(CMD_LF_WRITE, &identity.write_payload().expect("in range"));
+        let captured = parse_hex(test_frames::LF_WRITE_CONFIRMED).unwrap();
+        assert_eq!(&frame[..captured.len()], &captured[..], "frame matches capture");
+        assert_eq!(frame[3..5], [0x00, 0x18], "declared payload length is 24");
+        assert_eq!(payload_len(&frame), LF_WRITE_PAYLOAD_LEN);
+    }
+
+    #[test]
+    fn the_clone_path_refuses_an_identity_it_cannot_encode() {
+        // The encoder's refusal must reach the caller before anything is sent.
+        let identity = Identity {
+            customer: 0x55,
+            data32: 0x0100_0000,
+        };
+        assert_eq!(
+            identity.write_payload(),
+            Err(IdentityError::Data32OutOfRange {
+                data32: 0x0100_0000,
+                max: MAX_DATA32,
+            })
+        );
+    }
+
+    fn payload_len(frame: &[u8; REPORT_LEN]) -> usize {
+        (((frame[3] as usize) << 8) | frame[4] as usize).min(REPORT_LEN - 7)
     }
 }

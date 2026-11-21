@@ -9,10 +9,10 @@
 - S4 Write guard — catches refuse-when-unreadable and refuse-when-tag-already-presents-target; misses whether a write actually locks a chip.
 
 **Tracker:** None
-**Status:** ready
+**Status:** done
 
-- [ ] Decoding a stored real capture yields the same Identity, facility and card values as the app reports today.
-- [ ] Encoding an Identity produces exactly the 24 bytes previously accepted by the device, proven byte-for-byte against a stored real frame.
-- [ ] The guard refuses when no tag can be read, and refuses when the tag already presents the target Identity, both provable with no hardware attached.
-- [ ] An encode request for an out-of-range Identity is rejected rather than silently truncated.
+- [x] Decoding a stored real capture yields the same Identity, facility and card values as the app reports today.
+- [x] Encoding an Identity produces exactly the 24 bytes previously accepted by the device, proven byte-for-byte against a stored real frame.
+- [x] The guard refuses when no tag can be read, and refuses when the tag already presents the target Identity, both provable with no hardware attached.
+- [x] An encode request for an out-of-range Identity is rejected rather than silently truncated.
 - [ ] A clone performed on the physical Reader still writes and verifies exactly as before.
