@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { isDeviceBusy } from "../lib/deviceLock";
 import { classifyDeviceFailure } from "../lib/readerIdentity";
 import type { DeviceInfo, HfCard, LfCard } from "../types";
 
@@ -129,6 +130,13 @@ export function useLfPoller(
 
     const tick = async () => {
       if (cancelled) return;
+      // A write owns the Reader for its whole duration. Polling is suspended for
+      // that time, so a poll reply can never be read as part of the write's own
+      // exchange, and a stale read is never mistaken for a write result.
+      if (isDeviceBusy()) {
+        timer = setTimeout(tick, POLL_INTERVAL_MS);
+        return;
+      }
       try {
         const card = await invoke<LfCard | null>("lf_poll");
         if (cancelled) return;

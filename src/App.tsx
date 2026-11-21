@@ -232,7 +232,7 @@ export default function App() {
                   onChirp={chirp}
                 />
               )}
-              {page === "drafts" && <DraftsPage />}
+              {page === "drafts" && <DraftsPage connected={connected} />}
               {page === "library" && (
                 <LibraryPage connected={connected} library={library} onChirp={chirp} />
               )}

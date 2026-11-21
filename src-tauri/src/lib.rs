@@ -4,6 +4,7 @@ pub mod identity;
 pub mod library;
 pub mod library_io;
 pub mod library_migration;
+pub mod ntag;
 pub mod reader;
 pub mod stream;
 pub mod write_guard;
@@ -17,6 +18,7 @@ use library::{
     WriteCountOutcome,
 };
 use library_io::{FileError, ImportPreview};
+use ntag::{NdefPreview, NdefWrite, TagView};
 use reader::{DeviceInfo, Frame, HfCard, LfCard, LfWriteAttempt, Reader, REPORT_LEN};
 use write_outcome::Evidence;
 use serde::{Deserialize, Serialize};
@@ -247,6 +249,118 @@ fn lf_write(
         },
         count_problem,
     })
+}
+
+/// What a Draft write would do to the Tag on the Reader, before anything is
+/// written. The confirmation names the message that would be replaced, so a
+/// write is never consented to blind.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NdefPreviewView {
+    /// What the Tag holds now, decoded no further than the TLV. The webview's
+    /// NDEF codec turns `existing.messageHex` into Records.
+    pub tag: Option<TagView>,
+    /// Bytes the Draft's message would occupy on the Tag, TLV overhead included.
+    pub required_bytes: usize,
+    pub capacity_bytes: Option<usize>,
+    /// True only when a write would actually proceed.
+    pub fits: bool,
+    /// Why the write would not proceed, when it would not: an empty Draft, a
+    /// message larger than the Tag, a Tag whose capacity cannot be read, or no
+    /// Tag in the field.
+    pub refusal: Option<String>,
+}
+
+impl From<NdefPreview> for NdefPreviewView {
+    fn from(preview: NdefPreview) -> Self {
+        Self {
+            tag: preview.tag,
+            required_bytes: preview.required_bytes,
+            capacity_bytes: preview.capacity_bytes,
+            fits: preview.fits,
+            refusal: preview.refusal,
+        }
+    }
+}
+
+/// What one Draft write did, in the shape the webview reads it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NdefWriteView {
+    /// "refused" | "verified" | "unverified" | "failed" — see `write_outcome`.
+    pub outcome: &'static str,
+    /// Why this write did not land a confirmed copy, when it did not.
+    pub message: Option<String>,
+    /// What the Tag held before the write, from the read that precedes it.
+    pub before: Option<TagView>,
+    /// What it read back as afterwards, when it could be re-read.
+    pub after: Option<TagView>,
+    pub capacity_bytes: Option<usize>,
+    pub required_bytes: usize,
+    /// Pages the request asked the firmware to write.
+    pub wrote_pages: Vec<usize>,
+    /// Pages the firmware reported writing.
+    pub accepted_pages: Vec<usize>,
+}
+
+impl From<NdefWrite> for NdefWriteView {
+    fn from(write: NdefWrite) -> Self {
+        Self {
+            outcome: write.outcome.as_str(),
+            message: write.message,
+            before: write.before,
+            after: write.readback,
+            capacity_bytes: write.capacity_bytes,
+            required_bytes: write.required_bytes,
+            wrote_pages: write.wrote_pages,
+            accepted_pages: write.accepted_pages,
+        }
+    }
+}
+
+/// The NDEF message a Draft encodes to, as bytes. The codec lives in the
+/// webview (`src/lib/ndef.ts`), which owns NDEF; this only refuses bytes it
+/// cannot read, so a malformed message never reaches a Tag.
+fn message_bytes(message_hex: &str) -> Result<Vec<u8>, String> {
+    let bytes = reader::parse_hex(message_hex)?;
+    if bytes.is_empty() {
+        return Err("this Draft encodes to no bytes, so there is no message to write".to_string());
+    }
+    Ok(bytes)
+}
+
+/// What writing a Draft to the 13.56 MHz Tag on the Reader would replace.
+///
+/// Read-only: it sends the info and read commands and nothing else, so the
+/// confirmation can name the Tag's current message or state that the Tag appears
+/// empty before the user consents.
+#[tauri::command]
+fn hf_ndef_preview(
+    state: State<'_, AppState>,
+    message_hex: String,
+) -> Result<NdefPreviewView, String> {
+    let message = message_bytes(&message_hex)?;
+    with_reader(&state, |r| Ok(ntag::preview(r, &message).into()))
+}
+
+/// Write a Draft's Records to the 13.56 MHz Tag on the Reader as one complete
+/// NDEF message, then read it back.
+///
+/// Nothing is sent for an empty Draft or a message the Tag cannot hold, and a
+/// Tag that cannot be read first is not written at all. The write itself is one
+/// 21-report frame carrying the Tag's whole image, with only the pages the
+/// message occupies marked for writing — so the UID, lock bytes and Capability
+/// Container cannot be touched (see `ntag::plan_write`).
+///
+/// The outcome is the same vocabulary the 125 kHz path uses: only `verified`, a
+/// read-back that matches what was written, is a write that landed.
+#[tauri::command]
+fn hf_ndef_write(
+    state: State<'_, AppState>,
+    message_hex: String,
+) -> Result<NdefWriteView, String> {
+    let message = message_bytes(&message_hex)?;
+    with_reader(&state, |r| Ok(ntag::write_message(r, &message).into()))
 }
 
 /// Send an arbitrary frame. Input is a hex string; the frame is zero-padded to
@@ -770,6 +884,8 @@ pub fn run() {
             beep,
             led_off,
             lf_write,
+            hf_ndef_preview,
+            hf_ndef_write,
             raw_send,
             send_cmd,
             library_load,
