@@ -3,11 +3,23 @@ import {
   DRAFT_NOT_A_TAG_NOTICE,
   EMPTY_DRAFTS_DETAIL,
   EMPTY_DRAFT_DETAIL,
+  RECORD_KINDS,
+  capacityNote,
   draftDetail,
   draftTitle,
   formatUpdatedAt,
+  newBluetoothRecord,
+  newContactRecord,
+  newEmailRecord,
+  newExternalRecord,
+  newLocationRecord,
+  newMimeRecord,
+  newPhoneRecord,
+  newRecord,
+  newSmsRecord,
   newTextRecord,
   newUrlRecord,
+  newWifiRecord,
   recordKindLabel,
   recordSummary,
 } from "./drafts";
@@ -82,5 +94,82 @@ describe("how a Draft reads in the list", () => {
 
   it("labels an unparseable timestamp with nothing rather than a wrong time", () => {
     expect(formatUpdatedAt("not a date")).toBe("");
+  });
+
+  it("still describes a Draft whose Record cannot be encoded", () => {
+    const bad = draft({ records: [newWifiRecord({ ssid: "" })] });
+    const detail = draftDetail(bad, Date.parse(bad.updatedAt) + 1000);
+    expect(detail).toContain("1 Record");
+    expect(detail).toContain("size unavailable");
+  });
+});
+
+describe("the offered Record types", () => {
+  it("offers exactly the set the spec fixed, in editor order", () => {
+    expect(RECORD_KINDS).toEqual([
+      "text",
+      "url",
+      "phone",
+      "email",
+      "contact",
+      "sms",
+      "location",
+      "wifi",
+      "bluetooth",
+      "mime",
+      "external",
+    ]);
+  });
+
+  it("offers nothing that is meaningless from a desktop app", () => {
+    const offered = RECORD_KINDS.join(" ");
+    expect(offered).not.toMatch(/android|app|social|homekit|payment|printer|3d/i);
+  });
+
+  it("creates a blank Record of every offered kind", () => {
+    for (const kind of RECORD_KINDS) {
+      expect(newRecord(kind).kind).toBe(kind);
+    }
+  });
+
+  it("names every kind for the Record row", () => {
+    expect(recordKindLabel(newTextRecord())).toBe("Text");
+    expect(recordKindLabel(newUrlRecord())).toBe("URL");
+    expect(recordKindLabel(newPhoneRecord())).toBe("Phone");
+    expect(recordKindLabel(newEmailRecord())).toBe("Email");
+    expect(recordKindLabel(newContactRecord())).toBe("Contact");
+    expect(recordKindLabel(newSmsRecord())).toBe("SMS");
+    expect(recordKindLabel(newLocationRecord())).toBe("Location");
+    expect(recordKindLabel(newWifiRecord())).toBe("Wi-Fi");
+    expect(recordKindLabel(newBluetoothRecord())).toBe("Bluetooth");
+    expect(recordKindLabel(newMimeRecord())).toBe("MIME");
+    expect(recordKindLabel(newExternalRecord())).toBe("External");
+  });
+
+  it("summarises every kind by the value that identifies it", () => {
+    expect(recordSummary(newPhoneRecord("+15550100"))).toBe("+15550100");
+    expect(recordSummary(newEmailRecord("someone@example.com"))).toBe("someone@example.com");
+    expect(recordSummary(newContactRecord({ name: "Ada Lovelace" }))).toBe("Ada Lovelace");
+    expect(recordSummary(newSmsRecord("+15550100", "Hello"))).toBe("+15550100: Hello");
+    expect(recordSummary(newSmsRecord("+15550100"))).toBe("+15550100");
+    expect(recordSummary(newLocationRecord("51.5074", "-0.1278"))).toBe("51.5074, -0.1278");
+    expect(recordSummary(newWifiRecord({ ssid: "HomeNet" }))).toBe("HomeNet");
+    expect(recordSummary(newBluetoothRecord("AA:BB:CC:DD:EE:FF"))).toBe("AA:BB:CC:DD:EE:FF");
+    expect(recordSummary(newMimeRecord("text/plain", ""))).toBe("text/plain");
+    expect(recordSummary(newExternalRecord("example.com:do", ""))).toBe("example.com:do");
+  });
+});
+
+describe("size against a target", () => {
+  it("compares the total where capacity is known", () => {
+    expect(capacityNote(100, 144)).toBe("100 of 144 bytes, 44 left");
+    expect(capacityNote(144, 144)).toBe("144 of 144 bytes, full");
+    expect(capacityNote(145, 144)).toBe("145 bytes does not fit in 144");
+  });
+
+  it("states that capacity is unknown instead of guessing", () => {
+    const note = capacityNote(100, null);
+    expect(note).toMatch(/not known/i);
+    expect(note).not.toMatch(/\d+ of \d+/);
   });
 });

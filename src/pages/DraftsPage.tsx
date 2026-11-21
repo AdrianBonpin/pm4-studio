@@ -10,15 +10,18 @@ import {
   EMPTY_DRAFT_TITLE,
   EMPTY_DRAFTS_DETAIL,
   EMPTY_DRAFTS_TITLE,
+  RECORD_KINDS,
+  RECORD_KIND_LABELS,
+  capacityNote,
   draftDetail,
   draftTitle,
-  newTextRecord,
-  newUrlRecord,
+  newRecord,
   recordKindLabel,
   recordSummary,
 } from "../lib/drafts";
-import { recordSizeBytes, recordsByteLength } from "../lib/ndef";
-import type { Draft, DraftRecord } from "../lib/drafts";
+import { recordProblem, recordSizeBytes, recordsByteLength } from "../lib/ndef";
+import { INPUT_ROUNDING } from "../lib/uiConstants";
+import type { Draft, DraftRecord, RecordKind, WifiAuth, WifiEncryption } from "../lib/drafts";
 
 /** The encoded size of one Record, or null when this build cannot encode it. */
 function sizeOf(record: DraftRecord): number | null {
@@ -52,10 +55,12 @@ export function DraftsPage() {
   const [newName, setNewName] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState("");
+  const [newKind, setNewKind] = useState<RecordKind>("text");
 
   const list = drafts.drafts;
   const selected = list.find((draft) => draft.id === selectedId) ?? null;
   const locked = drafts.problem !== null;
+  const total = selected ? draftSize(selected) : null;
 
   const create = async () => {
     const draft = await drafts.create(newName);
@@ -212,9 +217,14 @@ export function DraftsPage() {
             <p className="text-sm text-text">{draftTitle(selected)}</p>
             <p className="font-mono text-[11px] text-text-muted">
               {selected.records.length} {selected.records.length === 1 ? "Record" : "Records"} ·{" "}
-              {draftSize(selected) ?? "size unavailable"} bytes
+              {total === null ? "total unavailable" : `${total} ${total === 1 ? "byte" : "bytes"}`}
             </p>
           </div>
+          <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+            {total === null
+              ? "The total is unavailable until the Record with a problem is fixed."
+              : capacityNote(total, null)}
+          </p>
 
           {selected.records.length === 0 && (
             <div className="mt-4 flex flex-col items-start gap-2 border border-dashed border-border px-4 py-6">
@@ -259,23 +269,26 @@ export function DraftsPage() {
           )}
 
           <div className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4">
+            <Choice
+              label="Record type to add"
+              value={newKind}
+              options={RECORD_KINDS.map((kind) => ({
+                value: kind,
+                label: RECORD_KIND_LABELS[kind],
+              }))}
+              onChange={(value) => setNewKind(value as RecordKind)}
+              disabled={locked}
+              className="max-w-44"
+            />
             <Button
               variant="secondary"
               disabled={locked}
               onClick={() =>
-                drafts.setRecords(selected.id, [...selected.records, newTextRecord()])
+                drafts.setRecords(selected.id, [...selected.records, newRecord(newKind)])
               }
             >
               <Plus size={14} />
-              Add Text
-            </Button>
-            <Button
-              variant="secondary"
-              disabled={locked}
-              onClick={() => drafts.setRecords(selected.id, [...selected.records, newUrlRecord()])}
-            >
-              <Plus size={14} />
-              Add URL
+              Add Record
             </Button>
             <p className="text-[11px] leading-relaxed text-text-muted">
               Records are written as one message, in this order. There is no appending in place.
@@ -308,6 +321,7 @@ function RecordRow({
   onDelete,
 }: RecordRowProps) {
   const size = sizeOf(record);
+  const problem = recordProblem(record);
   return (
     <li className="flex items-start justify-between gap-4 py-3 first:pt-0">
       <div className="flex min-w-0 flex-1 flex-col gap-2">
@@ -316,48 +330,16 @@ function RecordRow({
             {recordKindLabel(record)}
           </span>
           <span className="font-mono text-[11px] text-text-muted">
-            {size === null ? "?" : size} {size === 1 ? "byte" : "bytes"}
+            {size === null ? "size unavailable" : `${size} ${size === 1 ? "byte" : "bytes"}`}
           </span>
           <span className="truncate font-mono text-[11px] text-accent-muted">
             {recordSummary(record) || "empty"}
           </span>
         </div>
 
-        {record.kind === "text" && (
-          <div className="flex items-start gap-2">
-            <Input
-              value={record.fields.language}
-              onChange={(language) => onChange({ kind: "text", fields: { ...record.fields, language } })}
-              placeholder="en"
-              aria-label="Language code"
-              disabled={disabled}
-              className="max-w-20"
-            />
-            <Input
-              value={record.fields.text}
-              onChange={(text) => onChange({ kind: "text", fields: { ...record.fields, text } })}
-              placeholder="The text a phone will show"
-              aria-label="Text"
-              disabled={disabled}
-            />
-          </div>
-        )}
+        <RecordFields record={record} disabled={disabled} onChange={onChange} />
 
-        {record.kind === "url" && (
-          <Input
-            value={record.fields.url}
-            onChange={(url) => onChange({ kind: "url", fields: { url } })}
-            placeholder="https://example.com"
-            aria-label="URL"
-            disabled={disabled}
-          />
-        )}
-
-        {record.kind !== "text" && record.kind !== "url" && (
-          <p className="text-xs leading-relaxed text-err">
-            This build cannot edit this Record, so it is kept exactly as it is.
-          </p>
-        )}
+        {problem && <p className="text-xs leading-relaxed text-err">{problem}</p>}
       </div>
 
       <div className="flex shrink-0 items-center gap-0.5">
@@ -389,5 +371,295 @@ function RecordRow({
         </button>
       </div>
     </li>
+  );
+}
+
+interface RecordFieldsProps {
+  record: DraftRecord;
+  disabled: boolean;
+  onChange: (record: DraftRecord) => void;
+}
+
+/** The form for one Record kind. A field is edited in place as it is typed. */
+function RecordFields({ record, disabled, onChange }: RecordFieldsProps) {
+  switch (record.kind) {
+    case "text":
+      return (
+        <div className="flex items-start gap-2">
+          <Input
+            value={record.fields.language}
+            onChange={(language) => onChange({ kind: "text", fields: { ...record.fields, language } })}
+            placeholder="en"
+            aria-label="Language code"
+            disabled={disabled}
+            className="max-w-20"
+          />
+          <Input
+            value={record.fields.text}
+            onChange={(text) => onChange({ kind: "text", fields: { ...record.fields, text } })}
+            placeholder="The text a phone will show"
+            aria-label="Text"
+            disabled={disabled}
+          />
+        </div>
+      );
+    case "url":
+      return (
+        <Input
+          value={record.fields.url}
+          onChange={(url) => onChange({ kind: "url", fields: { url } })}
+          placeholder="https://example.com"
+          aria-label="URL"
+          disabled={disabled}
+        />
+      );
+    case "phone":
+      return (
+        <Input
+          value={record.fields.number}
+          onChange={(number) => onChange({ kind: "phone", fields: { number } })}
+          placeholder="+15550100"
+          aria-label="Phone number"
+          disabled={disabled}
+        />
+      );
+    case "email":
+      return (
+        <Input
+          value={record.fields.address}
+          onChange={(address) => onChange({ kind: "email", fields: { address } })}
+          placeholder="name@example.com"
+          aria-label="Email address"
+          disabled={disabled}
+        />
+      );
+    case "contact":
+      return (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-start gap-2">
+            <Input
+              value={record.fields.name}
+              onChange={(name) => onChange({ kind: "contact", fields: { ...record.fields, name } })}
+              placeholder="Name"
+              aria-label="Contact name"
+              disabled={disabled}
+            />
+            <Input
+              value={record.fields.organization}
+              onChange={(organization) =>
+                onChange({ kind: "contact", fields: { ...record.fields, organization } })
+              }
+              placeholder="Organisation"
+              aria-label="Contact organisation"
+              disabled={disabled}
+            />
+          </div>
+          <div className="flex items-start gap-2">
+            <Input
+              value={record.fields.phone}
+              onChange={(phone) => onChange({ kind: "contact", fields: { ...record.fields, phone } })}
+              placeholder="Telephone, optional"
+              aria-label="Contact telephone"
+              disabled={disabled}
+            />
+            <Input
+              value={record.fields.email}
+              onChange={(email) => onChange({ kind: "contact", fields: { ...record.fields, email } })}
+              placeholder="Email, optional"
+              aria-label="Contact email"
+              disabled={disabled}
+            />
+          </div>
+        </div>
+      );
+    case "sms":
+      return (
+        <div className="flex items-start gap-2">
+          <Input
+            value={record.fields.number}
+            onChange={(number) => onChange({ kind: "sms", fields: { ...record.fields, number } })}
+            placeholder="+15550100"
+            aria-label="SMS number"
+            disabled={disabled}
+            className="max-w-44"
+          />
+          <Input
+            value={record.fields.message}
+            onChange={(message) => onChange({ kind: "sms", fields: { ...record.fields, message } })}
+            placeholder="Message, optional"
+            aria-label="SMS message"
+            disabled={disabled}
+          />
+        </div>
+      );
+    case "location":
+      return (
+        <div className="flex items-start gap-2">
+          <Input
+            value={record.fields.latitude}
+            onChange={(latitude) =>
+              onChange({ kind: "location", fields: { ...record.fields, latitude } })
+            }
+            placeholder="Latitude, for example 51.5074"
+            aria-label="Latitude"
+            disabled={disabled}
+          />
+          <Input
+            value={record.fields.longitude}
+            onChange={(longitude) =>
+              onChange({ kind: "location", fields: { ...record.fields, longitude } })
+            }
+            placeholder="Longitude, for example -0.1278"
+            aria-label="Longitude"
+            disabled={disabled}
+          />
+        </div>
+      );
+    case "wifi":
+      return (
+        <div className="flex flex-col gap-2">
+          <div className="flex items-start gap-2">
+            <Input
+              value={record.fields.ssid}
+              onChange={(ssid) => onChange({ kind: "wifi", fields: { ...record.fields, ssid } })}
+              placeholder="Network name (SSID)"
+              aria-label="Wi-Fi SSID"
+              disabled={disabled}
+            />
+            <Input
+              value={record.fields.networkKey}
+              onChange={(networkKey) =>
+                onChange({ kind: "wifi", fields: { ...record.fields, networkKey } })
+              }
+              placeholder="Network key"
+              aria-label="Wi-Fi network key"
+              disabled={disabled}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Choice
+              label="Wi-Fi authentication"
+              value={record.fields.auth}
+              options={WIFI_AUTH_CHOICES}
+              onChange={(auth) =>
+                onChange({ kind: "wifi", fields: { ...record.fields, auth: auth as WifiAuth } })
+              }
+              disabled={disabled}
+            />
+            <Choice
+              label="Wi-Fi encryption"
+              value={record.fields.encryption}
+              options={WIFI_ENCRYPTION_CHOICES}
+              onChange={(encryption) =>
+                onChange({
+                  kind: "wifi",
+                  fields: { ...record.fields, encryption: encryption as WifiEncryption },
+                })
+              }
+              disabled={disabled}
+            />
+          </div>
+        </div>
+      );
+    case "bluetooth":
+      return (
+        <Input
+          value={record.fields.address}
+          onChange={(address) => onChange({ kind: "bluetooth", fields: { address } })}
+          placeholder="AA:BB:CC:DD:EE:FF"
+          aria-label="Bluetooth device address"
+          disabled={disabled}
+        />
+      );
+    case "mime":
+      return (
+        <div className="flex flex-col gap-2">
+          <Input
+            value={record.fields.type}
+            onChange={(type) => onChange({ kind: "mime", fields: { ...record.fields, type } })}
+            placeholder="text/plain"
+            aria-label="MIME type"
+            disabled={disabled}
+          />
+          <Input
+            value={record.fields.payloadHex}
+            onChange={(payloadHex) =>
+              onChange({ kind: "mime", fields: { ...record.fields, payloadHex } })
+            }
+            placeholder="Payload bytes as hex, for example 48656C6C6F"
+            aria-label="MIME payload as hex"
+            disabled={disabled}
+            className="font-mono"
+          />
+        </div>
+      );
+    case "external":
+      return (
+        <div className="flex flex-col gap-2">
+          <Input
+            value={record.fields.type}
+            onChange={(type) => onChange({ kind: "external", fields: { ...record.fields, type } })}
+            placeholder="example.com:door"
+            aria-label="External type"
+            disabled={disabled}
+          />
+          <Input
+            value={record.fields.payloadHex}
+            onChange={(payloadHex) =>
+              onChange({ kind: "external", fields: { ...record.fields, payloadHex } })
+            }
+            placeholder="Payload bytes as hex"
+            aria-label="External payload as hex"
+            disabled={disabled}
+            className="font-mono"
+          />
+        </div>
+      );
+    default:
+      return (
+        <p className="text-xs leading-relaxed text-err">
+          This build cannot edit this Record, so it is kept exactly as it is.
+        </p>
+      );
+  }
+}
+
+const WIFI_AUTH_CHOICES = [
+  { value: "wpa2-personal", label: "WPA2-Personal" },
+  { value: "wpa-personal", label: "WPA-Personal" },
+  { value: "open", label: "Open" },
+];
+
+const WIFI_ENCRYPTION_CHOICES = [
+  { value: "aes", label: "AES" },
+  { value: "tkip", label: "TKIP" },
+  { value: "none", label: "None" },
+];
+
+interface ChoiceProps {
+  label: string;
+  value: string;
+  options: readonly { value: string; label: string }[];
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  className?: string;
+}
+
+/** A native select, kept local because the Drafts page is its only user. */
+function Choice({ label, value, options, onChange, disabled, className = "" }: ChoiceProps) {
+  return (
+    <select
+      aria-label={label}
+      value={value}
+      disabled={disabled}
+      onChange={(event) => onChange(event.target.value)}
+      className={`${INPUT_ROUNDING} cursor-pointer border border-border bg-surface px-3 py-2 text-sm text-text transition-colors focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
+    >
+      {options.map((option) => (
+        <option key={option.value} value={option.value}>
+          {option.label}
+        </option>
+      ))}
+    </select>
   );
 }
