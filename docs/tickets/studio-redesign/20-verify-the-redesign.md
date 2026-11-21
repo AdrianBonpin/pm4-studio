@@ -13,12 +13,32 @@ Browser verification renders the interface with the device boundary stubbed, whi
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/30
 **Status:** ready
 
-- [ ] Screenshots at 980×760 and at the 900×700 minimum for: the shell with five destinations and a message in each of the four corners; each 125 kHz mode; each 13.56 MHz mode; Library in both collections with and without a selection; all four Settings groups; Tools.
-- [ ] No control wraps onto a second line at the minimum size, and the sweep covers the longest labels in the app.
+- [x] Screenshots at 980×760 and at the 900×700 minimum for: the shell with five destinations and a message in each of the four corners; each 125 kHz mode; each 13.56 MHz mode; Library in both collections with and without a selection; all four Settings groups; Tools. — `docs/superpowers/e2e/`, 52 images
+- [x] No control wraps onto a second line at the minimum size, and the sweep covers the longest labels in the app. — 0 of 372 controls over 25 states at 900×700; `docs/superpowers/e2e/06-long-label-sweep.md`
 - [ ] Hardware checklist: a 4-byte-UID MIFARE Classic 1K reads as itself with its full 4-byte UID; a 7-byte-UID NTAG reads its full UID with no raw fallback.
 - [ ] Hardware checklist: a Copy between two tags verifies, and a copy onto an oversize destination is refused before anything is written.
 - [ ] Hardware checklist: a never-written tag resets; the same tag reset again reports that it will not accept writes, with three chirps and the held LED.
 - [ ] Hardware checklist: a 125 kHz clone, a batch over several Blanks, and an authored Identity each report their own outcomes.
 - [ ] The four-symbol alphabet is confirmed distinguishable by ear, and the gap between chirps is recorded as the tuned value.
-- [ ] The device stub is provably absent from a release build.
-- [ ] Every finding is recorded. A failure becomes a follow-up ticket rather than being absorbed silently into this one.
+- [x] The device stub is provably absent from a release build. — `docs/superpowers/e2e/07-release-build-proof.md`: absent from `dist/`, and a production build that does include it refuses to render
+- [x] Every finding is recorded. A failure becomes a follow-up ticket rather than being absorbed silently into this one. — `docs/superpowers/e2e/08-findings.md`; four follow-up tickets in `docs/tickets/studio-redesign-followups/`
+
+## Report from this run
+
+The browser half is done and the hardware half is not.
+
+- **Ticked:** the screenshot pair for every named surface, the no-wrap sweep at the
+  minimum size, the stub's absence from a release build (with a fail-closed proof),
+  and the recording of every finding. Evidence under `docs/superpowers/e2e/`.
+- **Criteria 3–7 are NOT RUN.** There was no Reader and no tag in the environment
+  that produced this, so nothing about a tag, a write, a beep or an LED is claimed.
+  They are written out as a runbook — exact steps, the expected observation in both
+  channels, the expected symbol (1 chirp done / 2 needs-you / 3 attention with the
+  two-second LED), and what a failure would look like — at
+  `docs/superpowers/hardware-checklist-studio-redesign.md`. All seven items,
+  including the chirp-gap tuning, expect a person with hardware.
+- **Findings:** four follow-up tickets in `docs/tickets/studio-redesign-followups/`
+  (Diagnostics states two capabilities it does not have; Copy refuses an empty
+  destination; the Erase confirmation overflows the window; Reset is called "Blank"
+  in its own panel), plus three recorded observations and two stated limits of the
+  verification itself, in `docs/superpowers/e2e/08-findings.md`.
