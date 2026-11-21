@@ -21,7 +21,7 @@ const PROBLEM_TITLES: Record<LibraryProblem["kind"], string> = {
  * and the Drafts page both hold a view of the same library — so it is one
  * component rather than one copy per page, for the same reason
  * `MigrationWarning` is. It had already drifted: `LibraryPage` rendered the
- * warning icon and the store's `detail` while `DraftsPage` rendered neither, so
+ * warning icon and the store's `detail` while the Drafts page rendered neither, so
  * the same state of the same file was two different things to look at depending
  * on which page was opened.
  *

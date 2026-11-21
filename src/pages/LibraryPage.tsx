@@ -5,9 +5,12 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Segmented } from "../components/ui/Segmented";
 import { Section } from "../components/Section";
+import { HfSnapshotReview } from "../components/HfSnapshotReview";
+import { WriteDraftToTag } from "../components/WriteDraftToTag";
 import { LibraryProblemBanner } from "../components/LibraryProblemBanner";
 import { MigrationWarning } from "../components/MigrationWarning";
 import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
+import { snapshotRecords } from "../lib/hfSnapshot";
 import { describeDeviceFailure } from "../lib/readerIdentity";
 import {
   EMPTY_LIBRARY_DETAIL,
@@ -25,7 +28,7 @@ import {
   confirmedCopiesLabel,
   writeNotice,
 } from "../lib/writeOutcome";
-import { DraftsPage } from "./DraftsPage";
+import { DraftsCollection } from "./DraftsCollection";
 import type { LibraryState } from "../hooks/useLibrary";
 import type { Snapshot, SnapshotDraft, SnapshotOrder } from "../lib/library";
 import type { WriteResult } from "../types";
@@ -47,14 +50,14 @@ type Collection = "snapshots" | "drafts";
  * Library holds both Collections. Drafts is not a destination any more — the
  * sidebar is five destinations and Drafts is not one of them — so the second
  * Collection lives here, and this one switch is what keeps every saved Draft
- * reachable. Ticket 10 gives both Collections the list-beside-detail shape; this
- * slice gives it to Snapshots.
+ * reachable. Both Collections have the same list-beside-detail shape: the page
+ * has one shape, and a Collection is its contents rather than its layout.
  *
  * Snapshots is master-detail: the list is the left column, the open Snapshot is
  * the right one, and nothing that changes a Snapshot lives in the list. Choosing
  * another Snapshot swaps the pane and leaves the list exactly where it was, so
  * the page no longer reflows under the pointer and the list no longer carries a
- * row's editor inside it.
+ * row's editor inside it. Drafts is the same shape in `DraftsCollection`.
  */
 export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
   const [collection, setCollection] = useState<Collection>("snapshots");
@@ -107,14 +110,14 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
     setPicked(undefined);
   };
 
-  // Drafts, as it stands, inside the Collection it now belongs to. Ticket 10
-  // gives both Collections the list-beside-detail shape; until then this is the
-  // same editor it always was, reached from Library instead of from the sidebar.
+  // Drafts, the other Collection of this page. It owns its own list and its own
+  // selection, because a Draft's list is not a Snapshot's list and the two are
+  // never one collection of things.
   if (collection === "drafts") {
     return (
       <div className="flex flex-col gap-8">
         <CollectionSwitch value={collection} onChange={setCollection} />
-        <DraftsPage connected={connected} />
+        <DraftsCollection connected={connected} />
       </div>
     );
   }
@@ -368,23 +371,17 @@ function SnapshotDetail({
           </button>
         </div>
         <p className="text-xs leading-relaxed text-text-muted">{snapshotDetail(snapshot)}</p>
-        {snapshot.identity && (
-          <p className="text-xs text-text-muted" title={CONFIRMED_COPIES_HINT}>
-            <span className="border-b border-dotted border-text-muted/40">
-              {confirmedCopiesLabel(snapshot.writeCount)}
-            </span>
-          </p>
-        )}
-        {/* Records are a 13.56 MHz message's, so a 125 kHz Snapshot has no such
-            area. A 13.56 MHz one has it and states its absence: nothing is still
-            arriving from a library file that has already been read. Ticket 09
-            fills it when saving a read keeps the Records. */}
-        {snapshot.kind === "HF" && (
-          <div className="flex flex-col gap-1">
-            <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">Records</span>
-            <span className="text-sm text-text">none</span>
-          </div>
-        )}
+        {/* A confirmed copy is a copy whichever band it landed on: a 13.56 MHz
+            Snapshot's Records written to another Tag raise the same count. */}
+        <p className="text-xs text-text-muted" title={CONFIRMED_COPIES_HINT}>
+          <span className="border-b border-dotted border-text-muted/40">
+            {confirmedCopiesLabel(snapshot.writeCount)}
+          </span>
+        </p>
+        {/* Everything a 13.56 MHz read kept, reviewable here with no Reader.
+            A 125 kHz Snapshot has no such area, and this component renders
+            nothing for one. */}
+        <HfSnapshotReview snapshot={snapshot} />
       </div>
 
       {confirming ? (
@@ -474,12 +471,27 @@ function SnapshotDetail({
               </>
             ) : (
               <>
-                {/* Not hidden, stated: the app does not write a 13.56 MHz
-                    Snapshot back to a Tag yet, and says so rather than leaving a
-                    reader to wonder where the control went. */}
-                <p className="text-xs leading-relaxed text-text-muted">
-                  Writing a 13.56 MHz Snapshot back to a Tag is not supported by this build.
-                </p>
+                {/* Writing a Snapshot's Records is the same operation writing a
+                    Draft is — one NDEF message, one confirmation naming what it
+                    replaces, one read-back — so it is the same control. What
+                    differs is provenance: a verified write counts a confirmed
+                    copy on this Snapshot, and a write that is not verified counts
+                    nothing. */}
+                {(snapshotRecords(snapshot)?.length ?? 0) > 0 ? (
+                  <WriteDraftToTag
+                    records={snapshotRecords(snapshot) ?? []}
+                    connected={connected}
+                    snapshotId={snapshot.id}
+                    subject="Snapshot"
+                    onCountChanged={() => void reload()}
+                  />
+                ) : (
+                  <p className="text-xs leading-relaxed text-text-muted">
+                    {snapshotRecords(snapshot) === null
+                      ? "This Snapshot records no list of Records, so there is no message to write back. It is not an empty message: nothing was read."
+                      : "This Snapshot's Tag carried no Records, so there is no message to write back."}
+                  </p>
+                )}
                 <div>
                   <Button
                     variant="danger"

@@ -295,6 +295,15 @@ pub struct WriteResult {
     pub verified: bool,
     /// Why this write did not confirm a copy, when it did not.
     pub message: Option<String>,
+    /// Which of ADR 0001's two refusal conditions stopped the write, as
+    /// `"unreadable"` or `"already-carries"`. `None` for any attempt that was
+    /// transmitted, and for a failure that was never a refusal.
+    ///
+    /// This is the cause as a value rather than inside the prose above: the two
+    /// conditions have two different fixes, and a caller that had to pattern-match
+    /// a sentence to tell them apart would be one rewording away from presenting
+    /// them identically (`write_guard::RefusalCause`).
+    pub refusal_cause: Option<&'static str>,
     /// Confirmed copies of this Identity after the write, when a Snapshot in the
     /// library carries it. `None` means the library holds no such Snapshot.
     pub confirmed_copies: Option<u32>,
@@ -329,6 +338,32 @@ fn record_write_count(
     }
 }
 
+/// Apply one write outcome to the Snapshot a 13.56 MHz write came from.
+///
+/// The counting rule is `WriteOutcome::counts_as_confirmed_copy`'s, applied by
+/// the store, so this hands over the outcome it observed and nothing else. The
+/// Tag is written either way, so a library that cannot be written to is reported
+/// next to the write, never raised instead of it.
+fn record_snapshot_write_count(
+    app: &AppHandle,
+    id: &str,
+    outcome: write_outcome::WriteOutcome,
+) -> (WriteCountOutcome, Option<String>) {
+    let store = match library_store(app) {
+        Ok(store) => store,
+        Err(e) => return (WriteCountOutcome::NoSnapshot, Some(e)),
+    };
+    // Read, count and write as one step, so a count recorded now cannot replace
+    // a Draft or a Snapshot another part of the app saved a moment ago.
+    match store.update(|library| library.record_snapshot_write(id, outcome)) {
+        Ok((_, record)) => (record, None),
+        Err(SaveError::Refused(problem)) => {
+            (WriteCountOutcome::NoSnapshot, Some(problem.message()))
+        }
+        Err(e) => (WriteCountOutcome::NoSnapshot, Some(save_message(e))),
+    }
+}
+
 /// Write an Identity onto the 125 kHz tag currently on the reader.
 ///
 /// The Identity is validated before any device access, and the write itself is
@@ -349,11 +384,16 @@ fn lf_write(
     let identity = Identity::new(customer, data32).map_err(|e| e.to_string())?;
     let attempt = with_reader(&state, |r| Ok(r.lf_write_attempt(identity)))?;
 
-    let (evidence, message) = match &attempt {
-        LfWriteAttempt::Refused(why) => (Evidence::Refused, Some(why.clone())),
-        LfWriteAttempt::Failed(why) => (Evidence::NotTransmitted, Some(why.clone())),
+    let (evidence, message, refusal_cause) = match &attempt {
+        LfWriteAttempt::Refused { cause, message } => (
+            Evidence::Refused,
+            Some(message.clone()),
+            Some(cause.as_str()),
+        ),
+        LfWriteAttempt::Failed(why) => (Evidence::NotTransmitted, Some(why.clone()), None),
         LfWriteAttempt::Transmitted(card) => (
             Evidence::Readback(card.as_ref().map(LfCard::identity)),
+            None,
             None,
         ),
     };
@@ -380,6 +420,7 @@ fn lf_write(
         outcome: outcome.as_str(),
         verified: outcome.counts_as_confirmed_copy(),
         message,
+        refusal_cause,
         // A count that failed to persist is not reported as if it had.
         confirmed_copies: match count_problem {
             None => record.confirmed_copies(),
@@ -405,6 +446,10 @@ pub struct BatchAttemptView {
     pub outcome: &'static str,
     /// Why this attempt did not confirm a copy, when it did not.
     pub message: Option<String>,
+    /// Which of ADR 0001's two refusal conditions stopped the attempt, when one
+    /// did — `"unreadable"` or `"already-carries"`. A skip is the second one by
+    /// definition, and it is still never counted as a copy.
+    pub refusal_cause: Option<&'static str>,
     /// What the Tag read as for this attempt, when it read as anything.
     pub readback: Option<LfCard>,
     /// Confirmed copies of this Identity after the attempt, when a Snapshot in
@@ -449,6 +494,7 @@ fn lf_clone_attempt(
         data32,
         outcome: outcome.as_str(),
         message: verdict.message,
+        refusal_cause: verdict.refusal.map(|cause| cause.as_str()),
         readback: verdict.readback,
         confirmed_copies: match count_problem {
             None => record.confirmed_copies(),
@@ -549,7 +595,12 @@ impl From<NdefPreview> for NdefPreviewView {
     }
 }
 
-/// What one Draft write did, in the shape the webview reads it.
+/// What one write of a message to a 13.56 MHz Tag did, in the shape the webview
+/// reads it.
+///
+/// Writing a Draft and writing a Snapshot's Records produce this same value:
+/// they are one operation with different provenance, and both are counted by the
+/// same rule.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NdefWriteView {
@@ -567,6 +618,19 @@ pub struct NdefWriteView {
     pub wrote_pages: Vec<usize>,
     /// Pages the firmware reported writing.
     pub accepted_pages: Vec<usize>,
+    /// Confirmed copies of the Snapshot these Records came from, after the
+    /// write. `None` when the write named no Snapshot (a Draft), or when the
+    /// library holds none under that id. A Draft owns no count: it is attached
+    /// to no Tag, so there is nothing to be honest about.
+    pub confirmed_copies: Option<u32>,
+    /// True only when the count actually rose — one verified write of a
+    /// Snapshot's Records. False for a Draft, for a Snapshot the library does
+    /// not hold, and for every outcome that is not a confirmed copy, so a caller
+    /// reloads the list only when there is something new in it.
+    pub count_changed: bool,
+    /// Set when the count could not be written to the library file. The Tag was
+    /// written either way, so this never fails the write.
+    pub count_problem: Option<String>,
 }
 
 impl From<NdefWrite> for NdefWriteView {
@@ -580,6 +644,10 @@ impl From<NdefWrite> for NdefWriteView {
             required_bytes: write.required_bytes,
             wrote_pages: write.wrote_pages,
             accepted_pages: write.accepted_pages,
+            // Filled in by the command when the write named a Snapshot.
+            confirmed_copies: None,
+            count_changed: false,
+            count_problem: None,
         }
     }
 }
@@ -708,24 +776,48 @@ fn hf_ndef_preview(
     with_reader(&state, |r| Ok(ntag::preview(r, &message).into()))
 }
 
-/// Write a Draft's Records to the 13.56 MHz Tag on the Reader as one complete
-/// NDEF message, then read it back.
+/// Write a message to the 13.56 MHz Tag on the Reader as one complete NDEF
+/// message, then read it back.
 ///
-/// Nothing is sent for an empty Draft or a message the Tag cannot hold, and a
-/// Tag that cannot be read first is not written at all. The write itself is one
+/// The message is a Draft's Records or a Snapshot's, encoded by the webview's
+/// one NDEF codec — this command does not care which, because writing either is
+/// the same operation and goes through the same confirmation. `snapshot_id` is
+/// the difference: when the Records came from a Snapshot, it names the Snapshot
+/// so a confirmed copy can be counted against it. A Draft names none and has no
+/// count, because it is attached to no Tag.
+///
+/// Nothing is sent for an empty message or one the Tag cannot hold, and a Tag
+/// that cannot be read first is not written at all. The write itself is one
 /// 21-report frame carrying the Tag's whole image, with only the pages the
 /// message occupies marked for writing — so the UID, lock bytes and Capability
 /// Container cannot be touched (see `ntag::plan_write`).
 ///
 /// The outcome is the same vocabulary the 125 kHz path uses: only `verified`, a
-/// read-back that matches what was written, is a write that landed.
+/// read-back that matches what was written, is a write that landed — and only
+/// then does the Snapshot's confirmed-copy count rise.
 #[tauri::command]
 fn hf_ndef_write(
+    app: AppHandle,
     state: State<'_, AppState>,
     message_hex: String,
+    snapshot_id: Option<String>,
 ) -> Result<NdefWriteView, String> {
     let message = message_bytes(&message_hex)?;
-    with_reader(&state, |r| Ok(ntag::write_message(r, &message).into()))
+    let written = with_reader(&state, |r| Ok(ntag::write_message(r, &message)))?;
+    // The outcome is read before the value is turned into its view, because the
+    // counting rule is the enum's and not a wire string's.
+    let outcome = written.outcome;
+    let mut view = NdefWriteView::from(written);
+    if let Some(id) = snapshot_id.as_deref() {
+        let (record, problem) = record_snapshot_write_count(&app, id, outcome);
+        view.count_changed = problem.is_none() && record.incremented();
+        view.confirmed_copies = match problem {
+            None => record.confirmed_copies(),
+            Some(_) => None,
+        };
+        view.count_problem = problem;
+    }
+    Ok(view)
 }
 
 /// What can be determined about the password protection of the Tag on the
@@ -1324,6 +1416,42 @@ fn library_save_lf(
     }
 }
 
+/// Save a 13.56 MHz read as a Snapshot, keeping everything the read found.
+///
+/// The caller hands over the read's own fields — the UID, the raw reply, the
+/// ATQA and SAK, the family they resolved to, the capacity, the NDEF status and
+/// the Records in order — so this command adds no interpretation of its own. A
+/// read already in the library (the same UID) is reported as a duplicate instead
+/// of being stored twice, and a file this build must not write to is reported as
+/// refused rather than raised.
+#[tauri::command]
+fn library_save_hf(
+    app: AppHandle,
+    hf: library::HfFields,
+    captured_at: String,
+) -> Result<SaveResult, String> {
+    let store = library_store(&app)?;
+    match change_library(&store, |library| library.add_hf(hf, &captured_at))? {
+        Changed::Refused(problem) => Ok(SaveResult {
+            outcome: "refused",
+            library: refused_view(&store, problem),
+            snapshot: None,
+        }),
+        Changed::Done { library, result } => match result {
+            InsertOutcome::Duplicate(existing) => Ok(SaveResult {
+                outcome: "duplicate",
+                library: loaded_view(&store, library),
+                snapshot: Some(existing),
+            }),
+            InsertOutcome::Added(added) => Ok(SaveResult {
+                outcome: "added",
+                library: loaded_view(&store, library),
+                snapshot: Some(added),
+            }),
+        },
+    }
+}
+
 /// Rename one Snapshot. The name is user copy, so it is only trimmed.
 #[tauri::command]
 fn library_rename(app: AppHandle, id: String, name: String) -> Result<LibraryView, String> {
@@ -1703,6 +1831,7 @@ pub fn run() {
             send_cmd,
             library_load,
             library_save_lf,
+            library_save_hf,
             library_rename,
             library_edit,
             library_delete,
@@ -1720,4 +1849,83 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running PM4 Studio");
+}
+
+#[cfg(test)]
+mod wire_tests {
+    //! The two write views as the webview receives them.
+    //!
+    //! A refusal's cause travels as its own field rather than inside `message`,
+    //! so a test that only ever reads the prose would not notice the field being
+    //! renamed, dropped or defaulted to the wrong condition. These assertions are
+    //! about the wire shape, which is the contract the TypeScript side switches
+    //! on (`src/types.ts`).
+
+    use super::*;
+
+    fn write_result(outcome: &'static str, refusal_cause: Option<&'static str>) -> WriteResult {
+        WriteResult {
+            customer: 0x55,
+            data32: 0x0084_8212,
+            readback: None,
+            outcome,
+            verified: false,
+            message: Some("the guard said no".to_string()),
+            refusal_cause,
+            confirmed_copies: None,
+            count_problem: None,
+        }
+    }
+
+    fn attempt_view(
+        outcome: &'static str,
+        refusal_cause: Option<&'static str>,
+    ) -> BatchAttemptView {
+        BatchAttemptView {
+            customer: 0x55,
+            data32: 0x0084_8212,
+            outcome,
+            message: None,
+            refusal_cause,
+            readback: None,
+            confirmed_copies: None,
+            count_problem: None,
+        }
+    }
+
+    #[test]
+    fn a_write_refusal_carries_its_cause_beside_the_message() {
+        let json = serde_json::to_value(write_result("refused", Some("already-carries")))
+            .expect("a write result serialises");
+        assert_eq!(json["refusalCause"], "already-carries");
+        assert_eq!(json["outcome"], "refused");
+        assert_eq!(json["message"], "the guard said no");
+    }
+
+    #[test]
+    fn a_write_that_was_transmitted_carries_a_null_cause() {
+        let json = serde_json::to_value(write_result("unverified", None))
+            .expect("a write result serialises");
+        assert!(json["refusalCause"].is_null());
+    }
+
+    #[test]
+    fn a_batch_skip_carries_the_same_identity_cause_it_was_judged_by() {
+        // A skip is the guard's second condition, so it names it: the two
+        // conditions have different fixes and must not arrive looking alike.
+        let json =
+            serde_json::to_value(attempt_view("skipped", Some("already-carries")))
+                .expect("an attempt view serialises");
+        assert_eq!(json["refusalCause"], "already-carries");
+        assert_eq!(json["outcome"], "skipped");
+    }
+
+    #[test]
+    fn an_unreadable_attempt_names_the_other_condition() {
+        let json =
+            serde_json::to_value(attempt_view("refused", Some("unreadable")))
+                .expect("an attempt view serialises");
+        assert_eq!(json["refusalCause"], "unreadable");
+        assert_eq!(json["outcome"], "refused");
+    }
 }

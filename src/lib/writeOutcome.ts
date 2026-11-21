@@ -8,7 +8,7 @@
  * (`src-tauri/src/library.rs`), so the two cannot drift silently.
  */
 
-import type { WriteOutcome, WriteResult } from "../types";
+import type { RefusalCause, WriteOutcome, WriteResult } from "../types";
 
 /** Only a verified read-back is a confirmed copy; nothing else counts. */
 export function countsAsConfirmedCopy(outcome: WriteOutcome): boolean {
@@ -29,7 +29,7 @@ export function confirmedCopiesLabel(count: number): string {
 
 /** Shown wherever a count appears: what it takes for one to be added. */
 export const CONFIRMED_COPIES_HINT =
-  "A confirmed copy is a Tag whose read-back proved it carries this Identity. A refused, unverified, or failed write adds nothing to the count.";
+  "A confirmed copy is a Tag whose read-back proved it carries what was written — this Identity on 125 kHz, these Records on 13.56 MHz. A refused, unverified, or failed write adds nothing to the count.";
 
 export type NoticeTone = "ok" | "warn" | "err";
 
@@ -66,12 +66,13 @@ export function writeNotice(result: WriteResult): WriteNotice {
           countSentence(result, "verified"),
       };
     case "refused":
-      return {
-        tone: "err",
-        text:
-          `Not written: ${result.message ?? "the reader refused the write"}` +
-          countSentence(result, "refused"),
-      };
+      // A refusal is the guard stopping the write before anything was sent, and
+      // ADR 0001 gives it two conditions with two different fixes. They are
+      // worded — and toned — apart here, because a user told to "seat a tag that
+      // reads" when the real answer is "this is the original, swap it" is being
+      // sent to fix the wrong problem. The reason itself is the guard's own
+      // sentence, never a second copy of it.
+      return refusalNotice(result);
     case "unverified":
       return {
         tone: "warn",
@@ -117,3 +118,38 @@ export const NOTICE_TONE_CLASS: Record<NoticeTone, string> = {
   warn: "text-warn",
   err: "text-err",
 };
+
+/**
+ * The two conditions ADR 0001 can refuse on, as a sentence each.
+ *
+ * `null` is "a refusal whose cause nobody established" — an older reply, or a
+ * shape that should not exist. It keeps the unreadable wording's shape (an
+ * error, not a skip), because the fail-safe direction is to send the user to
+ * look at the Tag rather than to tell them nothing is wrong.
+ */
+function refusalNotice(result: WriteResult): WriteNotice {
+  const reason = result.message ?? "the reader refused the write";
+  const cause = refusalCauseOf(result);
+  if (cause === "already-carries") {
+    return {
+      tone: "warn",
+      text: `Skipped: ${reason}` + countSentence(result, "refused"),
+    };
+  }
+  return {
+    tone: "err",
+    text: `Not written: ${reason}` + countSentence(result, "refused"),
+  };
+}
+
+/**
+ * Which of the guard's two conditions stopped this write, or `null`.
+ *
+ * Only a refused write can carry a cause; anything that was transmitted reports
+ * `null` whatever field a caller passes, so a transmitted write can never be
+ * reclassified into a refusal by a stray value.
+ */
+export function refusalCauseOf(result: WriteResult): RefusalCause | null {
+  if (result.outcome !== "refused") return null;
+  return result.refusalCause ?? null;
+}

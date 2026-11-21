@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import type { UserEvent } from "@testing-library/user-event";
-import { DraftsPage } from "./DraftsPage";
+import { DraftsCollection } from "./DraftsCollection";
 import { DraftsProvider, useDraftsState } from "../components/DraftsProvider";
 import { fakeBackend, renderUi, type Backend } from "../test/dom";
 import type { Draft, DraftsView } from "../lib/drafts";
@@ -11,8 +11,8 @@ import type { Draft, DraftsView } from "../lib/drafts";
  * Reading the Drafts list while an edit is on its way to the file.
  *
  * `reload` is the one read the app makes: at launch, and again when the Drafts
- * section is opened, because the list can change elsewhere — an import adds
- * Drafts — and the page must be fresh when the user gets there. A read is not
+ * Collection is opened, because the list can change elsewhere — an import adds
+ * Drafts — and the Collection must be fresh when the user gets there. A read is not
  * atomic with the writes around it, though, and the failure that matters is
  * visible rather than theoretical: an edit is queued, a write is out, a read is
  * asked for, the write lands and clears the queue, and the read's reply — bytes
@@ -105,8 +105,8 @@ function draftsStore(): DraftsStore {
 /**
  * The page, plus the one control the app offers no user-facing copy of.
  *
- * `reload` is the hook's own read — the page calls it on mount and after a failed
- * delete — so a button that calls it drives exactly the code the app runs. It
+ * `reload` is the hook's own read — the Collection calls it on mount and after a
+ * failed delete — so a button that calls it drives exactly the code the app runs. It
  * exists because the hazard needs a read to be asked for while a write is out,
  * and that is a moment no click in the interface can otherwise produce on demand.
  */
@@ -115,7 +115,7 @@ function DraftsWithRefresh() {
   return (
     <>
       <button onClick={() => void drafts.reload()}>Refresh</button>
-      <DraftsPage connected={false} />
+      <DraftsCollection connected={false} />
     </>
   );
 }
@@ -128,9 +128,17 @@ function renderDrafts(): ReturnType<typeof renderUi> {
   );
 }
 
-/** Open the only Draft on the page, so its Records are on screen. */
+/**
+ * Open the only Draft in the Collection, so its Records are on screen.
+ *
+ * The first Draft opens on arrival, and clicking the open row closes the pane
+ * again — the same toggle the Snapshot list has — so this clicks only when the
+ * editor is not already showing.
+ */
 async function openDraft(user: UserEvent): Promise<HTMLInputElement> {
-  await user.click(await screen.findByRole("button", { name: "Edit" }));
+  const list = await screen.findByRole("list", { name: "Drafts" });
+  const row = within(list).getByRole("button", { name: /^Loading bay sign —/ });
+  if (row.getAttribute("aria-pressed") !== "true") await user.click(row);
   return screen.findByLabelText<HTMLInputElement>("Text");
 }
 

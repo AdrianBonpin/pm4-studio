@@ -3,7 +3,7 @@ import { useState } from "react";
 import { describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import type { UserEvent } from "@testing-library/user-event";
-import { DraftsPage } from "./DraftsPage";
+import { DraftsCollection } from "./DraftsCollection";
 import { DraftsProvider } from "../components/DraftsProvider";
 import { fakeBackend, renderUi, type Backend, type CommandAnswer, type Ui } from "../test/dom";
 import type { Draft, DraftsView } from "../lib/drafts";
@@ -21,10 +21,11 @@ import type { Draft, DraftsView } from "../lib/drafts";
  * The guard is the app's, not the page's: `DraftsProvider` mounts the queue and
  * registers the one close listener for as long as the app is open, so the second
  * half of story 57 — "type, navigate somewhere else, then quit" — is proven at
- * the end of this file by a harness that unmounts the page the way the sidebar
- * does. The queue has one definition of "pending" for the same reason: an edit
- * that failed to save is retried by whichever exit comes next, whether that is
- * leaving the page or closing the window.
+ * the end of this file by a harness that unmounts the Drafts Collection the way
+ * leaving Library's Drafts switch does. The queue has one definition of
+ * "pending" for the same reason: an edit that failed to save is retried by
+ * whichever exit comes next, whether that is leaving the Collection or closing
+ * the window.
  *
  * The close path is driven the way Rust drives it. `onCloseRequested` registers
  * through `plugin:event|listen`, and this file hands the registered handler the
@@ -47,14 +48,14 @@ const DRAFT: Draft = {
 };
 
 /**
- * The page as the app mounts it: inside the provider that owns the queue and the
- * window-close guard. `DraftsPage` no longer holds either, which is the point —
- * see `TwoPages` at the end of this file.
+ * The Collection as the app mounts it: inside the provider that owns the queue
+ * and the window-close guard. No page holds either, which is the point — see
+ * `TwoPages` at the end of this file.
  */
-function renderDraftsPage(): Ui {
+function renderCollection(): Ui {
   return renderUi(
     <DraftsProvider>
-      <DraftsPage connected={false} />
+      <DraftsCollection connected={false} />
     </DraftsProvider>,
   );
 }
@@ -138,9 +139,17 @@ async function requestClose(backend: Backend): Promise<void> {
   await (await closeHandler(backend))(CLOSE_EVENT);
 }
 
-/** Open the only Draft on the page, so its Records are on screen. */
+/**
+ * Open the only Draft in the Collection, so its Records are on screen.
+ *
+ * The first Draft opens on arrival, and clicking the open row closes the pane
+ * again — the same toggle the Snapshot list has — so this clicks only when the
+ * editor is not already showing.
+ */
 async function openDraft(user: UserEvent): Promise<HTMLInputElement> {
-  await user.click(await screen.findByRole("button", { name: "Edit" }));
+  const list = await screen.findByRole("list", { name: "Drafts" });
+  const row = within(list).getByRole("button", { name: /^Loading bay sign —/ });
+  if (row.getAttribute("aria-pressed") !== "true") await user.click(row);
   return screen.findByLabelText<HTMLInputElement>("Text");
 }
 
@@ -162,7 +171,7 @@ async function drainMicrotasks(): Promise<void> {
 describe("quitting with a Draft edit still queued", () => {
   it("writes the edit before the window goes, and it reads back on the next launch", async () => {
     const store = draftsStore();
-    const first = renderDraftsPage();
+    const first = renderCollection();
     const text = await openDraft(first.user);
 
     // Typed and quit at once: the 350 ms quiet period has not elapsed, so the
@@ -176,14 +185,14 @@ describe("quitting with a Draft edit still queued", () => {
 
     // Relaunch: a new page, reading what the write left behind.
     first.unmount();
-    const second = renderDraftsPage();
+    const second = renderCollection();
     const reread = await openDraft(second.user);
     expect(reread.value).toBe("Loading bay");
   });
 
   it("waits for a write already on its way, then writes the newest Draft last", async () => {
     const store = draftsStore();
-    const { user } = renderDraftsPage();
+    const { user } = renderCollection();
     const text = await openDraft(user);
 
     // Let the first write leave the interface and stop it in flight there.
@@ -213,7 +222,7 @@ describe("quitting with a Draft edit still queued", () => {
 
   it("does not count a write that a newer edit overtook as having saved it", async () => {
     const store = draftsStore();
-    const { user } = renderDraftsPage();
+    const { user } = renderCollection();
     const text = await openDraft(user);
 
     // A write leaves for the store with "one" in it, and a newer edit arrives
@@ -239,8 +248,8 @@ describe("quitting with a Draft edit still queued", () => {
 
   it("closes an idle window without waiting and without writing anything", async () => {
     const store = draftsStore();
-    renderDraftsPage();
-    await screen.findByRole("button", { name: "Edit" });
+    renderCollection();
+    await screen.findByRole("list", { name: "Drafts" });
     const handler = await closeHandler(store.backend);
 
     let closed = false;
@@ -262,7 +271,7 @@ describe("quitting with a Draft edit still queued", () => {
 
   it("still writes a queued edit when the Drafts page is left, before the quiet period", async () => {
     const store = draftsStore();
-    const { user, unmount } = renderDraftsPage();
+    const { user, unmount } = renderCollection();
     const text = await openDraft(user);
 
     await user.type(text, "Canteen");
@@ -280,7 +289,7 @@ describe("quitting when the final save fails", () => {
         throw new Error("the library file could not be written");
       },
     });
-    const { user } = renderDraftsPage();
+    const { user } = renderCollection();
     const text = await openDraft(user);
 
     await user.type(text, "Loading bay");
@@ -307,7 +316,7 @@ describe("quitting when the final save fails", () => {
         throw new Error("the library file could not be written");
       },
     });
-    const { user } = renderDraftsPage();
+    const { user } = renderCollection();
     const text = await openDraft(user);
 
     await user.type(text, "Loading bay");
@@ -331,7 +340,7 @@ describe("quitting when the final save fails", () => {
         problem: { kind: "corrupt", message: "The library file could not be read" },
       }),
     });
-    const { user } = renderDraftsPage();
+    const { user } = renderCollection();
     const text = await openDraft(user);
 
     await user.type(text, "Loading bay");
@@ -362,21 +371,23 @@ function savedTexts(backend: Backend): (string | null)[] {
 }
 
 /**
- * Two pages, one at a time, inside the provider: the app's own shape, one page
- * mounted with the queue and the close guard above both.
+ * Two pages, one at a time, inside the provider: the app's own shape, with the
+ * queue and the close guard above both.
  *
  * The guard belongs to the app, not to the page. Story 57 promises that quitting
- * never costs the last edit, and a guard mounted by the Drafts page keeps that
- * promise only while the Drafts page is the page on screen: type, navigate
- * elsewhere, and the unmount flush is fire-and-forget while the close listener
- * went with the page. Navigating away here is the same act it is in the sidebar.
+ * never costs the last edit, and a guard mounted by the Drafts Collection keeps
+ * that promise only while Drafts is the Collection on screen: type, switch to
+ * another destination, and the unmount flush is fire-and-forget while the close
+ * listener went with the page. Navigating away here is the same act it is in the
+ * sidebar — and switching Library's Collection is the same act again, because
+ * the Drafts Collection unmounts either way.
  */
 function TwoPages() {
   const [page, setPage] = useState<"drafts" | "elsewhere">("drafts");
   return (
     <DraftsProvider>
       <button onClick={() => setPage("elsewhere")}>Go to Tools</button>
-      {page === "drafts" ? <DraftsPage connected={false} /> : <p>Tools</p>}
+      {page === "drafts" ? <DraftsCollection connected={false} /> : <p>Tools</p>}
     </DraftsProvider>
   );
 }
@@ -385,10 +396,10 @@ describe("quitting after leaving the Drafts page", () => {
   it("still has a close guard once the page is gone", async () => {
     const store = draftsStore();
     const { user } = renderUi(<TwoPages />);
-    await screen.findByRole("button", { name: "Edit" });
+    await screen.findByRole("list", { name: "Drafts" });
 
     await user.click(screen.getByRole("button", { name: "Go to Tools" }));
-    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Drafts" })).toBeNull();
 
     // Nothing unregistered the guard: it was never the page's to unregister.
     expect(store.backend.callsTo("plugin:event|unlisten")).toHaveLength(0);
@@ -411,7 +422,7 @@ describe("quitting after leaving the Drafts page", () => {
   it("closes the window as usual when nothing is queued", async () => {
     const store = draftsStore();
     const { user } = renderUi(<TwoPages />);
-    await screen.findByRole("button", { name: "Edit" });
+    await screen.findByRole("list", { name: "Drafts" });
     await user.click(screen.getByRole("button", { name: "Go to Tools" }));
 
     await requestClose(store.backend);
