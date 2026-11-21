@@ -17,6 +17,10 @@ import type { DeviceInfo } from "./types";
  *
  * The message must not be part of the page flow: `main` is asserted to know
  * nothing about it.
+ *
+ * The last describe is the shell's other half of a band page: the mode a user
+ * chose is held here, because the page itself unmounts when they visit another
+ * destination.
  */
 
 const READER: DeviceInfo = {
@@ -147,5 +151,31 @@ describe("a condition that stays true", () => {
     });
     expect(main?.textContent).toContain("This library was upgraded from an older version");
     expect(screen.queryByRole("status")).toBeNull();
+  });
+});
+
+describe("a band page's mode", () => {
+  it("is remembered while the app is open, because the shell holds it", async () => {
+    fakeBackend({
+      ...quietAnswers(),
+      connect: () => READER,
+      firmware_version: () => "H00S07",
+    });
+    const { user } = renderUi(<App />);
+
+    await user.click(screen.getByRole("button", { name: "13.56 MHz" }));
+    const modes = () => screen.getByRole("group", { name: "13.56 MHz mode" });
+    await user.click(within(modes()).getByRole("button", { name: "Memory" }));
+    expect(screen.getByText("Memory dump")).toBeTruthy();
+
+    // Leaving the destination unmounts the page. Coming back returns to the mode
+    // the user left, rather than to Read every time.
+    await user.click(screen.getByRole("button", { name: "Library" }));
+    await user.click(screen.getByRole("button", { name: "13.56 MHz" }));
+
+    expect(
+      within(modes()).getByRole("button", { name: "Memory" }).getAttribute("aria-pressed"),
+    ).toBe("true");
+    expect(screen.getByText("Memory dump")).toBeTruthy();
   });
 });

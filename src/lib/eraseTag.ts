@@ -85,7 +85,7 @@ export const ERASE_IS_NOT_READ_ONLY =
   "Erasing does not make this tag read-only. Locking a tag so it refuses further writes is not possible with this Reader, and clearing content gives no protection: the tag can be written again immediately.";
 
 export const ERASE_IS_NOT_PASSWORD_REMOVAL =
-  "Erasing does not remove password protection. It neither sets nor clears a password, and a tag whose password is unknown stays unrecoverable. Password set and remove is a separate operation.";
+  "Erasing does not remove password protection: it neither sets nor clears a password, and a tag whose password is unknown stays unrecoverable.";
 
 /** The confirmation, ready to render. */
 export interface EraseConfirmation {

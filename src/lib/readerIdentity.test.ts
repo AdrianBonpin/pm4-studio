@@ -138,6 +138,9 @@ describe("READER_CAPABILITY_LIMITS", () => {
     expect(text).toContain("ndef");
     expect(text).toContain("mifare classic");
     expect(text).toContain("apdu");
+    // Ticket 14 removed the password panel from 13.56 MHz; the capability is
+    // recorded here instead, once, with the rest of the limits.
+    expect(text).toContain("password");
   });
 
   it("never calls a Tag a badge or a fob", () => {

@@ -32,6 +32,13 @@ interface PasswordProtectionProps {
  * Password protection: set and remove, both refused, and the reason stated
  * plainly rather than left as a disabled button.
  *
+ * **Not rendered by any page.** Ticket 14 removed this panel from 13.56 MHz: it
+ * was half a screen of explanation in front of two controls that can never work
+ * on this Reader, and the one fact worth keeping is recorded with the other
+ * capability limits in Settings → Diagnostics. The component and its Rust side
+ * are kept because the operations exist in the protocol, and a page that asked
+ * for them again would find the refusal honest rather than new.
+ *
  * The shape of this panel is the point of the ticket. There is a warning that a
  * lost password makes the Tag permanently unrecoverable; there is an
  * acknowledgement that has to be given before either operation can even be
