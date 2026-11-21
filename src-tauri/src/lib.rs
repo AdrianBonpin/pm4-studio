@@ -107,6 +107,11 @@ fn beep(state: State<'_, AppState>) -> Result<(), String> {
     with_reader(&state, |r| r.beep())
 }
 
+#[tauri::command]
+fn led_off(state: State<'_, AppState>) -> Result<(), String> {
+    with_reader(&state, |r| r.led_off())
+}
+
 #[derive(Serialize)]
 pub struct WriteResult {
     pub customer: u8,
@@ -206,6 +211,7 @@ pub fn run() {
             lf_poll,
             hf_poll,
             beep,
+            led_off,
             lf_write,
             raw_send,
             send_cmd

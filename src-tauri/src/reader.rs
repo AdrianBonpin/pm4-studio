@@ -31,7 +31,13 @@ pub const MAGIC: u8 = 0x55;
 
 // ---- command ids ------------------------------------------------------
 pub const CMD_WAKE: u16 = 0x0051;
-pub const CMD_BEEP: u16 = 0x0055;
+/// Beeper. Confirmed on hardware: chirps once, and as a side effect drives the
+/// LED off -> on. Fire-and-forget (no reply is sent), so silence after sending
+/// is not a failure.
+pub const CMD_BEEP: u16 = 0x0053;
+/// LED off. Confirmed on hardware. This is NOT a beep: an earlier build had
+/// 0x0055 wired to the beeper, which is why the beep never fired.
+pub const CMD_LED_OFF: u16 = 0x0055;
 pub const CMD_HF_POLL: u16 = 0x0069;
 pub const CMD_LF_READ: u16 = 0x0072;
 /// LF write. Discovered by probing; see docs/PROTOCOL.md.
@@ -222,14 +228,20 @@ impl Reader {
         Ok(())
     }
 
-    /// Beeper. Fire-and-forget: the firmware does NOT acknowledge 0x0055, but
-    /// it audibly chirps. Verified on hardware. Only one frame is sent and no
-    /// reply is awaited, which is why a missing ack must not be treated as a
-    /// failure.
+    /// Beeper. Fire-and-forget: the firmware does NOT acknowledge 0x0053, but it
+    /// audibly chirps. Only one frame is sent and no reply is awaited, which is
+    /// why a missing ack must not be treated as a failure.
     pub fn beep(&self) -> Result<(), String> {
         // Drop queued frames first so a stale reply is never mistaken for an ack.
         self.drain();
         self.write_raw(&make_frame(CMD_BEEP, &[]))?;
+        Ok(())
+    }
+
+    /// Turn the status LED off.
+    pub fn led_off(&self) -> Result<(), String> {
+        self.drain();
+        self.write_raw(&make_frame(CMD_LED_OFF, &[]))?;
         Ok(())
     }
 

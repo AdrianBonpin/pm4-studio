@@ -103,16 +103,28 @@ IN   55 00 51 00 01 01 FE 01
 OUT  55 00 55 00 00 FF 00
 ```
 
-### `0x0055` — beep
+### `0x0053` — beep (and LED on)
 
-Fire-and-forget. The buzzer sounds but the firmware sends **no reply**, so a
-missing acknowledgement is not a failure — do not wait for one, and do not treat
-silence as "unsupported" (a trap worth recording: an earlier build did exactly
-that and wrongly reported the command as unimplemented).
+Confirmed on hardware: chirps once and drives the LED **off → on** as a side
+effect. Fire-and-forget — the firmware sends **no reply**, so do not wait for one
+and do not read silence as "unsupported".
+
+```
+OUT  55 00 53 00 00 FF 00
+```
+
+An earlier build of this app had `0x0055` wired to the beeper, so the beep never
+fired and only the LED reacted.
+
+### `0x0055` — LED off
+
+Confirmed on hardware. Turns the status LED off. **Not a beep.**
 
 ```
 OUT  55 00 55 00 00 FF 00
 ```
+
+No LED-on-only command has been found; `0x0053` lights it but always beeps too.
 
 ### `0x0069` — 13.56 MHz poll (ISO14443-A)
 
