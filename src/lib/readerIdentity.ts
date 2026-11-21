@@ -48,6 +48,12 @@ export const READER_CAPABILITY_LIMITS: readonly CapabilityLimit[] = [
       "Not available. Without a transparent APDU channel there is no Signature, authenticated NFC counter, or password-protection status.",
   },
   {
+    id: "password",
+    label: "Password protection",
+    detail:
+      "Not available on a 13.56 MHz Tag. Setting or clearing a password needs authentication this Reader has no command for, so a password cannot be set here and one set by another device cannot be cleared. The operation is absent from the interface rather than offered and refused.",
+  },
+  {
     id: "uid-width",
     label: "7- and 10-byte UIDs",
     detail:

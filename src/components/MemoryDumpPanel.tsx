@@ -15,15 +15,16 @@ interface MemoryDumpPanelProps {
   connected: boolean;
   /**
    * The last completed read on this page, or null. Owned by the page rather than
-   * by this panel because the reading above it uses what the read settled about
-   * NDEF formatting — one read, one set of facts, two views.
+   * by this panel because the Read mode uses what the read settled about NDEF
+   * formatting — one read, one set of facts, two views, and the Memory mode
+   * shows the bytes of the reading Read took.
    */
   read: TagRecordsRead | null;
   /**
    * A completed read, or `null` when a read failed. `null` deliberately throws
    * the previous read away: a stale dump under this tag's heading, and a stale
-   * NDEF status on the reading above, would both be claims about a tag nobody
-   * just read.
+   * NDEF status on the Read mode's reading, would both be claims about a tag
+   * nobody just read.
    */
   onRead: (read: TagRecordsRead | null) => void;
 }
@@ -42,8 +43,7 @@ interface MemoryDumpPanelProps {
  * The command it sends is `ntag_records_read`, which returns the same dump plus
  * what the Tag's Type 2 structure turned out to be. One exchange therefore
  * answers two questions — "what are these bytes" and "is this Tag NDEF
- * formatted" — and the reading above this panel can show the second without a
- * second read.
+ * formatted" — and the Read mode can show the second without a second read.
  */
 export function MemoryDumpPanel({ connected, read, onRead }: MemoryDumpPanelProps) {
   const [busy, setBusy] = useState(false);
@@ -120,7 +120,7 @@ export function MemoryDumpPanel({ connected, read, onRead }: MemoryDumpPanelProp
         error === null && (
           <p className="max-w-prose text-sm leading-relaxed text-text-muted">
             {connected
-              ? "No memory read yet. Put a 13.56 MHz tag on the Reader and read it: this is the record for a tag the decoder above does not recognise."
+              ? "No memory read yet. Put a 13.56 MHz tag on the Reader and read its memory: the offsets and bytes are the record for a tag this build cannot decode."
               : "Connect the Reader to read a tag's memory."}
           </p>
         )

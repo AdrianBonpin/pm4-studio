@@ -2,11 +2,13 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { EraseNdef } from "../components/EraseNdef";
 import { MemoryDumpPanel } from "../components/MemoryDumpPanel";
-import { PasswordProtection } from "../components/PasswordProtection";
+import { WriteDraftMode } from "../components/WriteDraftMode";
 import { Badge, type BadgeTone } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
+import { Segmented } from "../components/ui/Segmented";
 import { Field, Readout, Section } from "../components/Section";
 import { variantsNote } from "../lib/cardType";
+import { HF_MODES, type HfMode } from "../lib/hfWorkspace";
 import {
   decodeHfPayload,
   hexBytes,
@@ -30,6 +32,13 @@ import type { HfCard } from "../types";
 interface HfPageProps {
   connected: boolean;
   onPoll: () => Promise<HfCard | null>;
+  /**
+   * The mode on show, held by the shell so that leaving the page for another
+   * destination and coming back returns to the mode the user left. The page is a
+   * leaf: it owns the reading, not the navigation.
+   */
+  mode: HfMode;
+  onModeChange: (mode: HfMode) => void;
 }
 
 /** Short label per fallback reason. The sentence under it says what happened. */
@@ -254,7 +263,21 @@ function HfReadout({ read }: { read: HfRead }) {
 }
 
 /**
- * The 13.56 MHz page.
+ * The 13.56 MHz page: a workspace of modes, one visible at a time.
+ *
+ * The operations come before troubleshooting. Read, Write, Erase and Memory are
+ * one click each, in the order the work is done (`lib/hfWorkspace.ts` owns that
+ * order, and the slot Copy will take), so nothing is reached by scrolling past
+ * something else. The page keeps the reading, not the mode: a read taken in Read
+ * is the same reading the Memory mode shows the bytes of, and switching modes to
+ * look at it does not throw it away.
+ *
+ * Two things are deliberately absent. The password panel is gone — half a screen
+ * of explanation in front of two controls that can never work on this Reader —
+ * and the one password fact that matters is recorded with the capability limits
+ * in Settings → Diagnostics. No capability limit is repeated here either: the
+ * limits are stated once, in the place that answers "why can this Reader not do
+ * that".
  *
  * Read is **one action**: it polls the field and, when the poll produced a Tag
  * whose family can carry a message, reads that message in the same operation.
@@ -263,12 +286,12 @@ function HfReadout({ read }: { read: HfRead }) {
  * (`lib/hfRead.ts` owns that decision). Exactly one outcome is reported for the
  * whole action, so the sound and the message cannot disagree.
  */
-export function HfPage({ connected, onPoll }: HfPageProps) {
+export function HfPage({ connected, onPoll, mode, onModeChange }: HfPageProps) {
   const [busy, setBusy] = useState(false);
   const [read, setRead] = useState<HfRead | null>(null);
   const [polled, setPolled] = useState(false);
-  /** The memory dump shown below, which a standalone read can refresh without
-   *  rewriting the reading above it. */
+  /** The memory dump the Memory mode shows: the read's own dump, or one taken
+   *  there, without rewriting the reading on the Read mode. */
   const [dumpRead, setDumpRead] = useState<TagRecordsRead | null>(null);
 
   const readTag = async () => {
@@ -318,27 +341,41 @@ export function HfPage({ connected, onPoll }: HfPageProps) {
 
   return (
     <div className="flex flex-col gap-8">
-      <Section
-        title="Read a tag"
-        hint="13.56 MHz ISO14443-A. One action: poll the Tag, then read its NDEF message."
-        actions={
-          <Button variant="primary" disabled={!connected || busy} onClick={() => void readTag()}>
-            {busy ? "Reading…" : "Read tag"}
-          </Button>
-        }
-      >
-        {read === null ? (
-          <Readout placeholder={polled ? "No tag in the field." : "No tag read yet."} />
-        ) : (
-          <HfReadout read={read} />
-        )}
-      </Section>
+      <Segmented
+        label="13.56 MHz mode"
+        value={mode}
+        options={HF_MODES.map((option) => ({ value: option.id, label: option.label }))}
+        onChange={onModeChange}
+      />
 
-      <MemoryDumpPanel connected={connected} read={dumpRead} onRead={setDumpRead} />
+      {mode === "read" && (
+        <Section
+          title="Read a tag"
+          hint="13.56 MHz ISO14443-A. One action: poll the Tag, then read its NDEF message."
+          actions={
+            <Button variant="primary" disabled={!connected || busy} onClick={() => void readTag()}>
+              {busy ? "Reading…" : "Read tag"}
+            </Button>
+          }
+        >
+          {read === null ? (
+            <Readout placeholder={polled ? "No tag in the field." : "No tag read yet."} />
+          ) : (
+            <HfReadout read={read} />
+          )}
+        </Section>
+      )}
 
-      <PasswordProtection connected={connected} />
+      {mode === "write" && <WriteDraftMode connected={connected} />}
 
-      <EraseNdef connected={connected} />
+      {/* Copy's panel arrives here in ticket 15, between Write and Erase: the
+          switch already holds the slot, so nothing else about the page moves. */}
+
+      {mode === "erase" && <EraseNdef connected={connected} />}
+
+      {mode === "memory" && (
+        <MemoryDumpPanel connected={connected} read={dumpRead} onRead={setDumpRead} />
+      )}
     </div>
   );
 }
