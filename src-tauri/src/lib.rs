@@ -5,6 +5,7 @@ pub mod library;
 pub mod library_io;
 pub mod library_migration;
 pub mod reader;
+pub mod stream;
 pub mod write_guard;
 pub mod write_outcome;
 #[cfg(test)]
