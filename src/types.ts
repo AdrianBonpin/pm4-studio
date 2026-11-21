@@ -33,8 +33,19 @@ export type HfCard = {
  *
  * `blanked` belongs to the blanking path: the write was sent with the neutral
  * Identity and the re-read found no Identity at all. It is a destruction, never
- * a copy, and it must not be worded as "verified". */
-export type WriteOutcome = "refused" | "verified" | "blanked" | "unverified" | "failed";
+ * a copy, and it must not be worded as "verified".
+ *
+ * `erased` belongs to the NDEF erase path: the write was sent and the read-back
+ * showed a present tag with a valid empty NDEF message. The tag keeps its UID,
+ * its Capability Container and its format; only the content is gone. Like
+ * `blanked` it is never a copy and never "verified". */
+export type WriteOutcome =
+  | "refused"
+  | "verified"
+  | "blanked"
+  | "erased"
+  | "unverified"
+  | "failed";
 
 export type WriteResult = {
   customer: number;
@@ -121,6 +132,55 @@ export type BatchAttemptResult = {
   confirmedCopies: number | null;
   /** Set when the count could not be written to the library file. */
   countProblem: string | null;
+};
+
+/** One 13.56 MHz Tag as the backend read it, with its NDEF content as far as the
+ *  Type 2 TLV could be read. Shared by the write and erase results. */
+export type NdefTagSnapshot = {
+  /** Space-separated hex, as every other UID in this app is written. */
+  uid: string;
+  /** What `0x0083` reported. Not the write-path tag selector. */
+  reportedTagType: number;
+  /** User memory from the Type 2 Capability Container, or null when unreadable. */
+  capacityBytes: number | null;
+  userPages: number | null;
+  existing: {
+    state: "empty" | "message" | "unreadable";
+    /** The NDEF message itself, hex. Decoded by the webview, not by Rust. */
+    messageHex: string | null;
+    bytes: number;
+    reason: string | null;
+  };
+};
+
+/** What became of one NDEF erase.
+ *
+ * `erased` means the read-back showed a present tag with a valid empty NDEF
+ * message and an unchanged UID and Capability Container — the expected result,
+ * and never a "verified" copy. `failed` means the erase was sent and the tag
+ * still reads its content (or its container changed), which is a definite
+ * failure on a tag that is still readable; `unverified` means the erase was sent
+ * and the tag could not be read back at all. */
+export type EraseResult = {
+  /** See `src/lib/eraseTag.ts` for the wording of each outcome. */
+  outcome: "refused" | "erased" | "unverified" | "failed";
+  /** Why the content was not cleared, when it was not. */
+  message: string | null;
+  /** What the tag held before the erase, from the read that precedes it. */
+  before: NdefTagSnapshot | null;
+  /** What it read back as afterwards, when it could be re-read. */
+  after: NdefTagSnapshot | null;
+  capacityBytes: number | null;
+  /** Bytes of the old NDEF message the erase cleared. */
+  clearedBytes: number;
+  /** Pages the request asked the firmware to write. */
+  erasePages: number[];
+  /** Pages the firmware reported writing. */
+  acceptedPages: number[];
+  /** UID and Capability Container read identically before and after. */
+  identityIntact: boolean | null;
+  /** The bytes written over the message area, hex. */
+  writtenHex: string;
 };
 
 export type RawResponse = {

@@ -262,6 +262,16 @@ export function authorWriteNotice(result: WriteResult, targetId: string): WriteN
           "Unexpected outcome: this write reported a blanked tag, which authoring cannot do. " +
           "Nothing here counts it as written.",
       };
+    case "erased":
+      // Erasing NDEF content is its own operation with its own notice; see
+      // `lib/eraseTag.ts`. An authoring write places an Identity, so this
+      // cannot happen either, and naming it keeps it from being worded as one.
+      return {
+        tone: "warn",
+        text:
+          "Unexpected outcome: this write reported an erased tag, which authoring cannot do. " +
+          "Erasing NDEF content has its own notice; nothing here counts it as written.",
+      };
   }
 }
 

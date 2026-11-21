@@ -1,6 +1,6 @@
 //! What became of one attempted write, and which outcomes are copies.
 //!
-//! A write produces one of five outcomes, and only one of them is evidence that
+//! A write produces one of six outcomes, and only one of them is evidence that
 //! a copy exists:
 //!
 //!   * `Refused` — the guard stopped it, so nothing was transmitted.
@@ -9,10 +9,16 @@
 //!   * `Blanked` — transmitted with the neutral Identity, and the read-back
 //!     presented no Identity at all. The Tag no longer carries a credential.
 //!     This is a *destruction*, never a copy: nothing in the library gained one.
+//!   * `Erased` — transmitted an empty NDEF TLV, and the read-back presented a
+//!     Tag with a valid zero-length NDEF message. The Tag keeps its identity,
+//!     its Capability Container and its format; only the NDEF *content* is gone.
+//!     Never a copy, and never "verified".
 //!   * `Unverified` — transmitted, but the read-back did not confirm it (no
 //!     reading at all, or a different one). The Tag's state is genuinely
 //!     unknown, so counting it would be a lie about a credential.
-//!   * `Failed` — the write never reached the device.
+//!   * `Failed` — the write never reached the device, or a clearing write was
+//!     transmitted and the read-back showed the thing to be cleared is still
+//!     there.
 //!
 //! A single `verified: bool` cannot carry this: it collapses "refused" and
 //! "failed" into one falsy value and invites treating "unknown" as "not written".
@@ -29,6 +35,15 @@
 //! the success condition, and "the read-back still presents an Identity" is the
 //! failure. The two rules live here together so that neither can drift into the
 //! other's territory.
+//!
+//! # Erasing inverts it again, and needs its own word
+//!
+//! Erasing NDEF content writes an empty Type 2 NDEF TLV (`03 00 FE`) over the
+//! message area. The success condition is that the Tag still reads *and* its
+//! user memory now carries a valid zero-length NDEF TLV — a Tag that is present
+//! with no Records, which is not the same as a Blank Tag and not the same as a
+//! copy. `classify_erase` keeps that apart from `Verified` so no Snapshot's
+//! confirmed-copy count can be raised by clearing a Tag.
 
 use crate::identity::Identity;
 
@@ -44,6 +59,11 @@ pub enum WriteOutcome {
     /// Identity. Distinct from `Verified` on purpose: a blanking write is not a
     /// copy, and it is not "verified" in the sense a copy is.
     Blanked,
+    /// An erasing write was transmitted and the Tag reads back as present with a
+    /// valid, zero-length NDEF message. Distinct from `Verified` on purpose: an
+    /// erase destroys content rather than placing a copy, and it is not
+    /// "verified" in the sense a copy is.
+    Erased,
     /// The write was transmitted, but the read-back could not confirm it.
     Unverified,
     /// The write could not be transmitted, or a blanking write was transmitted
@@ -58,6 +78,7 @@ impl WriteOutcome {
             WriteOutcome::Refused => "refused",
             WriteOutcome::Verified => "verified",
             WriteOutcome::Blanked => "blanked",
+            WriteOutcome::Erased => "erased",
             WriteOutcome::Unverified => "unverified",
             WriteOutcome::Failed => "failed",
         }
@@ -143,6 +164,37 @@ pub fn classify_blank(evidence: Evidence) -> WriteOutcome {
         // Identity at all is not a blank.
         Evidence::Readback(Some(_)) => WriteOutcome::Failed,
         Evidence::ReadbackUnreadable => WriteOutcome::Unverified,
+    }
+}
+
+/// Classify one *erasing* attempt, where success is "the Tag is present and
+/// carries a valid zero-length NDEF message".
+///
+/// This is not `classify` with an empty target: an erased Tag is a Tag with no
+/// Records, and the read-back that proves it is a parsed empty TLV rather than a
+/// message that matched. Each case is its own fact:
+///
+///   * nothing was transmitted → `Refused` or `Failed`, as for a copy;
+///   * transmitted and the read-back carries a valid empty NDEF TLV with the
+///     Tag's identity and Capability Container intact → `Erased`;
+///   * transmitted and the Tag still reads content, or its identity/CC changed
+///     → `Failed`, because the erase did not leave a Tag that is present with
+///     no Records;
+///   * transmitted but the Tag could not be read back → `Unverified`, because
+///     the erase may or may not have landed.
+///
+/// An `Erased` outcome is never a confirmed copy: it removes a message rather
+/// than creating one, so it must not raise any Snapshot's count.
+pub fn classify_erase(evidence: JudgedEvidence) -> WriteOutcome {
+    match evidence {
+        JudgedEvidence::Refused => WriteOutcome::Refused,
+        JudgedEvidence::NotTransmitted => WriteOutcome::Failed,
+        JudgedEvidence::Readback(Some(true)) => WriteOutcome::Erased,
+        // The Tag was read and does not show an erased message: a definite
+        // failure, not an unknown. Claiming "unknown" here would send the user
+        // looking for a problem that the read already settled.
+        JudgedEvidence::Readback(Some(false)) => WriteOutcome::Failed,
+        JudgedEvidence::Readback(None) => WriteOutcome::Unverified,
     }
 }
 
@@ -296,6 +348,7 @@ mod tests {
             WriteOutcome::Refused,
             WriteOutcome::Verified,
             WriteOutcome::Blanked,
+            WriteOutcome::Erased,
             WriteOutcome::Unverified,
             WriteOutcome::Failed,
         ]
@@ -304,7 +357,74 @@ mod tests {
         .collect();
         assert_eq!(
             names,
-            vec!["refused", "verified", "blanked", "unverified", "failed"]
+            vec!["refused", "verified", "blanked", "erased", "unverified", "failed"]
+        );
+    }
+
+    // ---- erasing: success is a present Tag with no Records ---------------
+
+    #[test]
+    fn an_erased_write_is_not_a_confirmed_copy() {
+        // Erasing removes an NDEF message. Nothing in the library gained a copy,
+        // so no Snapshot's count may move.
+        assert!(!WriteOutcome::Erased.counts_as_confirmed_copy());
+    }
+
+    #[test]
+    fn an_erased_write_is_not_unknown() {
+        // A read-back showing a valid empty TLV is a definite result, not a
+        // shrug: it is the expected evidence of a successful erase.
+        assert!(!WriteOutcome::Erased.is_unknown());
+    }
+
+    #[test]
+    fn an_erase_is_never_worded_as_verified() {
+        // The whole point of a separate word: clearing content is not placing a
+        // copy, so "verified" would say something that did not happen.
+        assert_ne!(WriteOutcome::Erased.as_str(), WriteOutcome::Verified.as_str());
+        assert_eq!(
+            classify_erase(JudgedEvidence::Readback(Some(true))),
+            WriteOutcome::Erased
+        );
+    }
+
+    #[test]
+    fn an_erase_whose_readback_shows_an_empty_tlv_is_erased() {
+        assert_eq!(
+            classify_erase(JudgedEvidence::Readback(Some(true))),
+            WriteOutcome::Erased
+        );
+    }
+
+    #[test]
+    fn an_erase_whose_readback_still_holds_content_failed() {
+        // The Tag was read and the message is still there. That is a failure the
+        // read already settled, not an unknown to go looking into.
+        let outcome = classify_erase(JudgedEvidence::Readback(Some(false)));
+        assert_eq!(outcome, WriteOutcome::Failed);
+        assert!(!outcome.is_unknown());
+        assert!(!outcome.counts_as_confirmed_copy());
+    }
+
+    #[test]
+    fn an_erase_whose_read_back_could_not_be_read_is_unknown_not_erased() {
+        // Nothing was observed after the write, so claiming the content is gone
+        // would be a claim about bytes the app did not see.
+        let outcome = classify_erase(JudgedEvidence::Readback(None));
+        assert_eq!(outcome, WriteOutcome::Unverified);
+        assert!(outcome.is_unknown());
+        assert!(!outcome.counts_as_confirmed_copy());
+    }
+
+    #[test]
+    fn an_erase_refusal_stays_a_refusal_and_a_lost_transmission_stays_failed() {
+        assert_eq!(
+            classify_erase(JudgedEvidence::Refused),
+            WriteOutcome::Refused
+        );
+        assert_eq!(
+            classify_erase(JudgedEvidence::NotTransmitted),
+            WriteOutcome::Failed
         );
     }
 

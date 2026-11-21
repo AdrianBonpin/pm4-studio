@@ -312,6 +312,10 @@ impl BatchRun {
                 // totals honest rather than dropping an attempt on the floor.
                 BatchOutcome::Write(WriteOutcome::Failed) => counts.failed += 1,
                 BatchOutcome::Write(WriteOutcome::Blanked) => counts.failed += 1,
+                // Nor can it erase NDEF content: erasing is its own operation
+                // with its own word, and a copying run never reaches it. Same
+                // treatment as `Blanked` for the same reason.
+                BatchOutcome::Write(WriteOutcome::Erased) => counts.failed += 1,
             }
         }
         counts

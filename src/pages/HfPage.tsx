@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { EraseNdef } from "../components/EraseNdef";
 import { MemoryDumpPanel } from "../components/MemoryDumpPanel";
 import { PasswordProtection } from "../components/PasswordProtection";
 import { Badge } from "../components/ui/Badge";
@@ -163,6 +164,8 @@ export function HfPage({ connected, onPoll, onChirp }: HfPageProps) {
       <MemoryDumpPanel connected={connected} />
 
       <PasswordProtection connected={connected} />
+
+      <EraseNdef connected={connected} />
 
       <Section
         title="Why the decode is provisional"

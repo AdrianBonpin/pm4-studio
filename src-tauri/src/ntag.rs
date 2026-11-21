@@ -28,7 +28,7 @@
 use crate::memory_dump::TagIdentity;
 use crate::reader::{hex, Reader};
 use crate::stream::encode_frame;
-use crate::write_outcome::{classify_evidence, JudgedEvidence, WriteOutcome};
+use crate::write_outcome::{classify_erase, classify_evidence, JudgedEvidence, WriteOutcome};
 
 // ---- command ids and layout -------------------------------------------
 
@@ -69,13 +69,17 @@ pub const MAX_TAG_SELECTOR: u32 = 4;
 pub const NDEF_TLV: u8 = 0x03;
 /// Type 2 TLV terminator.
 pub const TERMINATOR_TLV: u8 = 0xFE;
+/// The bytes an erase writes: an NDEF TLV whose message is zero bytes. A Type 2
+/// Tag holding this is a valid, formatted Tag that carries no Records — not a
+/// Blank Tag, and not an unformatted one.
+pub const EMPTY_NDEF_TLV: [u8; 3] = [NDEF_TLV, 0x00, TERMINATOR_TLV];
 /// Length byte meaning "a two-byte length follows".
 pub const LONG_LENGTH_MARKER: u8 = 0xFF;
 
 /// `0x0083` status: NTAG ready and info complete.
-pub const STATUS_READY: u32 = 4;
+pub const STATUS_READY: u32 = INFO_STATUS_READY;
 /// `0x0083` status: nothing latched.
-pub const STATUS_NO_TAG: u32 = 1;
+pub const STATUS_NO_TAG: u32 = INFO_STATUS_NONE;
 /// `0x0083`/`0x0082` status: request refused for a bad parameter.
 pub const STATUS_REFUSED: u32 = 32;
 
@@ -295,6 +299,16 @@ impl MemoryImage {
 pub enum PlanError {
     /// The Draft holds no Records, so the message is empty.
     EmptyMessage,
+    /// The user memory carries no NDEF TLV at all, so there is no content to
+    /// erase. Writing an empty TLV into unformatted memory would be a format,
+    /// not an erase.
+    NothingToErase,
+    /// The user memory already carries a zero-length NDEF TLV, so an erase would
+    /// write the same bytes back to a Tag that has nothing to lose.
+    AlreadyErased,
+    /// The TLV on the Tag could not be parsed, so which bytes an erase would
+    /// have to clear is unknown. Guessing would leave a message tail behind.
+    ContentUnreadable { reason: String },
     /// The CC on page 3 did not yield a capacity.
     CapacityUnknown,
     /// The TLV does not fit the Tag's user memory.
@@ -319,6 +333,19 @@ impl std::fmt::Display for PlanError {
             PlanError::EmptyMessage => write!(
                 f,
                 "this Draft holds no Records, so there is no message to write"
+            ),
+            PlanError::NothingToErase => write!(
+                f,
+                "the tag carries no NDEF message, so there is nothing to erase"
+            ),
+            PlanError::AlreadyErased => write!(
+                f,
+                "the tag already carries an empty NDEF message, so there is nothing to erase"
+            ),
+            PlanError::ContentUnreadable { reason } => write!(
+                f,
+                "the tag's NDEF content could not be read ({reason}), so the bytes an erase \
+                 would have to clear are unknown"
             ),
             PlanError::CapacityUnknown => write!(
                 f,
@@ -527,54 +554,165 @@ fn pad_to_page(mut bytes: Vec<u8>) -> Vec<u8> {
     bytes
 }
 
+// ---- erasing a Tag's NDEF content (ticket 20) --------------------------
+//
+// Erasing is writing an empty NDEF TLV (`03 00 FE`) over the message area. It is
+// deliberately not a format and not a zeroing of user memory:
+//
+//   * the Capability Container on page 3 stays exactly as it was, so the Tag is
+//     still a Type 2 Tag of the same size;
+//   * the UID, the lock bytes and the CC are never written, because every page
+//     write goes through `guard_write_page`;
+//   * whatever the old message occupied is covered too, so a leftover tail
+//     cannot be read back behind the new terminator.
+//
+// The result is a Tag that is present and readable with **no Records**, which is
+// the whole point: erasing clears content, it does not destroy the Tag.
+
+/// One ready-to-send erase: the 1328-byte payload, the pages it changes, and
+/// what those pages must read back as.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErasePlan {
+    pub payload: Vec<u8>,
+    /// Pages marked `2` in the state table, in order.
+    pub write_pages: Vec<usize>,
+    /// The bytes pages [`Self::write_pages`] must hold afterwards, flattened:
+    /// `03 00 FE` followed by zeros out to the old message's last page.
+    pub expected_user: Vec<u8>,
+    /// Bytes of the old NDEF TLV that the erase clears, header and terminator
+    /// included. This is what the confirmation says will be lost.
+    pub cleared_bytes: usize,
+    /// User memory the CC declared.
+    pub capacity_bytes: usize,
+}
+
+impl ErasePlan {
+    /// The bytes written over the message area, as the erase request carries
+    /// them. Exposed so a probe or a report can quote the actual bytes.
+    pub fn written_hex(&self) -> String {
+        hex(&self.expected_user)
+    }
+}
+
+/// The page-aligned region an erase must write, plus how many bytes of the old
+/// TLV it clears.
+///
+/// The region is the union of the new empty TLV and the message that is there
+/// now, so an old, longer message's tail is zeroed rather than left readable.
+/// Nothing here reads the clock or the device, so the bytes are testable against
+/// the user areas recorded in docs/PROTOCOL.md.
+fn erase_region(image: &MemoryImage) -> Result<(Vec<u8>, usize), PlanError> {
+    let previous_len = match read_ndef_tlv(&image.user_area()) {
+        NdefTlv::Message { tlv_len, .. } => tlv_len,
+        NdefTlv::Empty => return Err(PlanError::AlreadyErased),
+        NdefTlv::Missing => return Err(PlanError::NothingToErase),
+        NdefTlv::Unreadable { reason } => return Err(PlanError::ContentUnreadable { reason }),
+    };
+    let mut region = pad_to_page(EMPTY_NDEF_TLV.to_vec());
+    let previous_region = pad_to_page_len(previous_len);
+    if previous_region > region.len() {
+        region.resize(previous_region, 0);
+    }
+    Ok((region, previous_len))
+}
+
+/// Build the `0x0082` request that clears a Tag's NDEF content.
+///
+/// A Tag whose content cannot be read is refused before a frame exists: without
+/// knowing which bytes the old TLV occupies, an erase cannot promise to clear it
+/// and could leave a message tail behind a new terminator.
+pub fn plan_erase(
+    token: &[u8; 8],
+    image: &MemoryImage,
+    selector: u32,
+) -> Result<ErasePlan, PlanError> {
+    if selector > MAX_TAG_SELECTOR {
+        return Err(PlanError::SelectorOutOfRange { selector });
+    }
+    let capacity_bytes = image.user_capacity_bytes().ok_or(PlanError::CapacityUnknown)?;
+    let user_pages = capacity_bytes / PAGE_LEN;
+    let (region, cleared_bytes) = erase_region(image)?;
+    if region.len() > capacity_bytes {
+        return Err(PlanError::TooLarge {
+            required: region.len(),
+            capacity: capacity_bytes,
+        });
+    }
+
+    let page_count = region.len() / PAGE_LEN;
+    let write_pages: Vec<usize> = (0..page_count).map(|i| USER_FIRST_PAGE + i).collect();
+    let writes: Vec<(usize, [u8; PAGE_LEN])> = write_pages
+        .iter()
+        .enumerate()
+        .map(|(index, page)| {
+            let at = index * PAGE_LEN;
+            (
+                *page,
+                [
+                    region[at],
+                    region[at + 1],
+                    region[at + 2],
+                    region[at + 3],
+                ],
+            )
+        })
+        .collect();
+
+    let payload = write_payload(token, selector, &image.image_bytes(), &writes, user_pages)?;
+
+    Ok(ErasePlan {
+        payload,
+        write_pages,
+        expected_user: region,
+        cleared_bytes,
+        capacity_bytes,
+    })
+}
+
+/// What a post-erase read showed, as two separate facts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EraseReadback {
+    /// User memory carries a valid, zero-length NDEF TLV. A truncated or
+    /// unparseable TLV is not this.
+    pub content_cleared: bool,
+    /// Pages 0..=3 — UID, BCC, static lock bytes and the Capability Container —
+    /// read exactly as they did before the erase.
+    pub identity_intact: bool,
+}
+
+impl EraseReadback {
+    /// True only when both facts hold: the Tag is present with no Records and
+    /// its identity and Capability Container are untouched.
+    pub fn is_erased(self) -> bool {
+        self.content_cleared && self.identity_intact
+    }
+}
+
+/// Compare the memory read before an erase with the one after it.
+///
+/// The Capability Container check is the answer to "did the erase change the
+/// Tag's format": page 3 must be byte-identical. A page that either read did not
+/// return is not "intact" — an unobserved page is not evidence of an unchanged
+/// one.
+pub fn judge_erase_readback(before: &MemoryImage, after: &MemoryImage) -> EraseReadback {
+    let content_cleared = matches!(read_ndef_tlv(&after.user_area()), NdefTlv::Empty);
+    let identity_intact = (0..=CC_PAGE).all(|page| match (before.page(page), after.page(page)) {
+        (Some(was), Some(now)) => was == now,
+        _ => false,
+    });
+    EraseReadback {
+        content_cleared,
+        identity_intact,
+    }
+}
+
 
 // ---- one read of the Tag -------------------------------------------------
-
-/// What `0x0083` reported about the Tag.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TagInfo {
-    /// Status dword: 4 = ready, 1 = nothing latched, 32 = refused.
-    pub status: u32,
-    /// The tag type `0x0083` reports (`5` = NTAG215). Deliberately kept apart
-    /// from the write-path selector: `0x0082` refuses this value.
-    pub reported_tag_type: u32,
-    /// The 7-byte UID at payload 0x2A..0x31, low byte first.
-    pub uid: Vec<u8>,
-    /// The 8-byte read/write token at payload 0x38..0x40.
-    pub token: [u8; 8],
-}
-
-impl TagInfo {
-    /// Parse a `0x0083` reply payload. `None` when it is too short to hold the
-    /// status and token.
-    pub fn from_info_payload(payload: &[u8]) -> Option<Self> {
-        if payload.len() < 0x40 {
-            return None;
-        }
-        let status = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
-        let reported_tag_type =
-            u32::from_le_bytes([payload[4], payload[5], payload[6], payload[7]]);
-        let mut token = [0u8; 8];
-        token.copy_from_slice(&payload[0x38..0x40]);
-        let uid = payload[0x2A..0x31].to_vec();
-        Some(TagInfo {
-            status,
-            reported_tag_type,
-            uid,
-            token,
-        })
-    }
-
-    /// The UID as the rest of the app writes one: space-separated uppercase hex.
-    pub fn uid_hex(&self) -> String {
-        hex(&self.uid)
-    }
-}
 
 /// One whole read: the info reply and the memory dump that followed it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TagRead {
-    pub info: TagInfo,
+    pub info: NtagInfo,
     pub memory: MemoryImage,
 }
 
@@ -638,8 +776,8 @@ impl TagView {
             },
         };
         TagView {
-            uid: read.info.uid_hex(),
-            reported_tag_type: read.info.reported_tag_type,
+            uid: read.info.uid.clone(),
+            reported_tag_type: read.info.tag_type,
             capacity_bytes: read.memory.user_capacity_bytes(),
             user_pages: read.memory.user_pages(),
             existing,
@@ -690,8 +828,7 @@ pub fn read_tag(reader: &Reader) -> Result<Option<TagRead>, String> {
             .to_string()
     })?;
 
-    let info = TagInfo::from_info_payload(&info_frame.payload)
-        .ok_or_else(|| "the reader's NTAG info reply was too short to use".to_string())?;
+    let info = NtagInfo::parse(&info_frame.payload).map_err(|e| e.message())?;
     if info.status == STATUS_NO_TAG {
         return Ok(None);
     }
@@ -705,7 +842,7 @@ pub fn read_tag(reader: &Reader) -> Result<Option<TagRead>, String> {
     // 0x0081 wants the token, the announced tag type, then seven zero bytes.
     let mut read_payload = Vec::with_capacity(READ_PAYLOAD_LEN);
     read_payload.extend_from_slice(&info.token);
-    read_payload.push(info.reported_tag_type as u8);
+    read_payload.push(info.tag_type as u8);
     read_payload.extend_from_slice(&[0u8; 7]);
     let read_frame = request(reader, CMD_NTAG_READ, &read_payload, READ_TIMEOUT_MS, |frame| {
         frame.cmd == CMD_NTAG_READ && frame.payload.len() >= 0x404 && frame.checksum_ok
@@ -752,6 +889,11 @@ pub struct WriteReply {
     pub status: u32,
     /// One `(page, state)` per `0x0085` progress frame: 1 = written, 4 = failed.
     pub progress: Vec<(u8, u8)>,
+    /// Every reply frame this write produced, as `cmd payload-hex` pairs. Kept so
+    /// a probe can quote the reply bytes rather than only their interpretation:
+    /// `stream::encode_frame` turns each pair back into the exact frame, because
+    /// a frame is its command, its payload and a checksum derived from them.
+    pub frames: Vec<String>,
 }
 
 impl WriteReply {
@@ -780,6 +922,7 @@ impl WriteReply {
 fn collect_write_reply(reader: &Reader, timeout_ms: u64) -> Result<Option<WriteReply>, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
     let mut progress = Vec::new();
+    let mut frames = Vec::new();
     loop {
         let remaining = deadline.saturating_duration_since(std::time::Instant::now());
         if remaining.is_zero() {
@@ -790,6 +933,7 @@ fn collect_write_reply(reader: &Reader, timeout_ms: u64) -> Result<Option<WriteR
         };
         if frame.cmd == CMD_NTAG_PAGE && frame.payload.len() == 6 {
             progress.push((frame.payload[0], frame.payload[1]));
+            frames.push(format!("{:04X} {}", frame.cmd, hex(&frame.payload)));
         } else if frame.cmd == CMD_NTAG_WRITE && frame.payload.len() >= 4 {
             let status = u32::from_le_bytes([
                 frame.payload[0],
@@ -797,7 +941,12 @@ fn collect_write_reply(reader: &Reader, timeout_ms: u64) -> Result<Option<WriteR
                 frame.payload[2],
                 frame.payload[3],
             ]);
-            return Ok(Some(WriteReply { status, progress }));
+            frames.push(format!("{:04X} {}", frame.cmd, hex(&frame.payload)));
+            return Ok(Some(WriteReply {
+                status,
+                progress,
+                frames,
+            }));
         }
     }
 }
@@ -1025,6 +1174,11 @@ pub fn write_message(reader: &Reader, message: &[u8]) -> NdefWrite {
         WriteOutcome::Blanked => Some(
             "the write reported a blanked Tag, which an NDEF write cannot produce".to_string(),
         ),
+        // Nor can it erase: `write_message` refuses an empty message, and erasing
+        // is `erase_ndef`'s job. Named rather than defaulted for the same reason.
+        WriteOutcome::Erased => Some(
+            "the write reported an erased Tag, which a Draft write cannot produce".to_string(),
+        ),
         WriteOutcome::Unverified => Some(match &readback {
             Err(_) | Ok(None) => "the write was sent but the Tag could not be read back, so                                   what it holds is unknown"
                 .to_string(),
@@ -1036,13 +1190,300 @@ pub fn write_message(reader: &Reader, message: &[u8]) -> NdefWrite {
     report
 }
 
+// ---- erasing a Tag's NDEF content (ticket 20) ---------------------------
+
+/// The sentence a refusal says when nothing is latched during an erase.
+pub const NO_TAG_ERASE_MESSAGE: &str =
+    "no 13.56 MHz Tag is in the field, so there is nothing to erase";
+
+/// What an erase would clear, without clearing it. Reads the Tag, so the
+/// confirmation can name what would be lost.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ErasePreview {
+    /// What the Tag holds now. `None` when nothing could be read.
+    pub tag: Option<TagView>,
+    /// Bytes of the current NDEF TLV an erase would clear, terminator included.
+    pub clears_bytes: usize,
+    /// User pages the erase would write: `03 00 FE` plus the old message's tail.
+    pub pages: Vec<usize>,
+    pub capacity_bytes: Option<usize>,
+    /// True only when an erase would proceed, so the UI can never show a
+    /// confirmation for an erase that would be refused.
+    pub can_erase: bool,
+    /// Why the erase would not proceed, when it would not.
+    pub refusal: Option<String>,
+}
+
+/// Read the Tag and answer what erasing its NDEF content would do to it.
+///
+/// Read-only: the info and memory read commands only. A Tag that cannot be read
+/// is a refusal here, before any write frame could exist.
+pub fn preview_erase(reader: &Reader) -> ErasePreview {
+    let mut preview = ErasePreview {
+        tag: None,
+        clears_bytes: 0,
+        pages: Vec::new(),
+        capacity_bytes: None,
+        can_erase: false,
+        refusal: None,
+    };
+
+    let read = match read_tag(reader) {
+        Ok(Some(read)) => read,
+        Ok(None) => {
+            preview.refusal = Some(NO_TAG_ERASE_MESSAGE.to_string());
+            return preview;
+        }
+        Err(e) => {
+            preview.refusal = Some(format!("the Tag could not be read: {e}"));
+            return preview;
+        }
+    };
+    preview.capacity_bytes = read.memory.user_capacity_bytes();
+    preview.tag = Some(TagView::from_read(&read));
+
+    match plan_erase(&read.info.token, &read.memory, DEFAULT_TAG_SELECTOR) {
+        Ok(plan) => {
+            preview.clears_bytes = plan.cleared_bytes;
+            preview.pages = plan.write_pages;
+            preview.can_erase = true;
+        }
+        Err(error) => {
+            preview.refusal = Some(error.to_string());
+        }
+    }
+    preview
+}
+
+/// The decision an erase makes about the read that precedes it, as a pure
+/// function so the fail-closed rule is testable with no hardware (ADR 0001).
+///
+/// A Tag that cannot be read is a refusal, not a warning: an erase that does not
+/// know what is on the Tag cannot promise to clear it, and the same reasoning
+/// that made a blind 125 kHz write unacceptable applies to writing over an NDEF
+/// message the app never saw.
+pub fn erase_target(read: Result<Option<TagRead>, String>) -> Result<TagRead, String> {
+    match read {
+        Ok(Some(read)) => Ok(read),
+        Ok(None) => Err(NO_TAG_ERASE_MESSAGE.to_string()),
+        Err(e) => Err(format!(
+            "the Tag could not be read, so nothing was erased: {e}"
+        )),
+    }
+}
+
+/// One attempted erase, with everything the UI needs to say what happened.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EraseReport {
+    /// What the Tag held before the erase, from the read this path is required
+    /// to do first. `None` when nothing was read.
+    pub before: Option<TagView>,
+    pub outcome: WriteOutcome,
+    /// Why the content was not cleared, when it was not.
+    pub message: Option<String>,
+    pub capacity_bytes: Option<usize>,
+    /// Bytes of the old NDEF TLV the erase cleared.
+    pub cleared_bytes: usize,
+    /// Pages the request asked the firmware to write.
+    pub erase_pages: Vec<usize>,
+    /// Pages the firmware reported it wrote.
+    pub accepted_pages: Vec<usize>,
+    /// What the Tag read back as afterwards, when it could be re-read.
+    pub readback: Option<TagView>,
+    /// Pages 0..=3 read identically before and after. `None` when there was no
+    /// before/after pair to compare.
+    pub identity_intact: Option<bool>,
+    /// The bytes written over the message area, hex. A report is evidence: this
+    /// is the actual content of the erase, not a summary of it.
+    pub written_hex: String,
+    /// The whole `0x0082` frame as it was sent, hex: header, token, selector,
+    /// the tag's image, and the 256-byte state table. Kept for the hardware probe
+    /// because ticket 18's multi-page evidence was not auditable without the
+    /// request and reply bytes; it is deliberately not serialised to the webview.
+    pub request_hex: String,
+    /// The reply frames as `cmd payload-hex` pairs, and the status the final
+    /// `0x0082` frame carried. Evidence, not interpretation.
+    pub reply_frames: Vec<String>,
+    pub reply_status: Option<u32>,
+}
+
+impl EraseReport {
+    fn refused(message: String) -> Self {
+        EraseReport {
+            before: None,
+            outcome: WriteOutcome::Refused,
+            message: Some(message),
+            capacity_bytes: None,
+            cleared_bytes: 0,
+            erase_pages: Vec::new(),
+            accepted_pages: Vec::new(),
+            readback: None,
+            identity_intact: None,
+            written_hex: String::new(),
+            request_hex: String::new(),
+            reply_frames: Vec::new(),
+            reply_status: None,
+        }
+    }
+}
+
+/// Clear the NDEF content of the Tag on the Reader, then read it back.
+///
+/// The order is the same fail-closed shape ADR 0001 established for 125 kHz and
+/// ticket 18 kept for NDEF writes, and each step is a refusal rather than a
+/// risk:
+///
+/// 1. The Tag is read. If it cannot be read, nothing is written: an erase that
+///    does not know what is there cannot promise to clear it.
+/// 2. The plan refuses a Tag with no NDEF TLV (that would be a format, not an
+///    erase), one whose TLV cannot be parsed, and one whose capacity cannot be
+///    read — all before a write frame exists.
+/// 3. The frame is sent as 21 reports with the pacing the spike proved. Only
+///    user pages from page 4 are marked, so the UID, lock bytes and Capability
+///    Container are never written.
+/// 4. The Tag is read back. A read-back that shows a valid empty NDEF TLV **and**
+///    pages 0..=3 unchanged is `Erased` — its own word, never `Verified`, because
+///    clearing content places no copy. A read-back that shows content or a
+///    changed Capability Container is `Failed`; a Tag that cannot be read back
+///    at all is `Unverified`, which the UI says as "unknown".
+pub fn erase_ndef(reader: &Reader) -> EraseReport {
+    let read = match erase_target(read_tag(reader)) {
+        Ok(read) => read,
+        Err(message) => return EraseReport::refused(message),
+    };
+
+    let mut report = EraseReport {
+        before: Some(TagView::from_read(&read)),
+        outcome: WriteOutcome::Refused,
+        message: None,
+        capacity_bytes: read.memory.user_capacity_bytes(),
+        cleared_bytes: 0,
+        erase_pages: Vec::new(),
+        accepted_pages: Vec::new(),
+        readback: None,
+        identity_intact: None,
+        written_hex: String::new(),
+        request_hex: String::new(),
+        reply_frames: Vec::new(),
+        reply_status: None,
+    };
+
+    let plan = match plan_erase(&read.info.token, &read.memory, DEFAULT_TAG_SELECTOR) {
+        Ok(plan) => plan,
+        Err(error) => {
+            report.message = Some(error.to_string());
+            return report;
+        }
+    };
+    report.cleared_bytes = plan.cleared_bytes;
+    report.erase_pages = plan.write_pages.clone();
+    report.written_hex = plan.written_hex();
+
+    // The same pauses ticket 18 uses: read, settle, write, settle, read back.
+    std::thread::sleep(std::time::Duration::from_millis(WRITE_SETTLE_MS));
+    let frame = encode_frame(CMD_NTAG_WRITE, &plan.payload);
+    report.request_hex = hex(&frame);
+    reader.drain();
+    if let Err(e) = reader.write_frame_paced(
+        &frame,
+        std::time::Duration::from_millis(REPORT_GAP_MS),
+    ) {
+        report.outcome = WriteOutcome::Failed;
+        report.message = Some(format!("the erase could not be sent: {e}"));
+        return report;
+    }
+
+    let reply = collect_write_reply(reader, WRITE_TIMEOUT_MS).unwrap_or(None);
+    if let Some(reply) = &reply {
+        report.accepted_pages = reply.written_pages();
+        report.reply_frames = reply.frames.clone();
+        report.reply_status = Some(reply.status);
+    }
+    let declined = reply
+        .as_ref()
+        .map(|reply| reply.status == STATUS_REFUSED)
+        .unwrap_or(false);
+
+    std::thread::sleep(std::time::Duration::from_millis(READBACK_SETTLE_MS));
+    let readback = read_tag(reader);
+    let judged = match &readback {
+        Ok(Some(after)) => {
+            let facts = judge_erase_readback(&read.memory, &after.memory);
+            report.identity_intact = Some(facts.identity_intact);
+            report.readback = Some(TagView::from_read(after));
+            Some(facts)
+        }
+        _ => {
+            report.readback = None;
+            None
+        }
+    };
+
+    report.outcome = if declined {
+        // The firmware said it would not act, and PROTOCOL.md records status 32
+        // as nothing written — not a Tag whose contents are unknown.
+        classify_erase(JudgedEvidence::NotTransmitted)
+    } else {
+        match &judged {
+            // Sent, and the Tag could not be read again: unknown.
+            None => classify_erase(JudgedEvidence::Readback(None)),
+            Some(facts) => classify_erase(JudgedEvidence::Readback(Some(facts.is_erased()))),
+        }
+    };
+
+    report.message = match report.outcome {
+        WriteOutcome::Erased => None,
+        WriteOutcome::Refused => report
+            .message
+            .or_else(|| Some("the erase was not attempted".to_string())),
+        WriteOutcome::Failed if declined => Some(format!(
+            "the reader refused the erase request (status {STATUS_REFUSED}), which it \
+             answers for a parameter it will not accept. Nothing was written."
+        )),
+        WriteOutcome::Failed => Some(match &judged {
+            Some(facts) if !facts.identity_intact => {
+                "the tag did not read back with its UID and Capability Container unchanged, \
+                 so the erase is not reported as a success. Re-read the tag before using it."
+                    .to_string()
+            }
+            Some(_) => "the tag still reads back with an NDEF message, so the erase did not \
+                         take. The tag is still readable."
+                .to_string(),
+            None => report
+                .message
+                .clone()
+                .unwrap_or_else(|| "the erase could not be sent".to_string()),
+        }),
+        WriteOutcome::Unverified => Some(
+            "the erase was sent but the Tag could not be read back, so what it holds is unknown"
+                .to_string(),
+        ),
+        // An erase cannot blank a Tag's 125 kHz Identity, and it does not verify
+        // a copy. Both arms are unreachable; naming them keeps a future change to
+        // the shared vocabulary from silently wording an erase as a write.
+        WriteOutcome::Blanked => Some(
+            "the erase reported a blanked Tag, which clearing NDEF content cannot produce"
+                .to_string(),
+        ),
+        WriteOutcome::Verified => Some(
+            "the erase reported a verified write, which clearing NDEF content cannot produce"
+                .to_string(),
+        ),
+    };
+
+    report
+}
+
 
 // ---- the memory-dump read path (ticket 19) -------------------------------
 //
 // `MemoryDump::parse` wants the raw `0x0081` payload and a `TagIdentity` for its
-// header, so this path keeps its own parse of the info reply rather than
-// converting through `TagInfo`. The command ids and page layout above are
-// shared; only the reply-reading entry points differ.
+// header. This section used to carry its own `0x0083` reply parser (built for
+// ticket 19) while the read/write path carried another (ticket 18), which meant
+// two parses of the same offsets. There is now one: `NtagInfo`, whose fields are
+// the union of what both paths need. The status dword is kept rather than
+// rejected inside the parser, because "nothing latched" is a Reader state the
+// read path has to tell apart from an unusable reply.
 
 /// The info reply is 64 payload bytes, whatever it says.
 pub const INFO_REPLY_LEN: usize = 0x40;
@@ -1104,29 +1545,34 @@ impl std::fmt::Display for InfoError {
 impl std::error::Error for InfoError {}
 
 /// What the Reader said about the tag, before any memory was read.
+///
+/// One parser for the whole `0x0083` reply: the read path, the write path, the
+/// erase path and the memory dump all read it through this type.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NtagInfo {
-    /// Tag type as the info reply reports it (`5` is an NTAG215).
+    /// Status dword: 4 = ready, 1 = nothing latched, 32 = refused.
+    pub status: u32,
+    /// Tag type as the info reply reports it (`5` is an NTAG215). Deliberately
+    /// kept apart from the write-path selector: `0x0082` refuses this value.
     pub tag_type: u32,
-    /// The tag's 7-byte UID, as hex bytes.
+    /// The tag's 7-byte UID at payload 0x2A..0x31, as space-separated hex.
     pub uid: String,
-    /// The 8-byte token the read request sends back unchanged.
+    /// The 8-byte token the read and write requests send back unchanged.
     pub token: [u8; 8],
 }
 
 impl NtagInfo {
-    /// Read one 64-byte `0x0083` payload.
+    /// Read one 64-byte `0x0083` payload, whatever its status dword says.
     ///
     /// Pure: no hardware, so the verified offsets can be tested against a
-    /// payload transcribed from docs/PROTOCOL.md.
-    pub fn from_payload(payload: &[u8]) -> Result<Self, InfoError> {
+    /// payload transcribed from docs/PROTOCOL.md. The status is reported rather
+    /// than enforced here, because "no tag latched" is a fact about the Reader
+    /// and `from_payload` is the caller that wants it refused.
+    pub fn parse(payload: &[u8]) -> Result<Self, InfoError> {
         if payload.len() < INFO_REPLY_LEN {
             return Err(InfoError::WrongLength { got: payload.len() });
         }
         let status = u32::from_le_bytes([payload[0], payload[1], payload[2], payload[3]]);
-        if status != INFO_STATUS_READY {
-            return Err(InfoError::Status { status });
-        }
         let tag_type = u32::from_le_bytes([
             payload[INFO_TAG_TYPE.start],
             payload[INFO_TAG_TYPE.start + 1],
@@ -1136,10 +1582,25 @@ impl NtagInfo {
         let mut token = [0u8; 8];
         token.copy_from_slice(&payload[INFO_READ_TOKEN]);
         Ok(Self {
+            status,
             tag_type,
             uid: hex(&payload[INFO_UID]),
             token,
         })
+    }
+
+    /// Read one 64-byte `0x0083` payload and refuse anything but a ready tag.
+    ///
+    /// Pure: no hardware, so the verified offsets can be tested against a
+    /// payload transcribed from docs/PROTOCOL.md.
+    pub fn from_payload(payload: &[u8]) -> Result<Self, InfoError> {
+        let info = Self::parse(payload)?;
+        if info.status != INFO_STATUS_READY {
+            return Err(InfoError::Status {
+                status: info.status,
+            });
+        }
+        Ok(info)
     }
 
     /// The tag this info describes, for the dump's header.
@@ -1658,6 +2119,376 @@ mod tests {
         .expect("fits");
         assert_eq!(plan.write_pages, vec![4, 5, 6, 7, 8]);
         assert_eq!(plan.expected_user.len(), 20);
+    }
+
+    // ---- erasing a Tag's NDEF content (ticket 20) ----------------------
+    //
+    // Every byte below comes from docs/PROTOCOL.md: the spike's user area
+    // (`03 11 D1 01 0D 55 04 "devgo.studio" FE`) and ticket 18's recorded
+    // multi-page writes (a 9-byte Text message over three pages, a 47-byte one
+    // over thirteen). No hardware is involved, so the erase payload and the
+    // read-back judgement are checked against bytes that were actually on a Tag.
+
+    /// The user area of ticket 18's third recorded write: the 9-byte Text
+    /// message, `03 09 D1 01 54 05 02 65 6E 68 69 FE`, over pages 4..6, with
+    /// pages 7..16 zeroed because the request cleared the 47-byte message's tail.
+    fn ticket_18_three_page_user_area() -> Vec<u8> {
+        let mut user = parse_hex("03 09 D1 01 54 05 02 65 6E 68 69 FE").unwrap();
+        user.resize(52, 0); // 13 pages: 4..16 inclusive, as that read-back showed
+        user
+    }
+
+    /// The 47-byte Text message ticket 18 wrote over 13 pages, as its TLV:
+    /// `03 2F` then 47 message bytes then `FE` = 50 bytes, padded to 52.
+    fn ticket_18_thirteen_page_user_area() -> Vec<u8> {
+        let message = vec![0x41u8; 47];
+        let mut user = wrap_ndef_message(&message);
+        assert_eq!(user.len(), 50, "4 bytes of TLV overhead plus the terminator");
+        user.resize(52, 0);
+        user
+    }
+
+    /// A read payload carrying an arbitrary user area, everything else as the
+    /// recorded Tag had it (pages 0..3, states, capacity).
+    fn read_payload_with_user_area(user: &[u8]) -> Vec<u8> {
+        let mut payload = recorded_read_payload();
+        let start = 4 + USER_FIRST_PAGE * PAGE_LEN;
+        let end = start + RECORDED_USER_BYTES;
+        payload[start..end].fill(0);
+        payload[start..start + user.len()].copy_from_slice(user);
+        payload
+    }
+
+    /// The user memory a `0x0081` reply carries for the recorded Tag: 124 pages.
+    const RECORDED_USER_BYTES: usize = 496;
+
+    fn image_with_user_area(user: &[u8]) -> MemoryImage {
+        MemoryImage::from_read_payload(&read_payload_with_user_area(user)).expect("recorded reply")
+    }
+
+    #[test]
+    fn an_erase_writes_the_empty_ndef_tlv_over_the_recorded_message() {
+        // The recorded Tag holds a 20-byte TLV across pages 4..8. An erase writes
+        // `03 00 FE` and zeros out the rest of that region, touching nothing else.
+        let plan = plan_erase(&recorded_token(), &recorded_image(), DEFAULT_TAG_SELECTOR)
+            .expect("a Tag holding a message can be erased");
+
+        assert_eq!(plan.cleared_bytes, 20, "the recorded TLV, terminator included");
+        assert_eq!(plan.write_pages, vec![4, 5, 6, 7, 8]);
+        assert_eq!(plan.capacity_bytes, 496);
+        assert_eq!(
+            hex(&plan.expected_user[..3]),
+            "03 00 FE",
+            "erasing writes an empty NDEF TLV, not zeros"
+        );
+        assert!(
+            plan.expected_user[3..].iter().all(|&b| b == 0),
+            "the old message's bytes are cleared behind the new terminator"
+        );
+        assert_eq!(plan.expected_user.len(), 20, "page aligned to the old region");
+        assert_eq!(plan.payload.len(), WRITE_PAYLOAD_LEN);
+        assert_eq!(
+            hex(&plan.payload[..16]),
+            "FF FF FF FF FF FF FF FF 03 00 00 00 01 00 00 00",
+            "token, selector and flag exactly as the accepted write frame carried them"
+        );
+        assert_eq!(
+            &plan.payload[0x30 + USER_FIRST_PAGE * PAGE_LEN..0x30 + USER_FIRST_PAGE * PAGE_LEN + 4],
+            &[NDEF_TLV, 0x00, TERMINATOR_TLV, 0x00],
+            "page 4 carries 03 00 FE 00"
+        );
+        assert_eq!(
+            hex(&plan.expected_user),
+            "03 00 FE 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00",
+            "the erase as bytes: header, terminator, then zeros"
+        );
+    }
+
+    #[test]
+    fn an_erase_marks_only_the_pages_the_old_message_occupied() {
+        // Erasing is not a format and not a wipe of user memory: a page the old
+        // message never reached is not written at all.
+        let plan = plan_erase(&recorded_token(), &recorded_image(), DEFAULT_TAG_SELECTOR)
+            .expect("erasable");
+        let states = &plan.payload[0x430..0x530];
+        for page in &plan.write_pages {
+            assert_eq!(states[*page], STATE_WRITE, "page {page} marked for writing");
+        }
+        assert_eq!(
+            states.iter().filter(|&&b| b != 0).count(),
+            plan.write_pages.len(),
+            "no page outside the old message's region is marked"
+        );
+        for page in 0..USER_FIRST_PAGE {
+            assert_eq!(states[page], 0, "page {page} is never marked for writing");
+        }
+        for page in 9..=127 {
+            assert_eq!(states[page], 0, "page {page} holds no message and is untouched");
+        }
+    }
+
+    #[test]
+    fn an_erase_carries_the_capability_container_unchanged_and_does_not_mark_it() {
+        // Pages 0..3 are the UID, BCC, static lock bytes and the Type 2 CC. The
+        // request carries the Tag's image, so page 3 rides along — but its state
+        // stays 0, which is what stops the firmware writing it.
+        let image = recorded_image();
+        let plan = plan_erase(&recorded_token(), &image, DEFAULT_TAG_SELECTOR).expect("erasable");
+        let at = 0x30 + CC_PAGE * PAGE_LEN;
+        assert_eq!(&plan.payload[at..at + PAGE_LEN], &[0xE1, 0x10, 0x3E, 0x00]);
+        assert_eq!(plan.payload[0x430 + CC_PAGE], 0, "the CC page is not written");
+        assert_eq!(image.user_capacity_bytes(), Some(496), "still a Type 2 Tag");
+    }
+
+    #[test]
+    fn erasing_ticket_18s_three_page_message_covers_exactly_those_pages() {
+        // Ticket 18 recorded a 9-byte Text message at pages 4..6 with pages 7..16
+        // zeroed. Erasing it writes three pages, not thirteen.
+        let image = image_with_user_area(&ticket_18_three_page_user_area());
+        assert_eq!(
+            read_ndef_tlv(&image.user_area()),
+            NdefTlv::Message {
+                message: parse_hex("D1 01 54 05 02 65 6E 68 69").unwrap(),
+                tlv_len: 12,
+            }
+        );
+        let plan = plan_erase(&recorded_token(), &image, DEFAULT_TAG_SELECTOR).expect("erasable");
+        assert_eq!(plan.cleared_bytes, 12);
+        assert_eq!(plan.write_pages, vec![4, 5, 6]);
+        assert_eq!(plan.expected_user.len(), 12);
+        assert_eq!(
+            hex(&plan.expected_user),
+            "03 00 FE 00 00 00 00 00 00 00 00 00",
+            "three pages of empty TLV, zero filled"
+        );
+        // The protocol's recorded read-back of this Tag: pages 4..6 were the
+        // message, so the erase's region is exactly those pages.
+        assert_eq!(plan.payload[0x430 + 7], 0);
+    }
+
+    #[test]
+    fn erasing_ticket_18s_thirteen_page_message_covers_thirteen_pages() {
+        // The multi-page case the ticket asks to be recorded: a 47-byte message
+        // occupied pages 4..16, so the erase does too.
+        let image = image_with_user_area(&ticket_18_thirteen_page_user_area());
+        let plan = plan_erase(&recorded_token(), &image, DEFAULT_TAG_SELECTOR).expect("erasable");
+        assert_eq!(plan.cleared_bytes, 50);
+        assert_eq!(plan.write_pages, (4..=16).collect::<Vec<_>>());
+        assert_eq!(plan.expected_user.len(), 52, "50 bytes pads to 13 pages");
+        assert_eq!(hex(&plan.expected_user[..4]), "03 00 FE 00");
+        assert!(plan.expected_user[4..].iter().all(|&b| b == 0));
+        let states = &plan.payload[0x430..0x530];
+        assert_eq!(states.iter().filter(|&&b| b != 0).count(), 13);
+    }
+
+    #[test]
+    fn erasing_a_tag_with_no_ndef_tlv_is_refused_rather_than_formatted() {
+        // Unformatted user memory is not a Tag whose content can be cleared:
+        // writing an empty TLV there would be a format, which erase must not be.
+        let image = image_with_user_area(&[0u8; RECORDED_USER_BYTES]);
+        assert_eq!(
+            plan_erase(&recorded_token(), &image, DEFAULT_TAG_SELECTOR),
+            Err(PlanError::NothingToErase)
+        );
+        // And a terminator with no NDEF TLV before it is the same fact.
+        let image = image_with_user_area(&parse_hex("FE 00 00 00").unwrap());
+        assert_eq!(
+            plan_erase(&recorded_token(), &image, DEFAULT_TAG_SELECTOR),
+            Err(PlanError::NothingToErase)
+        );
+    }
+
+    #[test]
+    fn erasing_a_tag_that_already_holds_an_empty_tlv_is_refused() {
+        // The spike's factory-blank page 4 was `03 00 FE 00`: a Tag with nothing
+        // to lose. Rewriting the same bytes buys nothing on a Tag whose writes
+        // are one-way risks.
+        let image = image_with_user_area(&parse_hex("03 00 FE 00").unwrap());
+        assert_eq!(
+            plan_erase(&recorded_token(), &image, DEFAULT_TAG_SELECTOR),
+            Err(PlanError::AlreadyErased)
+        );
+    }
+
+    #[test]
+    fn erasing_a_tag_whose_message_cannot_be_parsed_is_refused() {
+        // A long-form length that runs past the 496 bytes of user memory: the
+        // TLV cannot be read, so where the old message ends is unknown. An erase
+        // that guessed could leave the tail readable behind a new terminator.
+        let image = image_with_user_area(&parse_hex("03 FF 02 00").unwrap());
+        match plan_erase(&recorded_token(), &image, DEFAULT_TAG_SELECTOR) {
+            Err(PlanError::ContentUnreadable { reason }) => {
+                assert!(reason.contains("512"), "{reason}")
+            }
+            other => panic!("expected a refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn erasing_a_tag_without_a_capability_container_is_refused() {
+        let mut payload = recorded_read_payload();
+        let at = 4 + CC_PAGE * PAGE_LEN;
+        payload[at..at + PAGE_LEN].copy_from_slice(&[0x00; 4]);
+        let image = MemoryImage::from_read_payload(&payload).expect("decode");
+        assert_eq!(
+            plan_erase(&recorded_token(), &image, DEFAULT_TAG_SELECTOR),
+            Err(PlanError::CapacityUnknown)
+        );
+    }
+
+    #[test]
+    fn a_readback_with_an_empty_tlv_and_an_intact_container_is_an_erase() {
+        let before = recorded_image();
+        let after = image_with_user_area(&parse_hex("03 00 FE 00").unwrap());
+        let facts = judge_erase_readback(&before, &after);
+        assert!(facts.content_cleared);
+        assert!(facts.identity_intact, "pages 0..3 are byte identical");
+        assert!(facts.is_erased());
+        assert_eq!(
+            classify_erase(JudgedEvidence::Readback(Some(facts.is_erased()))),
+            WriteOutcome::Erased,
+            "success is 'erased', never 'verified'"
+        );
+    }
+
+    #[test]
+    fn a_readback_that_still_holds_the_message_is_a_failed_erase_on_a_readable_tag() {
+        // Criterion: a failed erase reports failure and leaves the Tag readable.
+        let before = recorded_image();
+        let facts = judge_erase_readback(&before, &before);
+        assert!(!facts.content_cleared);
+        assert!(facts.identity_intact);
+        assert!(!facts.is_erased());
+        assert_eq!(
+            classify_erase(JudgedEvidence::Readback(Some(facts.is_erased()))),
+            WriteOutcome::Failed
+        );
+        // The Tag is still a reading: a UID, a capacity, and the message it kept.
+        let view = TagView::from_read(&TagRead {
+            info: NtagInfo::from_payload(&ready_info_payload()).expect("ready info"),
+            memory: before,
+        });
+        assert_eq!(view.uid, RECORDED_UID);
+        assert_eq!(view.capacity_bytes, Some(496));
+        assert_eq!(view.existing.state, "message");
+        assert_eq!(view.existing.bytes, 17);
+    }
+
+    #[test]
+    fn an_erased_tag_reads_back_as_present_with_no_records() {
+        // The distinction the ticket exists for: an erased Tag is present with an
+        // empty NDEF TLV — not Missing (unformatted) and not a Blank Tag.
+        let after = image_with_user_area(&parse_hex("03 00 FE 00").unwrap());
+        assert_eq!(read_ndef_tlv(&after.user_area()), NdefTlv::Empty);
+        let view = TagView::from_read(&TagRead {
+            info: NtagInfo::from_payload(&ready_info_payload()).expect("ready info"),
+            memory: after,
+        });
+        assert_eq!(view.uid, RECORDED_UID, "the Tag is still there");
+        assert_eq!(view.reported_tag_type, 5);
+        assert_eq!(view.capacity_bytes, Some(496), "the format is unchanged");
+        assert_eq!(view.existing.state, "empty");
+        assert_eq!(view.existing.bytes, 0, "no Records");
+        assert_eq!(view.existing.message_hex, None);
+    }
+
+    #[test]
+    fn a_readback_whose_capability_container_changed_is_not_an_erase() {
+        // Erasing must leave the format alone. If page 3 differs, the operation
+        // is not reported as a success even if the content happened to clear.
+        let before = recorded_image();
+        let mut payload = read_payload_with_user_area(&parse_hex("03 00 FE 00").unwrap());
+        let at = 4 + CC_PAGE * PAGE_LEN;
+        payload[at..at + PAGE_LEN].copy_from_slice(&[0xE1, 0x10, 0x12, 0x00]);
+        let after = MemoryImage::from_read_payload(&payload).expect("decode");
+        let facts = judge_erase_readback(&before, &after);
+        assert!(facts.content_cleared);
+        assert!(!facts.identity_intact, "the CC is not what it was");
+        assert!(!facts.is_erased());
+        assert_eq!(
+            classify_erase(JudgedEvidence::Readback(Some(facts.is_erased()))),
+            WriteOutcome::Failed
+        );
+    }
+
+    #[test]
+    fn a_readback_that_is_truncated_is_not_an_erase() {
+        // Half a TLV is not an empty one: an erase that left `03 11` behind must
+        // not be reported as success.
+        let before = recorded_image();
+        let after = image_with_user_area(&parse_hex("03 11").unwrap());
+        let facts = judge_erase_readback(&before, &after);
+        assert!(!facts.content_cleared);
+        assert!(!facts.is_erased());
+    }
+
+    #[test]
+    fn a_readback_missing_the_identity_pages_is_not_evidence_of_an_intact_tag() {
+        // A reply too short to carry page 0 is not a page 0 that did not change.
+        let before = recorded_image();
+        let after = MemoryImage::from_read_payload(&[0, 0, 0, 0]).expect("status only");
+        let facts = judge_erase_readback(&before, &after);
+        assert!(!facts.identity_intact);
+        assert!(!facts.is_erased());
+    }
+
+    #[test]
+    fn erasing_a_tag_that_cannot_be_read_is_refused_before_any_frame_exists() {
+        // ADR 0001, applied to a clearing write: no reading, no frame.
+        let no_tag = erase_target(Ok(None)).expect_err("nothing latched is a refusal");
+        assert_eq!(no_tag, NO_TAG_ERASE_MESSAGE);
+        assert!(no_tag.contains("nothing to erase"), "{no_tag}");
+
+        let unreadable = erase_target(Err("the reader did not answer".to_string()))
+            .expect_err("an unreadable Tag is a refusal");
+        assert!(unreadable.contains("could not be read"), "{unreadable}");
+        assert!(unreadable.contains("nothing was erased"), "{unreadable}");
+
+        // A Tag that was read is the only thing an erase proceeds with.
+        let read = TagRead {
+            info: NtagInfo::from_payload(&ready_info_payload()).expect("ready info"),
+            memory: recorded_image(),
+        };
+        assert!(erase_target(Ok(Some(read))).is_ok());
+    }
+
+    #[test]
+    fn a_refused_erase_has_no_bytes_to_show() {
+        // The refusal is decided before a payload exists, so nothing can have
+        // been transmitted: an empty `written_hex` is the evidence of that.
+        let report = EraseReport::refused(NO_TAG_ERASE_MESSAGE.to_string());
+        assert_eq!(report.outcome, WriteOutcome::Refused);
+        assert!(report.written_hex.is_empty());
+        assert!(report.erase_pages.is_empty());
+        assert!(!report.outcome.counts_as_confirmed_copy());
+    }
+
+    #[test]
+    fn the_two_0x0083_parsers_are_one() {
+        // Tickets 18 and 19 each built a parser for the same reply. There is now
+        // one: the status-bearing `parse`, and `from_payload` refusing anything
+        // that is not a ready Tag on top of it.
+        let payload = ready_info_payload();
+        let parsed = NtagInfo::parse(&payload).expect("64 bytes is a reply");
+        assert_eq!(parsed.status, INFO_STATUS_READY);
+        assert_eq!(parsed.tag_type, 5);
+        assert_eq!(parsed.uid, RECORDED_UID);
+        assert_eq!(parsed.token, [0xFF; 8]);
+        assert_eq!(NtagInfo::from_payload(&payload), Ok(parsed));
+
+        // Status 1 has no Tag to describe, but the read path needs to see the
+        // status rather than a parse error, which is why `parse` exists.
+        let mut no_tag = payload.clone();
+        no_tag[0..4].copy_from_slice(&INFO_STATUS_NONE.to_le_bytes());
+        let parsed = NtagInfo::parse(&no_tag).expect("a status is not a parse failure");
+        assert_eq!(parsed.status, INFO_STATUS_NONE);
+        assert_eq!(
+            NtagInfo::from_payload(&no_tag),
+            Err(InfoError::Status {
+                status: INFO_STATUS_NONE
+            }),
+            "the dump path still refuses a reply with no Tag"
+        );
     }
 
     // ---- the memory-dump read path (ticket 19) ----
