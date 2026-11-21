@@ -81,9 +81,11 @@ describe("deleting a Draft", () => {
     const prompt = screen.getByText(/Delete\s+permanently\?/);
     expect(prompt.textContent).toContain(DRAFT.name);
     const confirm = screen.getByRole("button", { name: "Delete permanently" });
-    // The control that destroys the Draft reads as destructive, as every other
-    // irreversible action in the app does.
-    expect(confirm.className).toContain("border-err");
+    // The control that destroys the Draft asks for the `danger` variant, rather
+    // than carrying a class that merely looks like it. The variant is read from
+    // the attribute the button renders for it, so a hand-rolled class — including
+    // one that would be almost invisible, `border-err/5` — cannot satisfy this.
+    expect(confirm.dataset.variant).toBe("danger");
 
     await user.click(screen.getByRole("button", { name: "Keep" }));
 

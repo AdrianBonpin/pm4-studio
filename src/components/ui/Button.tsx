@@ -25,7 +25,11 @@ export function Button({ variant = "primary", className = "", children, ...rest 
     danger: "border-err/50 bg-err/10 text-err hover:bg-err/20 hover:border-err/60",
   }[variant];
   return (
-    <button className={`${base} ${styles} ${className}`} {...rest}>
+    // `data-variant` is the variant itself, not a class that resembles it: a test
+    // asking "is this the dangerous control?" gets an answer that only this
+    // component can give, so a hand-rolled button carrying a class that happens
+    // to look the same cannot stand in for one.
+    <button className={`${base} ${styles} ${className}`} data-variant={variant} {...rest}>
       {children}
     </button>
   );
