@@ -61,6 +61,7 @@ export type OutcomeOperation =
   | "hf-read"
   | "library"
   | "write"
+  | "copy"
   | "reset"
   | "clone"
   | "batch"
@@ -373,12 +374,12 @@ export const outcomes = {
    * The field was empty. Silent, and still on screen: silence means nothing
    * happened, not that the app has nothing to say (ADR 0009).
    */
-  nothingLatched(operation: "read" | "hf-read"): Outcome {
+  nothingLatched(operation: "read" | "hf-read" | "copy", detail?: string): Outcome {
     return make(
       "nothing-latched",
       operation,
       "No tag in the field.",
-      { detail: "Hold a tag against the Reader and try again." },
+      { detail: detail ?? "Hold a tag against the Reader and try again." },
     );
   },
 
@@ -528,6 +529,26 @@ export const outcomes = {
       failed: "failed",
     };
     return make(kind[result.outcome], "erase", eraseNotice(result).text);
+  },
+
+  /**
+   * What became of one Copy — a whole NDEF message moved onto another Tag.
+   *
+   * The words are decided by `lib/hfCopy.ts`'s guard, which is the one place that
+   * knows which condition fired and how the read-back compared; this factory only
+   * turns its decision into the outcome that both channels read. Copy is its own
+   * operation and its own name: it is verified by comparing a whole message, never
+   * by comparing an Identity, so it is never a Clone.
+   *
+   * `verified` is one `done` chirp, `unverified` is `needs-you`, and a refusal is
+   * `attention` — the severity table decides that, not a call site.
+   */
+  copy(
+    kind: "verified" | "unverified" | "refused" | "failed",
+    message: string,
+    detail?: string,
+  ): Outcome {
+    return make(kind, "copy", message, detail === undefined ? {} : { detail });
   },
 
   /**
