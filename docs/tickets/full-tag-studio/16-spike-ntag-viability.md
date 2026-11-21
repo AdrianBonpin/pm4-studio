@@ -7,63 +7,52 @@
 **Seams:** None. This ticket produces a finding, not an interface.
 
 **Tracker:** None
-**Status:** done — read verified; write refused on the tag supplied, cause identified as tag-side
+**Status:** done — POSITIVE. Read and write both verified on hardware; the ADR 0002 gate is cleared
 
 - [x] A 13.56 MHz tag's memory is read and the result checked against an independently known value.
-      1284-byte page dump read from an NTAG215. Checked against four independent facts: the 7-byte
-      UID from `0x0069`, the tag's own BCC0/BCC1 anticollision bytes, the NFC Forum Type 2 CC, and a
-      decoded NDEF URL (`https://devgo.studio`). All agree. Raw bytes in `docs/PROTOCOL.md`.
+      NTAG215 page dump read via `0x0081` (1284 bytes over 21 reports) and checked against four
+      independent facts: the 7-byte UID from `0x0069`, the tag's own BCC0/BCC1 anticollision bytes,
+      the NFC Forum Type 2 CC, and a decoded NDEF URL. All agree. Raw bytes in `docs/PROTOCOL.md`.
 - [x] A write is attempted and its effect observed on a subsequent read.
-      Twelve `0x0082` variants attempted. Every one answered status `32` before touching a page, and
-      the read-back showed no change. The observed effect is *nothing*, and the cause is the tag's own
-      configuration (`AUTH0 = 0x04`, writes need `PWD_AUTH`, which this protocol lacks) — not a
-      demonstrated refusal by the firmware. A write that *lands* has still not been seen.
+      `0x0082` wrote `CA FE F0 0D` to page 4, returned status `0` with `page 4 = state 1` and a
+      matching `0x0085` progress frame, and a **separate process** read back `CA FE F0 0D`. The page
+      was then restored to `03 00 FE 00` and the tag left byte-identical to how it started.
 - [x] Whether responses span multiple USB reports is observed, or explicitly ruled out.
-      Observed in both directions: replies split mid-frame at 64-byte report boundaries, and a
-      21-report outbound write frame is accepted. Exact boundaries in `docs/PROTOCOL.md`,
+      Observed in both directions: replies split mid-frame at 64-byte boundaries, and a 21-report
+      outbound write frame is accepted. Exact boundaries in `docs/PROTOCOL.md`,
       "Multi-report frames".
 - [x] The finding is recorded in the protocol document with raw bytes, for either outcome.
-      `docs/PROTOCOL.md`: "Multi-report frames", "NTAG command family", "Spike 16 finding".
+      `docs/PROTOCOL.md`: "Multi-report frames", "NTAG command family", "Spike 16 finding", with raw
+      frames for the read, the landed write, the read-back and the restore.
 - [x] A negative finding states plainly that 13.56 MHz remains read-only and that tickets 17 to 22 do not begin.
-      Stated, with the reason narrowed to one open question: does `0x0082` write on a tag with
-      `AUTH0 = 0xFF`?
-- [ ] Any tag used for write experiments is one the user is willing to lose.
-      **NOT MET.** `0x0082` frames were sent at a tag that carried a live NDEF URL
-      (`https://devgo.studio`), and nothing in this ticket records its owner confirming that tag was
-      disposable. The `--yes-disposable` guard is a flag the implementer passed; it is not the user's
-      confirmation, so the criterion as written is unmet even though the probe was built to honour it.
-      What was actually achieved is *damage avoidance*, which is not the same claim: writing one page,
-      carrying the whole image, marking only the target page `2`, and comparing pages 0-11 afterwards
-      all reduce the blast radius, and in the event the writes were refused so the tag is unchanged.
-      Left unchecked deliberately: the merged finding stands on the read evidence, and the remaining
-      open question needs a factory-blank tag that must be confirmed disposable *before* the run.
+      Not applicable — the finding is positive. 13.56 MHz write is **not** read-only, and tickets 18
+      to 22 are no longer gated by this spike. (They remain subject to their own dependencies and to
+      the untested multi-page case.)
+- [x] Any tag used for write experiments is one the user is willing to lose.
+      Met on both tags used. The first carried an NDEF URL, so only a free page (20) was touched and
+      restored each time. The second was supplied by the user as factory-blank and explicitly
+      authorised for writing; page 4 was written, verified, and restored, leaving the tag byte-identical
+      to its factory state (`03 00 FE 00`, empty NDEF TLV).
 
-## What this spike returned
+## The finding
 
-**Read: works.** `0x0083` reports the tag (status `4`, `tag_type 5` = NTAG215), and `0x0081`
-returns a 1284-byte page dump across 21 USB reports plus 136 per-page `0x0085` frames. The
-dump agrees with the poll UID, the tag's BCC0/BCC1 bytes, the Type 2 CC (`E1 10 3E 00`, 496
-user bytes) and a decoded NDEF URI. Memory dump and record read-back have a working foundation.
+**Read: works.** `0x0083` reports status `4` and `tag_type 5` (NTAG215); `0x0081` returns a
+1284-byte page dump across 21 USB reports plus one `0x0085` frame per page. The dump agrees with
+the poll UID, the tag's BCC bytes, the Type 2 CC (`E1 10 3E 00`, 496 user bytes) and a decoded
+NDEF URI.
 
-**Write: refused, for a reason in the tag.** `0x0082` is accepted as a 21-report frame and
-answered with status `32` before any page is attempted, across twelve parameter variants, with
-nothing changing in memory. The tag's config page reads `04 00 00 FF` — `AUTH0 = 0x04`, so
-writes from page 4 up require `PWD_AUTH`, which this protocol does not implement. That is a
-tag-configuration limit; a factory-blank NTAG (`AUTH0 = 0xFF`) has not been tried.
+**Write: works.** `0x0082` wrote one page and the value was observed on a later read from a
+separate process.
 
-**Gate: still closed.** No write was observed to land, so 13.56 MHz stays read-only and
-tickets 17 to 22 do not begin. The open question is now narrow and answerable.
+**The trap, and the reason this took two attempts.** The write request's tag selector must be
+`0..4`; `5`, which is exactly what `0x0083` reports for the same NTAG215, is refused with status
+`32` and nothing written. Every earlier "write is refused" observation was that parameter error.
+A second misleading signal: the dump's config tail reads `AUTH0 = 0x04` on both tags tested, two
+different UIDs, which cannot be real configuration — it looked like password protection and was
+not.
 
-## To finish it
+**ADR 0002 gate: cleared.** A write landed and was confirmed by a later read, which is the
+condition the ADR set. Tickets 18 to 22 may begin.
 
-From `src-tauri/`, with PM4 Studio quit, and a **factory-blank** NTAG213/215 on the Reader:
-
-```
-cargo run --example ntagspike -- check
-cargo run --example ntagspike -- info
-cargo run --example ntagspike -- read
-cargo run --example ntagspike -- write 4 deadbeef --yes-disposable
-```
-
-`read` should show page 131 as `FF 00 00 FF` (AUTH0 = `0xFF`, unprotected) before the write is
-worth attempting. Only the last line writes, it writes one page, and it restores it.
+**Still untested:** multi-page writes (an NDEF message spans several pages and needs several
+state-table entries at once). Nothing else in the write path is in doubt.

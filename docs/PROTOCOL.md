@@ -341,17 +341,17 @@ Generate it the vendor's way.
 
 ## NTAG command family — VERIFIED (spike 16, 2026-11-21)
 
-Read works end to end. Write is refused by the firmware on the tag that was
-available, for a reason that is visible in that tag's own configuration.
+Read and write both work end to end on hardware. A page was written and then
+observed on a later read from a separate process.
 
 Status is a little-endian `u32` at payload offset 0 of the reply.
 
 | Status | Meaning |
 |---|---|
-| `0` | read completed |
+| `0` | success — read completed, or write carried out |
 | `1` | nothing to operate on — no NTAG latched |
 | `4` | NTAG ready, info complete |
-| `32` | write refused (see the write section) |
+| `32` | request refused for a bad parameter (see the write section) |
 
 ### `0x0083` — NTAG info — VERIFIED
 
@@ -367,7 +367,7 @@ Reply with a tag present, 2 reports as shown above, `LEN 0x40`:
 | Payload offset | Meaning |
 |---|---|
 | 0..4 | status `u32` LE — `04 00 00 00` = ready, `01 00 00 00` = no tag |
-| 4..8 | tag type `u32` LE — `5` = NTAG215, `0` when no tag |
+| 4..8 | tag type `u32` LE — `5` = NTAG215, `0` when no tag. **Not** the value `0x0082` wants; see the write section |
 | 9..0x29 | 32 stable bytes, purpose unknown; identical across sessions, so not a session token |
 | 0x29 | `01`, purpose unknown |
 | 0x2A..0x31 | the tag's **7-byte UID**, low byte first: `04 43 8A 01 22 09 03` |
@@ -448,60 +448,77 @@ page 133: 00 00 00 00     PWD
 page 134: 00 00 00 00     PACK
 ```
 
-### `0x0082` — NTAG write — REFUSED on the tag tested (status 32)
+### `0x0082` — NTAG write — CONFIRMED (one page, verified by read-back)
 
 Request payload is exactly **1328 bytes** (`0x530`), sent as 21 reports:
 
 | Offset | Meaning |
 |---|---|
 | 0..8 | session token from `0x0083` (`FF`×8 on this firmware) |
-| 8..12 | tag type `u32` LE |
+| 8..12 | **write-path tag selector**, `u32` LE — must be `0..4`; see the warning below |
 | 12..16 | `01 00 00 00` — flag |
-| 0x10..0x30 | 32 bytes, purpose unknown; upstream leaves them zero |
+| 0x10..0x30 | 32 bytes, purpose unknown; zero works |
 | 0x30..0x430 | page data, 256 pages × 4 bytes |
 | 0x430..0x530 | page states — `2` = write this page, `1` = ok, `4` = failed |
 
-The firmware answers, `LEN 0x104` (260) over 5 reports:
+The data table carries the tag's **whole** current image, not just the pages being
+written; the state table is what selects pages. Only pages marked `2` are changed.
+
+**Working write of page 4 on a factory-blank NTAG215 (UID
+`04 43 7B 01 CC 09 03`).** Request header, then the reply, then the progress
+frame, all captured verbatim:
 
 ```
-IN   55 00 82 01 04 20 00 00 00 E9 FF FF FF 00 00 00 00 80 00 00 00 …
-     status dword = 0x20 = 32
+OUT  55 00 82 05 30 FF FF FF FF FF FF FF FF 03 00 00 00 01 00 00 00 …   21 reports
+     0x30 + 4*4 = CA FE F0 0D        (page 4, the value to write)
+     0x430 + 4  = 02                 (state: write page 4)
+IN   55 00 82 01 04 00 00 00 00 00 00 00 00 01 00 00 00 …                5 reports
+     status dword = 0, page-state table entry page 4 = 0x01
+IN   55 00 85 00 06 04 01 CA FE F0 0D 33 CC                              progress frame
 ```
 
-`32` arrives with **no `0x0085` page frames at all**, and a read-back shows the
-target page unchanged. Everything past the status dword is uninitialised firmware
-memory — the 256 "page state" bytes are random and must not be read as states.
-The refusal is immediate and happens before any page is attempted.
+Read-back, in a **separate process**, i.e. a fresh session and a fresh token:
 
-Twelve variants were tried, all answered `32`:
+```
+IN   55 00 85 00 06 04 01 CA FE F0 0D 33 CC      page 4 = CA FE F0 0D
+```
 
-| Varied | Values tried |
+The same frame writes the page back to its previous contents, and the tag is left
+byte-identical to how it started (`03 00 FE 00`, an empty NDEF TLV):
+
+```
+IN   55 00 85 00 06 04 01 03 00 FE 00 07 F8      page 4 = 03 00 FE 00, status 0
+```
+
+**The tag selector is not the value `0x0083` reports.** This is the single trap in
+the command, and it cost a false negative the first time round:
+
+| Value at payload 8..12 | Result |
 |---|---|
-| flag at 12..16 | `0`, `1`, `20` |
-| page state byte | `0`, `1`, `2`, `4` |
-| settle after read | 400 ms |
-| outbound report gap | 5 ms (answered), 64 ms (no reply) |
-| 32-byte field at 0x10..0x30 | zeros, and the info reply's 32-byte block from offsets 8 and 9 |
-| `0x0083` request | page index 0, page index 20, count 2, flag 0 |
-| checksum | `len & 0xFF` (answered), full length (no reply) |
+| `0`, `1`, `2`, `3`, `4` | write accepted, status `0`, page written |
+| `5` (what `0x0083` reports for this NTAG215) | **status `32`, nothing written** |
+| `6`, `7` | status `32`, nothing written |
 
-**Why it is refused, and why that is not the end of the story.** The tag's own
-configuration says writes from page 4 upward need authentication:
+Values 3 and 4 produce byte-identical replies for a page-4 write, so what the
+field selects is not observable from a single-page write — only that the accepted
+range is `0..4` and that `0x0083`'s numbering does not carry over into it. Do not
+copy the info reply's tag type into the write request.
 
-```
-page 131 = 04 00 00 FF   ->  AUTH0 = 0x04
-page 133 = 00 00 00 00   ->  PWD   = 00000000
-```
+**Status `32` means refused, and a refusal is distinguishable without the status
+dword.** A refused write returns 256 bytes of uninitialised memory where the page
+state table belongs — random values on almost every page — and no `0x0085` page
+frames at all. An accepted write returns a clean table with only the requested
+pages set to `1`, plus one `0x0085` frame per page.
 
-`AUTH0 = 0x04` with `ACCESS = 0x00` (write protection only) means every page from
-4 up refuses a write until `PWD_AUTH` succeeds. This protocol has **no
-authentication command** — the same limit that rules out MIFARE Classic sectors.
-So on this tag the firmware cannot legitimately write anything: pages 0..3 are the
-always-protected header and everything from page 4 needs a password. A
-factory-blank NTAG has `AUTH0 = 0xFF` (no protection), and that case is **untested**.
+Values that were tried and do **not** matter, established while the selector was
+still wrong: the flag dword (`0`, `1`, `20`), the page-state byte (`0`, `1`, `2`,
+`4`), a 400 ms or 1500 ms settle after the read, echoing the info reply's 32-byte
+block into `0x10..0x30`, the `0x0083` request's page index and flags, and closing
+the read cycle first with the `0x0051` payload-`00` variant. Only the selector
+mattered.
 
-Note that the write handler does run and does look at the field: with no tag in
-the field the same frame returns status `1`, not `32`.
+Only a **single page** was written here. Writing a whole NDEF message across
+several pages, and the multi-page state table that goes with it, is untested.
 
 ### `0x0084` — format — NOT ATTEMPTED
 
@@ -538,70 +555,70 @@ no-tag payloads contain. ATQA/SAK offsets therefore remain **unconfirmed** for
 
 1. **ATQA/SAK offsets** for the HF poll tail. A latched NTAG215 poll was captured
    (above) and its tail does not resemble ATQA/SAK, so ticket 12's capture still
-   has to settle where those fields are — or that they are not transmitted. Until
-   it does, the app decodes the hypothesised layout in `src/lib/hfDecoder.ts` and
-   marks every decoded value provisional; a reply whose pair does not resolve
-   falls back to raw bytes.
-2. **Writing to a factory-blank NTAG.** The one tag available was password
-   protected (`AUTH0 = 0x04`), so the write path was refused with status `32`
-   before any page was attempted. Whether `0x0082` writes on an unprotected tag is
-   the single open question in the NTAG family.
-3. **The 32-byte field at info offset 9..0x29** and its echo area at write
-   `0x10..0x30`. Stable per tag, unknown purpose.
-4. **`C8 42`** meaning in the LF read payload.
-5. **What sets the T5577 lock bit.** One write locked a chip; another did not.
+   has to settle where those fields are — or that they are not transmitted.
+2. **Multi-page writes.** One page was written and verified. An NDEF message spans
+   several pages and needs several state-table entries set at once; that shape has
+   not been exercised.
+3. **What the write-path tag selector means.** `0x0082` accepts `0..4` and rejects
+   `5` and above, while `0x0083` reports `5` for the same NTAG215. Values 3 and 4
+   are indistinguishable on a single-page write, so the selector's meaning is
+   unknown — only its accepted range.
+4. **The 32-byte field at info offset 9..0x29** and its echo area at write
+   `0x10..0x30`. Stable per tag, unknown purpose, not required for a write.
+5. **Pages ≥ 130 do not look like real configuration.** Both tags tested — two
+   different UIDs — returned the identical block
+   `00 00 00 BD / 04 00 00 FF / 00 05 00 00 / 00 00 00 00`, including for
+   `AUTH0`, which cannot plausibly be identical on two different chips. Treat the
+   dump's tail as unreliable until a known-good reference tag settles it. It is
+   certainly **not** a write blocker: `AUTH0` read `0x04` on the tag that wrote
+   successfully.
+6. **`C8 42`** meaning in the LF read payload.
+7. **What sets the T5577 lock bit.** One write locked a chip; another did not.
    Understanding which payloads are safe would remove the main hazard of the
    `0x0073` path.
-6. **The trailing `0x01`** in the `0x0054` version payload, and whether the
-   revision string ever carries a second component.
 
 Solved: **125 kHz write/clone** — command `0x0073`, see above.
 Solved: **multi-report reassembly** — verified in both directions, with real
 boundaries, see "Multi-report frames".
 Solved: **NTAG read** — `0x0081`, verified against the poll UID, the tag's own
 BCC bytes, the Type 2 CC and a decoded NDEF record.
+Solved: **NTAG write** — `0x0082`, one page written and read back from a separate
+process, see the write section.
 
 ## Spike 16 finding — NTAG viability
 
 Probe: `src-tauri/examples/ntagspike.rs` (`check`, `wait`, `info`, `read`,
 `write`, `transport`). Throwaway, per ADR 0002 — not part of the shipping path.
 
-**Reading 13.56 MHz memory works.** `0x0081` returns a full 1284-byte page dump
-across 21 reports, and its contents agree with four things they were not derived
-from: the 7-byte UID from the independent `0x0069` poll, the tag's two ISO14443-A
-anticollision BCC bytes, the NFC Forum Type 2 Capability Container, and a
-human-readable NDEF URL. The tag on the Reader was identified as an **NTAG215**
-with 496 bytes of user memory. Memory dump, NDEF read-back and page-level access
-are all viable — tickets 19 and 22 have a working foundation.
+**The question was whether this Reader can read and write NTAG memory. It can do
+both, and both were observed on hardware.**
 
-**Writing memory is refused on the tag tested.** `0x0082` is accepted as a frame
-and answered with status `32` before any page is attempted, across twelve
-parameter variants, and nothing in memory changes. The cause is visible in the
-tag: `AUTH0 = 0x04` with `PWD = 00000000`, i.e. writes to every user page require
-a `PWD_AUTH` that this protocol does not implement. **That is a tag-configuration
-limit, not a demonstrated hardware refusal.** A factory-blank NTAG (`AUTH0 =
-0xFF`) has never been tried here.
+**Read — verified.** `0x0081` returns a 1284-byte page dump across 21 reports,
+preceded by one `0x0085` frame per page, and the contents agree with four things
+they were not derived from: the 7-byte UID from the independent `0x0069` poll, the
+tag's two ISO14443-A anticollision BCC bytes, the NFC Forum Type 2 Capability
+Container, and a decoded NDEF URI. The tag read was an NTAG215 with 496 bytes of
+user memory.
 
-**Therefore the ADR 0002 gate stays closed.** No write was observed to land, so
-13.56 MHz stays read-only and tickets 17 to 22 do not begin. What this spike
-changed is the *reason*: reads are proven and the transport is proven, so the
-gate now rests on one narrow, answerable question — does `0x0082` write on an
-unprotected tag? — rather than on whether the command family exists at all.
+**Write — verified.** `0x0082` wrote `CA FE F0 0D` into page 4 of a factory-blank
+NTAG215 and reported `status 0` with a single `page 4 = state 1` entry and a
+matching `0x0085` progress frame. A subsequent read from a **separate process**
+returned `CA FE F0 0D` on page 4. The same command then restored the page to its
+original `03 00 FE 00`, and the tag finished byte-identical to how it started.
 
-**To answer it** — with PM4 Studio quit, place a **factory-blank NTAG213/215**
-(never written, `AUTH0 = 0xFF`) on the Reader and run, from `src-tauri/`:
+**Two dead ends worth remembering, because both produced convincing false
+negatives.** The first tag available was password-protected as far as its config
+dump claimed (`AUTH0 = 0x04`), and every write was refused with `status 32` — that
+looked like a hardware limit. It was not: that same `AUTH0` byte appears on two
+different tags, so the dump's tail is not real configuration. The actual blocker
+was the **write-path tag selector**: `0x0082` refuses the tag type `5` that
+`0x0083` reports, and accepts `0..4` instead. With the selector corrected, the
+write landed on the very same class of tag.
 
-```
-cargo run --example ntagspike -- check    # validity 0x01 plus a 7-byte UID
-cargo run --example ntagspike -- info     # status 4, tag_type 3/4/5/6
-cargo run --example ntagspike -- read     # page table; check page 131 reads FF 00 00 FF
-cargo run --example ntagspike -- write 4 deadbeef --yes-disposable
-```
-
-The write targets one page (four bytes), carries the tag's whole current image so
-no other page can change, and restores the page afterwards. Only run it on a tag
-its owner is willing to lose.
-Contributions with real captures welcome.
+**The ADR 0002 gate is therefore cleared.** A write was observed to land and was
+confirmed by a later read, which is exactly what the ADR required. Slices that
+depend on writing 13.56 MHz tags — tickets 18 to 22 — may begin, subject to the
+multi-page work noted in the open problems.
 
 ## Legal
 

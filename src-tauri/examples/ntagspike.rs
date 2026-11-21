@@ -21,6 +21,13 @@
 //!   cargo run --example ntagspike -- read
 //!   cargo run --example ntagspike -- write <page> <4-byte-hex> --yes-disposable
 //!
+//! The write defaults to tag selector `3`. `0x0083` reports `5` for an NTAG215
+//! and `0x0082` refuses `5` with status 32 while accepting `0..4` — that
+//! mismatch is the trap this probe exists to document. Override with
+//! `--tag-type N`; other knobs (`--flag`, `--state`, `--gap-ms`, `--delay-ms`,
+//! `--echo-block`, `--info-arg`, `--end-session`, `--full-checksum`,
+//! `--no-restore`) exist to replay the variants that did not matter.
+//!
 //! `check` is read-only and safe with any tag. `info` and `read` are read-only.
 //! `write` DESTROYS the contents of the tag on the reader and refuses to run
 //! without `--yes-disposable`.
@@ -664,6 +671,14 @@ struct WriteVariant {
     gap_ms: u64,
     /// Override for the 6-byte 0x0083 request sent before the write.
     info_arg: Option<[u8; 6]>,
+    /// Send the `0x0051` payload-`00` variant after the read, to close the read
+    /// cycle before writing (upstream notes this variant is used at the end of a
+    /// read cycle).
+    end_session: bool,
+    /// Override the tag type byte sent in the write request.
+    tag_type: Option<u32>,
+    /// Put the written page back to its previous bytes afterwards.
+    restore: bool,
 }
 
 impl Default for WriteVariant {
@@ -676,6 +691,13 @@ impl Default for WriteVariant {
             full_checksum: false,
             gap_ms: 5,
             info_arg: None,
+            end_session: false,
+            // `0x0083` reports `5` for an NTAG215 and the write path REFUSES
+            // that value with status 32. It accepts `0..4`; `3` is confirmed to
+            // write. This default exists so a rerun does not reproduce the
+            // false negative this spike hit.
+            tag_type: Some(3),
+            restore: true,
         }
     }
 }
@@ -700,6 +722,7 @@ fn send_write(
             println!("  echoing info payload[{off}..{}] into 0x10..0x30", off + 0x20);
         }
     }
+    payload[8..12].copy_from_slice(&v.tag_type.unwrap_or(tag_type).to_le_bytes());
     let n = image.len().min(0x400);
     payload[0x30..0x30 + n].copy_from_slice(&image[..n]);
     payload[0x30 + page as usize * 4..0x30 + page as usize * 4 + 4].copy_from_slice(data);
@@ -772,8 +795,9 @@ fn send_write(
 fn cmd_write(d: &mut Dev, page: u8, data: [u8; 4], v: &WriteVariant) -> Result<(), String> {
     println!("== NTAG write (0x0082) — WRITES ONE PAGE ==");
     println!(
-        "  target page {page}, bytes {}; variant flag={} state={} delay={}ms echo_block={:?} full_checksum={} gap={}ms info_arg={:?}",
-        hex(&data), v.flag, v.state, v.delay_ms, v.echo_block, v.full_checksum, v.gap_ms, v.info_arg
+        "  target page {page}, bytes {}; variant flag={} state={} delay={}ms echo_block={:?} full_checksum={} gap={}ms info_arg={:?} end_session={} tag_type={:?}",
+        hex(&data), v.flag, v.state, v.delay_ms, v.echo_block, v.full_checksum,
+        v.gap_ms, v.info_arg, v.end_session, v.tag_type
     );
     wake(d)?;
     let uid = poll_uid(d)?;
@@ -795,6 +819,11 @@ fn cmd_write(d: &mut Dev, page: u8, data: [u8; 4], v: &WriteVariant) -> Result<(
     }
     let head_before = head_of(&before_dump);
 
+    if v.end_session {
+        println!("\n-- closing the read cycle: 0x0051 payload 00 --");
+        d.send(CMD_WAKE, &[0x00])?;
+        let _ = d.collect(600, &|f| f.cmd == CMD_WAKE);
+    }
     sleep(Duration::from_millis(v.delay_ms));
     println!("\n-- write --");
     send_write(
@@ -829,6 +858,11 @@ fn cmd_write(d: &mut Dev, page: u8, data: [u8; 4], v: &WriteVariant) -> Result<(
         if head_intact { "yes" } else { "NO — CONTENT CHANGED" }
     );
 
+    if !v.restore {
+        println!("\n  --no-restore: leaving page {page} at {}", hex(&data));
+        return Ok(());
+    }
+
     // Restore: put the page back to the bytes it held before, so the tag is left
     // exactly as it was found.
     println!("\n-- restore page {page} to {} --", hex(&before));
@@ -847,13 +881,15 @@ fn cmd_write(d: &mut Dev, page: u8, data: [u8; 4], v: &WriteVariant) -> Result<(
     println!("\n-- read-back after restore --");
     sleep(Duration::from_millis(400));
     wake(d)?;
+    let mut restored_ok = false;
     match info_and_read(d, uid.as_deref())? {
         Some((_, _, _, final_dump, _)) => {
             let final_page = page_of(&final_dump, page).unwrap_or_default();
             println!("  page {page} finally        : {}", hex(&final_page));
+            restored_ok = final_page == before;
             println!(
                 "  page restored to original : {}",
-                if final_page == before { "YES" } else { "NO" }
+                if restored_ok { "YES" } else { "NO" }
             );
             println!(
                 "  pages 0-11 (UID/CC/NDEF) unchanged : {}",
@@ -865,7 +901,11 @@ fn cmd_write(d: &mut Dev, page: u8, data: [u8; 4], v: &WriteVariant) -> Result<(
     println!(
         "\n  RESULT: write {} ; tag left {}",
         if observed { "OBSERVED on a later read" } else { "NOT observed" },
-        if observed { "as found" } else { "in an unknown state — re-read it" }
+        if restored_ok {
+            "as found"
+        } else {
+            "in an unknown state — re-read it"
+        }
     );
     Ok(())
 }
@@ -946,6 +986,18 @@ fn main() {
                     }
                     "--gap-ms" => {
                         v.gap_ms = args.get(i + 1).and_then(|x| x.parse().ok()).unwrap_or(5);
+                        i += 2;
+                    }
+                    "--end-session" => {
+                        v.end_session = true;
+                        i += 1;
+                    }
+                    "--no-restore" => {
+                        v.restore = false;
+                        i += 1;
+                    }
+                    "--tag-type" => {
+                        v.tag_type = args.get(i + 1).and_then(|x| x.parse().ok());
                         i += 2;
                     }
                     "--info-arg" => {
