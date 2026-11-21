@@ -20,7 +20,7 @@ webview behaviour — the app runs in WKWebView and the harness simulates a DOM,
 proves wiring rather than fidelity.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/4
-**Status:** ready
+**Status:** done
 
 **Finding (2026-11-22, during implementation).** The eighth gate does not exist. The
 Draft delete control removes a Draft on the first click, with no confirmation and no
@@ -28,13 +28,51 @@ way back, so there was nothing to dismiss and nothing to prove. The implementer
 reported this rather than inventing a gate to satisfy the count. Ticket 06 adds the
 confirmation; this ticket proves the seven gates that are actually in the app.
 
-- [ ] Each of the seven gates that exist today has a proof that dismissing it leaves
+- [x] Each of the seven gates that exist today has a proof that dismissing it leaves
       the target untouched. (Draft delete had no confirmation to dismiss — see ticket 06,
       which adds one.)
-- [ ] Each of the eight gates has a proof that confirming performs the action.
-- [ ] Removing a confirmation from its control fails at least one test.
-- [ ] Components render with no Reader attached and no backend running.
-- [ ] Backend calls are stubbed where the interface invokes them, not by replacing
+- [x] Each of the eight gates has a proof that confirming performs the action.
+- [x] Removing a confirmation from its control fails at least one test.
+- [x] Components render with no Reader attached and no backend running.
+- [x] Backend calls are stubbed where the interface invokes them, not by replacing
       internal modules.
-- [ ] The whole suite still runs as one command, with no browser download.
-- [ ] The manual hardware checklist is unchanged; nothing here claims to replace it.
+- [x] The whole suite still runs as one command, with no browser download.
+- [x] The manual hardware checklist is unchanged; nothing here claims to replace it.
+
+## Outcome
+
+Seven gates carry the pair of proofs. Draft delete carries the confirming half only,
+because there is no confirmation to dismiss; that gate is ticket 06.
+
+| Gate | Dismissal proof | Confirmation proof |
+| :--- | :--- | :--- |
+| 1 Snapshot delete | `LibraryPage.test.tsx` "keeping the Snapshot removes nothing" | "removes that Snapshot" |
+| 2 Draft delete | — (no gate exists; ticket 06) | "removes that Draft through the store" |
+| 3 clone | `CloneWizard.test.tsx` "cancelling writes nothing" | "writes the Identity that was read" |
+| 4 author | `AuthorIdentity.test.tsx` "going back writes nothing" | "writes the previewed Identity" |
+| 5 blank | `BlankTag.test.tsx` "keeping the tag as it is blanks nothing" | "blanks the Identity that was read" |
+| 6 write a Draft | `WriteDraftToTag.test.tsx` "cancelling writes nothing" | "writes the Draft's message" |
+| 7 erase | `EraseNdef.test.tsx` "keeping the content erases nothing" | "erases when the confirmation is confirmed" |
+| 8 set password | `PasswordProtection.test.tsx` "cannot be asked for before the consequence is acknowledged" | "sends the acknowledged request" |
+
+The password gate is an acknowledgement rather than a dialog: the request control
+cannot be pressed until the warning is ticked, so its dismissal proof is the disabled
+control sending nothing. Both halves are asserted, and both go red when the
+gate is removed.
+
+**Stubbing is at the invoke boundary.** `src/test/dom.tsx` replaces
+`window.__TAURI_INTERNALS__.invoke` — the point where the webview hands a command to
+Rust, and the only thing `@tauri-apps/api/core`'s `invoke` delegates to. Every module
+between a control and the backend runs unmodified, and no `vi.mock` appears in any
+test here. Commands with no scripted answer reject, so a test cannot pass by accident.
+
+**Mutation-checked.** Three gates were broken and their test files went red, then
+reverted: the Snapshot row's trash control wired straight to `remove` (both
+`LibraryPage` tests fail), the password acknowledgement gate removed from the control,
+and the Blank dismissal button wired to `lf_blank` instead of `reset`. An earlier test
+that read two callers' source as text to prove they share a component was deleted and
+replaced by driving the real confirmation in `AuthorIdentity`/`CloneWizard`; that is
+why the net gain is 14 tests rather than 15.
+
+**Suite:** `bun run test` 32 files / 417 tests; `cargo test` 349. Both green, no
+browser launched or downloaded.

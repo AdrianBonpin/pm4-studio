@@ -1,16 +1,11 @@
-/// <reference types="vite/client" />
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { renderToStaticMarkup } from "react-dom/server";
+import { render } from "@testing-library/react";
 import {
   ReplacementConfirmation,
   replacementActionVariant,
   replacementTone,
 } from "./ReplacementConfirmation";
-// The two callers as text. "Both call sites render the one component" is a fact
-// about their source rather than about any single render — and the clone path's
-// whole defect was that it did not call it.
-import authorSource from "./AuthorIdentity.tsx?raw";
-import cloneSource from "./CloneWizard.tsx?raw";
 import { replacementConfirmation, type WriteTarget } from "../lib/replacement";
 import type { LfCard } from "../types";
 
@@ -25,8 +20,15 @@ import type { LfCard } from "../types";
  * destroyed — read as the milder, routine treatment, while the author path got
  * the destructive one. Inconsistent is worse than absent: a user who is shown the
  * calm version of a destructive write learns the alarm means nothing. These tests
- * hold both paths to the same rendering, and hold the styling to the flag rather
- * than to the path.
+ * hold the rendering to the flag rather than to the caller.
+ *
+ * That both paths really render *this* component, rather than a copy of it, is
+ * proven by driving them: `AuthorIdentity.test.tsx` and `CloneWizard.test.tsx`
+ * reach the shared confirmation's own button and read its words from
+ * `lib/replacement.ts`. An earlier test here read the two callers as text with
+ * `?raw` and asserted they contained `<ReplacementConfirmation` — a fact about
+ * source files standing in for a fact about the interface, which is what this
+ * work replaced.
  */
 
 const TARGET: WriteTarget = {
@@ -64,8 +66,10 @@ const BLANK = replacementConfirmation(TARGET, { kind: "no-identity" });
 /** The Tag already carries what would be written. */
 const ALREADY = replacementConfirmation(TARGET, { kind: "identified", card: SAME });
 
-const render = (confirmation: typeof DESTRUCTIVE) =>
-  renderToStaticMarkup(<ReplacementConfirmation confirmation={confirmation} />);
+/** The markup this component renders for one confirmation. */
+function markupOf(confirmation: typeof DESTRUCTIVE): string {
+  return render(<ReplacementConfirmation confirmation={confirmation} />).container.innerHTML;
+}
 
 describe("the shared write confirmation", () => {
   it("gives the same visual treatment for the same case, whichever path showed it", () => {
@@ -77,7 +81,7 @@ describe("the shared write confirmation", () => {
   });
 
   it("reads as destructive when an Identity is about to be destroyed", () => {
-    const markup = render(DESTRUCTIVE);
+    const markup = markupOf(DESTRUCTIVE);
 
     expect(DESTRUCTIVE.destructive).toBe(true);
     expect(markup).toContain("border-warn");
@@ -91,7 +95,7 @@ describe("the shared write confirmation", () => {
 
   it("does not cry destructive when nothing is known to be destroyed", () => {
     for (const calm of [BLANK, ALREADY]) {
-      const markup = render(calm);
+      const markup = markupOf(calm);
 
       expect(calm.destructive).toBe(false);
       expect(markup).not.toContain("warn");
@@ -103,35 +107,13 @@ describe("the shared write confirmation", () => {
   });
 
   it("names what is written and what it replaces, from the confirmation alone", () => {
-    const markup = render(DESTRUCTIVE);
+    const markup = markupOf(DESTRUCTIVE);
 
     expect(markup).toContain(TARGET.id);
     expect(markup).toContain(DESTRUCTIVE.title);
     for (const fact of DESTRUCTIVE.facts) {
       expect(markup).toContain(fact.title);
       expect(markup).toContain(fact.detail);
-    }
-  });
-});
-
-describe("the two write paths", () => {
-  // Both paths must render the component rather than their own copy of it. This
-  // is read from the source because the drift it prevents was a source-level
-  // drift: one file kept a second, staler rendering of the same block.
-  const CALLERS = [
-    ["AuthorIdentity.tsx", authorSource],
-    ["CloneWizard.tsx", cloneSource],
-  ] as const;
-
-  it("both render the shared component, and neither hand-rolls the frame", () => {
-    for (const [file, source] of CALLERS) {
-      expect(source, file).toContain("<ReplacementConfirmation");
-      expect(source, file).toContain("replacementActionVariant");
-      // The destructive frame lives in the component only.
-      expect(source, file).not.toContain("bg-warn/5");
-      expect(source, file).not.toContain("border-warn");
-      // And neither path decides a danger variant for itself.
-      expect(source, file).not.toContain('"danger" : "primary"');
     }
   });
 });
