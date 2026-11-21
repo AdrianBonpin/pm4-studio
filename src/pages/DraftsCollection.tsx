@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { Notice } from "../components/ui/Notice";
 import { Select } from "../components/ui/Select";
 import { Section } from "../components/Section";
 import { LibraryProblemBanner } from "../components/LibraryProblemBanner";
@@ -150,9 +151,9 @@ export function DraftsCollection({
       {drafts.problem && <LibraryProblemBanner problem={drafts.problem} />}
 
       {drafts.error && (
-        <p className="mb-4 border-l-2 border-err bg-err/5 px-3 py-2 text-xs leading-relaxed text-err">
-          {drafts.error}
-        </p>
+        <Notice tone="err" label="Failed" className="mb-4">
+          <p className="text-xs leading-relaxed text-text-muted">{drafts.error}</p>
+        </Notice>
       )}
 
       {/* Naming a new Draft: one field and its button, in one row that fits the

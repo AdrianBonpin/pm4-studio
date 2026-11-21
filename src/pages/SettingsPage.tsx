@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "../components/ui/Button";
+import { Notice } from "../components/ui/Notice";
 import { Segmented, type SegmentedOption } from "../components/ui/Segmented";
 import { ClearSavedData } from "../components/ClearSavedData";
 import { ReaderLimits } from "../components/ReaderLimits";
@@ -368,7 +369,7 @@ function DataGroup({ library }: { library: LibraryState }) {
           )}
 
           {importPreview && importPath && (
-            <div className="flex flex-col gap-3 border-l-2 border-accent bg-accent/5 px-3 py-3">
+            <Notice tone="pending" label="Pending">
               <p className="text-sm leading-relaxed text-text">
                 {describeImportPreview(importPreview)}
               </p>
@@ -391,7 +392,7 @@ function DataGroup({ library }: { library: LibraryState }) {
                   Cancel
                 </Button>
               </div>
-            </div>
+            </Notice>
           )}
 
           {fileNote && (

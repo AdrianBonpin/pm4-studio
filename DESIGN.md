@@ -297,6 +297,26 @@ The signature component: one large Space Mono value in
 11px muted uppercase. When there is no value it is a muted sentence instead. It
 never animates and never abbreviates a number.
 
+### Notices
+
+A **notice** is a condition the user is in: a library file that cannot be written
+to, a migration warning, an invalid Record, a pending confirmation. It stays on
+the page and stays true until something changes it, and it is not a **Toast**,
+which announces an event and leaves. `src/components/ui/Notice.tsx` is the one
+rendering of it.
+
+The box is the whole box: `rounded-lg`, a border on all four sides at 40-50% of
+the hue, and a 10% tint of the same hue. **Two channels say the severity, and
+neither is colour**: a leading word in the tone's ink (required, so a notice cannot
+be drawn without one) and an icon whose *shape* differs per tone — octagon for
+`err`, triangle for `warn`, tick for `ok`, circle for `muted`, clock for
+`pending`. A user who cannot distinguish the hues still reads which case they are
+in, and so does a screenshot with the edges cropped off.
+
+A notice is not a live region unless it reports something that just happened and
+asks for `role`. A permanent condition is not an event: it is silent. A condition
+that could be dismissed keeps its dismiss control, named for what it dismisses.
+
 ## Do's and Don'ts
 
 ### Do:
@@ -313,8 +333,9 @@ never animates and never abbreviates a number.
 - Don't nest cards, or wrap a section in a container it does not need.
 - Don't add a badge, a chip or an icon that carries no meaning.
 - Don't write a sentence that restates the heading or the control above it.
-- Don't announce a message only with a coloured bar down one side of a box: the
-  message carries its own words and, where it helps, its own symbol.
+- Don't announce a message only with a coloured bar down one side of a box: a
+  notice is a whole box whose severity is a word and a shape before it is a hue
+  (see **Notices** above).
 - Don't introduce a shadow, a gradient, a glow, a second accent or a light theme.
 - Don't set body text below 12px, or set a paragraph in monospace.
 - Don't claim knowledge the hardware does not have — no guessed family names, no

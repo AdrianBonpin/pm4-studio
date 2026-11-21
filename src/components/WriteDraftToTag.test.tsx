@@ -107,3 +107,38 @@ describe("writing a Draft to a Tag", () => {
     });
   });
 });
+
+/**
+ * Ticket 18: the refusal is a notice that keeps its words and its dismiss control.
+ *
+ * It used to be a red rule down the left edge of a box with a "Dismiss" button in
+ * it. The rule is gone; the words, the severity and the way out of the state are
+ * not, and this drives the control rather than reading the markup for it.
+ */
+describe("a message that does not fit", () => {
+  const REFUSAL = "the message does not fit this tag's 144 bytes";
+
+  it("says so in words, and is dismissed from the notice itself", async () => {
+    const backend = fakeBackend({
+      hf_ndef_preview: () => ({ ...PREVIEW, fits: false, refusal: REFUSAL }),
+    });
+    const { user, container } = renderUi(<WriteDraftToTag records={DRAFT.records} connected />);
+
+    await user.click(screen.getByRole("button", { name: "Check tag" }));
+
+    // The severity in words, not only in hue, and the store's reason beneath it.
+    expect(await screen.findByText("Not written")).toBeTruthy();
+    expect(screen.getByText(new RegExp(REFUSAL))).toBeTruthy();
+    // The shape that says it again, so the tone survives colour blindness.
+    expect(container.querySelector('[data-tone="err"] svg')).toBeTruthy();
+    expect(backend.callsTo("hf_ndef_write")).toHaveLength(0);
+
+    // And the notice names what it dismisses.
+    await user.click(screen.getByRole("button", { name: "Dismiss: Not written" }));
+
+    expect(screen.queryByText("Not written")).toBeNull();
+    expect(backend.callsTo("hf_ndef_write")).toHaveLength(0);
+    // Back to the state where only a check is offered.
+    expect(screen.getByRole("button", { name: "Check tag" })).toBeTruthy();
+  });
+});

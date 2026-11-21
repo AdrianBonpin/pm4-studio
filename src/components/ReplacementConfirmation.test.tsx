@@ -84,11 +84,18 @@ describe("the shared write confirmation", () => {
     const markup = markupOf(DESTRUCTIVE);
 
     expect(DESTRUCTIVE.destructive).toBe(true);
+    expect(replacementTone(true).tone).toBe("warn");
+    // Drawn by the notice treatment at its warning tone: a whole box, and a hue
+    // that is not a bar down one side of it.
+    expect(markup).toContain('data-tone="warn"');
     expect(markup).toContain("border-warn");
-    expect(markup).toContain("bg-warn/5");
-    expect(markup).toContain("text-warn");
-    // The warning icon, so the block is not read as ordinary body text.
-    expect(markup).toContain("<svg");
+    expect(markup).toContain("bg-warn");
+    // The severity in words, which is the channel colour blindness does not
+    // take away — and the words differ from the calm case below.
+    expect(markup).toContain("Check this");
+    expect(markup).not.toContain("Nothing to replace");
+    // The warning shape beside it, so the block is not read as ordinary text.
+    expect(markup).toContain("lucide-triangle-alert");
     // And the button that sends the write is the danger variant.
     expect(replacementActionVariant(DESTRUCTIVE.destructive)).toBe("danger");
   });
@@ -99,9 +106,13 @@ describe("the shared write confirmation", () => {
 
       expect(calm.destructive).toBe(false);
       expect(markup).not.toContain("warn");
+      expect(markup).toContain('data-tone="muted"');
       expect(markup).toContain("border-border");
-      expect(markup).toContain("bg-surface/40");
-      expect(markup).not.toContain("<svg");
+      // Its own words, not the warning's: the calm case says what it is instead
+      // of borrowing the alarm's hue and hoping the user reads amber as grey.
+      expect(markup).toContain("Nothing to replace");
+      expect(markup).toContain("lucide-info");
+      expect(markup).not.toContain("lucide-triangle-alert");
       expect(replacementActionVariant(calm.destructive)).toBe("primary");
     }
   });

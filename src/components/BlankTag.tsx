@@ -2,6 +2,7 @@ import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { AlertTriangle, Ban, Check, RotateCcw, ScanLine } from "lucide-react";
 import { Button } from "./ui/Button";
+import { Notice } from "./ui/Notice";
 import { Field, Readout, Section } from "./Section";
 import { useLfPoller } from "../hooks/useReader";
 import { describeDeviceFailure } from "../lib/readerIdentity";
@@ -176,18 +177,15 @@ export function BlankTag({ connected, onDeviceError }: BlankTagProps) {
             />
           </div>
 
-          <div className="border-l-2 border-warn bg-warn/5 px-3 py-2">
-            <p className="flex items-center gap-1.5 text-sm text-warn">
-              <AlertTriangle size={14} /> {confirmation.title}
-            </p>
-            <ul className="mt-2 flex flex-col gap-2">
+          <Notice tone="warn" label="Check this" title={confirmation.title}>
+            <ul className="flex flex-col gap-2">
               {confirmation.facts.map((fact) => (
                 <li key={fact.title} className="text-xs leading-relaxed text-text-muted">
                   <span className="text-text">{fact.title}.</span> {fact.detail}
                 </li>
               ))}
             </ul>
-          </div>
+          </Notice>
 
           <p className="max-w-prose text-xs leading-relaxed text-text-muted">
             {confirmation.notFactoryReset}

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "./ui/Button";
+import { Notice } from "./ui/Notice";
 import { Section } from "./Section";
 import { beginDeviceOperation } from "../lib/deviceLock";
 import { outcomes, report } from "../lib/outcome";
@@ -16,7 +17,6 @@ import {
   type NdefPreview,
   type NdefWriteResult,
 } from "../lib/tagWrite";
-import { NOTICE_TONE_CLASS } from "../lib/writeOutcome";
 
 interface WriteDraftToTagProps {
   /**
@@ -186,51 +186,46 @@ export function WriteDraftToTag({
         )}
 
         {error && (
-          <p className="border-l-2 border-err bg-err/5 px-3 py-2 text-xs leading-relaxed text-err">
-            {error}
-          </p>
+          <Notice tone="err" label="Failed">
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">{error}</p>
+          </Notice>
         )}
 
         {preview && !preview.fits && (
-          <div className="border-l-2 border-err bg-err/5 px-3 py-2">
-            <p className="text-sm text-err">Not written</p>
-            <p className="mt-0.5 max-w-prose text-xs leading-relaxed text-text-muted">
+          <Notice tone="err" label="Not written" onDismiss={cancel}>
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">
               {preview.refusal ?? "the write would be refused"}.
             </p>
-            <p className="mt-1 max-w-prose text-xs leading-relaxed text-text-muted">
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">
               {capacitySentence(preview)}
             </p>
-            <div className="mt-2">
-              <Button variant="secondary" onClick={cancel}>
-                Dismiss
-              </Button>
-            </div>
-          </div>
+          </Notice>
         )}
 
         {preview && preview.fits && (
-          <div className="border-l-2 border-warn bg-warn/5 px-3 py-2">
-            <p className="text-sm text-warn">
-              Replace the message on the tag with this {subject}?
-            </p>
-            <p className="mt-1 max-w-prose text-sm leading-relaxed text-text">
+          <Notice
+            tone="warn"
+            label="Check this"
+            title={`Replace the message on the tag with this ${subject}?`}
+          >
+            <p className="max-w-prose text-sm leading-relaxed text-text">
               {replacementSentence(preview)}
             </p>
-            <p className="mt-1 max-w-prose text-xs leading-relaxed text-text-muted">
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">
               {capacitySentence(preview)}
             </p>
             {preview.tag && (
-              <p className="mt-1 font-mono text-[11px] text-text-muted">
+              <p className="font-mono text-[11px] text-text-muted">
                 tag {preview.tag.uid} · {pagesLabel(pageRange(preview.requiredBytes))} of user
                 memory
               </p>
             )}
             {messageHex && (
-              <code className="mt-2 block select-text break-all rounded-lg border border-border bg-canvas px-3 py-2 font-mono text-[11px] leading-relaxed text-accent-muted">
+              <code className="block select-text break-all rounded-lg border border-border bg-canvas px-3 py-2 font-mono text-[11px] leading-relaxed text-accent-muted">
                 {messageHex}
               </code>
             )}
-            <div className="mt-3 flex items-center gap-2">
+            <div className="flex items-center gap-2">
               <Button variant="primary" disabled={busy} onClick={() => void write()}>
                 {phase === "writing" ? "Writing…" : "Write to tag"}
               </Button>
@@ -238,34 +233,24 @@ export function WriteDraftToTag({
                 Cancel
               </Button>
             </div>
-            <p className="mt-2 text-[11px] leading-relaxed text-text-muted">
+            <p className="text-[11px] leading-relaxed text-text-muted">
               Keep the tag on the Reader until the result appears. Polling is suspended while
               the write runs.
             </p>
-          </div>
+          </Notice>
         )}
 
         {notice && result && (
-          <div
-            className={`border-l-2 px-3 py-2 ${
-              notice.tone === "ok"
-                ? "border-ok bg-ok/5"
-                : notice.tone === "warn"
-                  ? "border-warn bg-warn/5"
-                  : "border-err bg-err/5"
-            }`}
+          <Notice
+            tone={notice.tone}
+            label={
+              notice.tone === "ok" ? "Verified" : notice.tone === "warn" ? "Unconfirmed" : "Not written"
+            }
           >
-            <p className={`text-sm ${NOTICE_TONE_CLASS[notice.tone]}`}>
-              {notice.tone === "ok"
-                ? "Verified"
-                : notice.tone === "warn"
-                  ? "Unconfirmed"
-                  : "Not written"}
-            </p>
-            <p className="mt-0.5 max-w-prose text-xs leading-relaxed text-text-muted">
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">
               {notice.text}
             </p>
-            <p className="mt-1 font-mono text-[11px] text-text-muted">
+            <p className="font-mono text-[11px] text-text-muted">
               {result.after
                 ? `reads back ${result.after.existing.state} · ${result.after.existing.bytes} ${
                     result.after.existing.bytes === 1 ? "byte" : "bytes"
@@ -274,17 +259,17 @@ export function WriteDraftToTag({
               {" · "}
               {pagesLabel(result.acceptedPages)} reported written
             </p>
-            <p className="mt-1 max-w-prose text-[11px] leading-relaxed text-text-muted">
+            <p className="max-w-prose text-[11px] leading-relaxed text-text-muted">
               {subject === "Draft"
                 ? "A Draft is not attached to any Tag, so it is still here and can be written to another tag."
                 : "A Snapshot records what a Tag held when it was read, so writing its Records to another Tag leaves it exactly as it was."}
             </p>
             {result.countProblem && (
-              <p className="mt-1 max-w-prose text-[11px] leading-relaxed text-err">
+              <p className="max-w-prose text-[11px] leading-relaxed text-err">
                 The confirmed-copy count could not be saved: {result.countProblem}
               </p>
             )}
-          </div>
+          </Notice>
         )}
 
         {!preview && !notice && !error && !holdsNothing && (

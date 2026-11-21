@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
+import { Notice } from "./ui/Notice";
 import { Toggle } from "./ui/Toggle";
 import { Field, Readout, Section } from "./Section";
 import {
@@ -348,16 +349,15 @@ export function AuthorIdentity({ connected, library, onDeviceError }: AuthorIden
             </p>
           </details>
 
-          <div className="border-l-2 border-border bg-surface/40 px-3 py-2">
-            <p className="text-sm text-text">{confirmation.title}</p>
-            <ul className="mt-2 flex flex-col gap-2">
+          <Notice tone="muted" label="Nothing written yet" title={confirmation.title}>
+            <ul className="flex flex-col gap-2">
               {confirmation.facts.map((fact) => (
                 <li key={fact.title} className="text-xs leading-relaxed text-text-muted">
                   <span className="text-text">{fact.title}.</span> {fact.detail}
                 </li>
               ))}
             </ul>
-          </div>
+          </Notice>
 
           <p className="max-w-prose text-xs leading-relaxed text-text-muted">
             {confirmation.blankHint}
