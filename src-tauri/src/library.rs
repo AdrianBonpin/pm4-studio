@@ -15,6 +15,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::identity::Identity;
+use crate::write_outcome::WriteOutcome;
 
 /// The schema version this build writes and understands.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -95,15 +96,45 @@ impl Snapshot {
     /// Two Snapshots with the same key are the same read of the same Tag.
     fn tag_key(&self) -> Option<String> {
         match (&self.identity, &self.hf) {
-            (Some(identity), _) => Some(format!(
-                "LF:{:02X}:{:08X}",
-                identity.customer, identity.data32
-            )),
+            (Some(identity), _) => Some(identity_key(identity.customer, identity.data32)),
             (None, Some(hf)) => Some(format!("HF:{}", hf.uid)),
             // A raw-only Snapshot carries nothing to compare, so it is never a
             // duplicate of anything.
             (None, None) => None,
         }
+    }
+}
+
+/// The key that identifies one 125 kHz Identity, shared by dedupe and counting
+/// so the two can never disagree about what "the same Identity" means.
+fn identity_key(customer: u8, data32: u32) -> String {
+    format!("LF:{customer:02X}:{data32:08X}")
+}
+
+/// What recording a write outcome did to a Snapshot's confirmed-copy count.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WriteCountOutcome {
+    /// No Snapshot carries this Identity, so there is no count to change.
+    NoSnapshot,
+    /// A confirmed copy: the count rose by one.
+    Incremented { id: String, write_count: u32 },
+    /// Not a confirmed copy, so the count is exactly what it was.
+    Unchanged { id: String, write_count: u32 },
+}
+
+impl WriteCountOutcome {
+    /// The count to show, when a Snapshot carries this Identity.
+    pub fn confirmed_copies(&self) -> Option<u32> {
+        match self {
+            WriteCountOutcome::NoSnapshot => None,
+            WriteCountOutcome::Incremented { write_count, .. }
+            | WriteCountOutcome::Unchanged { write_count, .. } => Some(*write_count),
+        }
+    }
+
+    /// True only when the count actually rose, so a save is only needed then.
+    pub fn incremented(&self) -> bool {
+        matches!(self, WriteCountOutcome::Incremented { .. })
     }
 }
 
@@ -331,6 +362,42 @@ impl Library {
         let before = self.snapshots.len();
         self.snapshots.retain(|s| s.id != id);
         self.snapshots.len() != before
+    }
+
+    /// Record what one attempted write of `identity` turned out to be.
+    ///
+    /// The count is confirmed copies, not attempts, so only a verified write
+    /// increments it. A refusal, a transmission failure, and a write whose
+    /// read-back could not confirm it all leave the count exactly as it was:
+    /// none of them is evidence that another Tag carries this Identity.
+    pub fn record_write(
+        &mut self,
+        identity: &Identity,
+        outcome: WriteOutcome,
+    ) -> WriteCountOutcome {
+        let key = identity_key(identity.customer, identity.data32);
+        let Some(snapshot) = self
+            .snapshots
+            .iter_mut()
+            .find(|s| s.tag_key().as_deref() == Some(key.as_str()))
+        else {
+            // Nothing in the library holds this Identity, so there is no count
+            // to be honest about.
+            return WriteCountOutcome::NoSnapshot;
+        };
+
+        if outcome.counts_as_confirmed_copy() {
+            snapshot.write_count = snapshot.write_count.saturating_add(1);
+            WriteCountOutcome::Incremented {
+                id: snapshot.id.clone(),
+                write_count: snapshot.write_count,
+            }
+        } else {
+            WriteCountOutcome::Unchanged {
+                id: snapshot.id.clone(),
+                write_count: snapshot.write_count,
+            }
+        }
     }
 }
 
@@ -898,6 +965,201 @@ mod tests {
 
         let bytes = serde_json::to_vec(&library).expect("encode");
         assert_eq!(parse_library(&bytes), Ok(library));
+    }
+
+    // Slice E: confirmed copies. Only a verified write increments the count.
+
+    use crate::write_outcome::WriteOutcome;
+
+    fn with_identity(library: &mut Library, data32: u32) -> Snapshot {
+        saved_lf(library, data32)
+    }
+
+    #[test]
+    fn a_verified_write_counts_one_confirmed_copy() {
+        let mut library = Library::empty();
+        let snapshot = with_identity(&mut library, 0x0084_8212);
+        let identity = Identity {
+            customer: snapshot.identity.as_ref().expect("lf").customer,
+            data32: 0x0084_8212,
+        };
+
+        let outcome = library.record_write(&identity, WriteOutcome::Verified);
+        assert_eq!(
+            outcome,
+            WriteCountOutcome::Incremented {
+                id: snapshot.id.clone(),
+                write_count: 1
+            }
+        );
+        assert_eq!(library.snapshots[0].write_count, 1);
+
+        // A second confirmed copy: the count is copies, so it rises again.
+        library.record_write(&identity, WriteOutcome::Verified);
+        assert_eq!(library.snapshots[0].write_count, 2);
+    }
+
+    #[test]
+    fn a_refused_write_leaves_the_count_alone() {
+        let mut library = Library::empty();
+        let snapshot = with_identity(&mut library, 0x0084_8212);
+        let identity = Identity {
+            customer: 0x55,
+            data32: 0x0084_8212,
+        };
+
+        let outcome = library.record_write(&identity, WriteOutcome::Refused);
+        assert_eq!(
+            outcome,
+            WriteCountOutcome::Unchanged {
+                id: snapshot.id.clone(),
+                write_count: 0
+            }
+        );
+        assert_eq!(library.snapshots[0].write_count, 0);
+    }
+
+    #[test]
+    fn an_unverified_write_leaves_the_count_alone() {
+        // The write was sent and the read-back could not confirm it. Counting it
+        // would claim a copy of a credential nobody proved is there.
+        let mut library = Library::empty();
+        let snapshot = with_identity(&mut library, 0x0084_8212);
+        let identity = Identity {
+            customer: 0x55,
+            data32: 0x0084_8212,
+        };
+
+        let outcome = library.record_write(&identity, WriteOutcome::Unverified);
+        assert_eq!(
+            outcome,
+            WriteCountOutcome::Unchanged {
+                id: snapshot.id.clone(),
+                write_count: 0
+            }
+        );
+        assert_eq!(library.snapshots[0].write_count, 0);
+    }
+
+    #[test]
+    fn a_failed_write_leaves_the_count_alone() {
+        let mut library = Library::empty();
+        let snapshot = with_identity(&mut library, 0x0084_8212);
+        let identity = Identity {
+            customer: 0x55,
+            data32: 0x0084_8212,
+        };
+
+        let outcome = library.record_write(&identity, WriteOutcome::Failed);
+        assert_eq!(
+            outcome,
+            WriteCountOutcome::Unchanged {
+                id: snapshot.id.clone(),
+                write_count: 0
+            }
+        );
+        assert_eq!(library.snapshots[0].write_count, 0);
+    }
+
+    #[test]
+    fn the_confirmed_copy_count_survives_reopening() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        let store = LibraryStore::new(&path);
+        let mut library = store.load().expect("empty library");
+        let snapshot = with_identity(&mut library, 0x0084_8212);
+        let identity = Identity {
+            customer: 0x55,
+            data32: 0x0084_8212,
+        };
+
+        library.record_write(&identity, WriteOutcome::Verified);
+        library.record_write(&identity, WriteOutcome::Verified);
+        store.save(&library).expect("save");
+
+        let after = store.load().expect("reload");
+        assert_eq!(after.snapshots[0].write_count, 2);
+        assert_eq!(
+            serde_json::to_value(&after).expect("serialises")["snapshots"][0]["writeCount"],
+            2
+        );
+        assert_eq!(after.snapshots[0].id, snapshot.id);
+    }
+
+    #[test]
+    fn a_write_of_an_identity_the_library_does_not_hold_counts_nothing() {
+        let mut library = Library::empty();
+        with_identity(&mut library, 0x0053_C7B3);
+        let absent = Identity {
+            customer: 0x55,
+            data32: 0x0084_8212,
+        };
+
+        assert_eq!(
+            library.record_write(&absent, WriteOutcome::Verified),
+            WriteCountOutcome::NoSnapshot
+        );
+        assert_eq!(library.snapshots[0].write_count, 0);
+    }
+
+    #[test]
+    fn the_whole_identity_is_matched_not_just_the_customer_byte() {
+        let mut library = Library::empty();
+        with_identity(&mut library, 0x0084_8212);
+
+        // Same customer byte, different card: not this Snapshot.
+        assert_eq!(
+            library.record_write(
+                &Identity {
+                    customer: 0x55,
+                    data32: 0x0053_C7B3
+                },
+                WriteOutcome::Verified
+            ),
+            WriteCountOutcome::NoSnapshot
+        );
+        // Same data field, different customer byte: also not this Snapshot.
+        assert_eq!(
+            library.record_write(
+                &Identity {
+                    customer: 0x77,
+                    data32: 0x0084_8212
+                },
+                WriteOutcome::Verified
+            ),
+            WriteCountOutcome::NoSnapshot
+        );
+        assert_eq!(library.snapshots[0].write_count, 0);
+    }
+
+    #[test]
+    fn only_a_verified_readback_raises_the_count_whichever_evidence_arrives() {
+        // The joined rule: evidence -> outcome -> count. Every outcome except a
+        // matching read-back leaves the count exactly where it was.
+        use crate::write_outcome::{classify, Evidence};
+
+        let target = |data32: u32| Identity {
+            customer: 0x55,
+            data32,
+        };
+        let cases = [
+            (Evidence::Refused, 0),
+            (Evidence::NotTransmitted, 0),
+            (Evidence::Readback(None), 0),
+            (Evidence::Readback(Some(target(0x0053_C7B3))), 0),
+            (Evidence::Readback(Some(target(0x0084_8212))), 1),
+        ];
+
+        for (evidence, expected) in cases {
+            let mut library = Library::empty();
+            saved_lf(&mut library, 0x0084_8212);
+            let outcome = classify(evidence, target(0x0084_8212));
+            library.record_write(&target(0x0084_8212), outcome);
+            assert_eq!(
+                library.snapshots[0].write_count, expected,
+                "evidence {evidence:?} produced {outcome:?}"
+            );
+        }
     }
 
     #[test]

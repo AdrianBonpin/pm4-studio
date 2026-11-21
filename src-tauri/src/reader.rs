@@ -185,6 +185,24 @@ impl LfCard {
     }
 }
 
+/// What one guarded write attempt produced, before the read-back is judged.
+///
+/// The cases are kept apart on purpose: a refusal means no bytes were sent, a
+/// failure means the Tag was never written, and `Transmitted(None)` means the
+/// Tag may or may not hold the Identity. `write_outcome` turns each into the
+/// outcome the user sees, and only a verified read-back counts as a copy.
+#[derive(Debug)]
+pub enum LfWriteAttempt {
+    /// Nothing was transmitted: no Tag could be read in the write position, or
+    /// the Tag already presents the Identity being written (ADR 0001).
+    Refused(String),
+    /// The write command could not be transmitted.
+    Failed(String),
+    /// The write was transmitted; `None` means the Tag could not be re-read, so
+    /// its state is unknown.
+    Transmitted(Option<LfCard>),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HfCard {
     /// The poll reply's payload, byte for byte.
@@ -391,21 +409,44 @@ impl Reader {
     /// or a tag that already presents the Identity being written. This method
     /// performs the exchange only after the guard allows it.
     pub fn lf_write_verified(&self, identity: Identity) -> Result<Option<LfCard>, String> {
-        let current = self.read_tag_in_position()?;
+        match self.lf_write_attempt(identity) {
+            LfWriteAttempt::Refused(message) | LfWriteAttempt::Failed(message) => Err(message),
+            LfWriteAttempt::Transmitted(card) => Ok(card),
+        }
+    }
+
+    /// One guarded write, reported as what actually happened rather than as a
+    /// single boolean.
+    ///
+    /// A refusal, a transmission failure, and a transmitted write whose
+    /// read-back reported nothing are three different facts, and the library
+    /// counts a copy for none of them. Keeping them apart is what stops
+    /// "unknown" from being recorded as either success or failure.
+    pub fn lf_write_attempt(&self, identity: Identity) -> LfWriteAttempt {
+        let current = match self.read_tag_in_position() {
+            Ok(current) => current,
+            // No reading means the guard cannot be satisfied: nothing is sent.
+            Err(e) => return LfWriteAttempt::Refused(e),
+        };
         let decision = write_guard::decide(current.as_ref().map(LfCard::identity), identity);
         if let Some(refusal) = decision.refusal_message(current.as_ref().map(LfCard::identity)) {
-            return Err(refusal);
+            return LfWriteAttempt::Refused(refusal);
         }
 
-        self.lf_write(identity)?;
+        if let Err(e) = self.lf_write(identity) {
+            return LfWriteAttempt::Failed(e);
+        }
         for _ in 0..8 {
             self.wake().ok();
-            if let Some(c) = self.lf_read_once()? {
-                return Ok(Some(c));
+            match self.lf_read_once() {
+                Ok(Some(card)) => return LfWriteAttempt::Transmitted(Some(card)),
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(250)),
+                // The write already went out, so a failing read leaves the Tag
+                // in an unknown state rather than unwritten.
+                Err(_) => break,
             }
-            std::thread::sleep(std::time::Duration::from_millis(250));
         }
-        Ok(None)
+        LfWriteAttempt::Transmitted(None)
     }
 
     /// 13.56 MHz ISO14443-A poll.

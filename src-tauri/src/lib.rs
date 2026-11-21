@@ -4,12 +4,16 @@ pub mod identity;
 pub mod library;
 pub mod reader;
 pub mod write_guard;
+pub mod write_outcome;
 #[cfg(test)]
 mod test_frames;
 
 use identity::Identity;
-use library::{InsertOutcome, Library, LibraryProblem, LibraryStore, SaveError, Snapshot};
-use reader::{DeviceInfo, Frame, HfCard, LfCard, Reader, REPORT_LEN};
+use library::{
+    InsertOutcome, Library, LibraryProblem, LibraryStore, SaveError, Snapshot, WriteCountOutcome,
+};
+use reader::{DeviceInfo, Frame, HfCard, LfCard, LfWriteAttempt, Reader, REPORT_LEN};
+use write_outcome::Evidence;
 use serde::Serialize;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
@@ -129,12 +133,25 @@ fn led_off(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct WriteResult {
     pub customer: u8,
     pub data32: u32,
     /// What the tag reads after the write, when it could be re-read.
     pub readback: Option<LfCard>,
+    /// "refused" | "verified" | "unverified" | "failed" — see `write_outcome`.
+    pub outcome: &'static str,
+    /// True only when the read-back matched. Kept for callers that predate
+    /// `outcome`, and deliberately equal to `outcome == "verified"`.
     pub verified: bool,
+    /// Why this write did not confirm a copy, when it did not.
+    pub message: Option<String>,
+    /// Confirmed copies of this Identity after the write, when a Snapshot in the
+    /// library carries it. `None` means the library holds no such Snapshot.
+    pub confirmed_copies: Option<u32>,
+    /// Set when the count could not be written to the library file. The Tag was
+    /// written either way, so this never fails the write.
+    pub count_problem: Option<String>,
 }
 
 /// Write an Identity onto the 125 kHz tag currently on the reader.
@@ -142,25 +159,86 @@ pub struct WriteResult {
 /// The Identity is validated before any device access, and the write itself is
 /// the guard's decision: an unreadable tag or a tag that already presents this
 /// Identity is refused, per ADR 0001.
+///
+/// A write that the read-back confirms is one more confirmed copy of this
+/// Identity, so the Snapshot that carries it gains a count. Nothing else
+/// touches the count: a refusal, a failed transmission, and a write that could
+/// not be read back are all reported without claiming a copy exists.
 #[tauri::command]
 fn lf_write(
+    app: AppHandle,
     state: State<'_, AppState>,
     customer: u8,
     data32: u32,
 ) -> Result<WriteResult, String> {
     let identity = Identity::new(customer, data32).map_err(|e| e.to_string())?;
-    with_reader(&state, |r| {
-        let readback = r.lf_write_verified(identity)?;
-        let verified = readback
-            .as_ref()
-            .map(|c| c.identity() == identity)
-            .unwrap_or(false);
-        Ok(WriteResult {
-            customer,
-            data32,
-            readback,
-            verified,
-        })
+    let attempt = with_reader(&state, |r| Ok(r.lf_write_attempt(identity)))?;
+
+    let (evidence, message) = match &attempt {
+        LfWriteAttempt::Refused(why) => (Evidence::Refused, Some(why.clone())),
+        LfWriteAttempt::Failed(why) => (Evidence::NotTransmitted, Some(why.clone())),
+        LfWriteAttempt::Transmitted(card) => (
+            Evidence::Readback(card.as_ref().map(LfCard::identity)),
+            None,
+        ),
+    };
+    if matches!(attempt, LfWriteAttempt::Failed(_)) {
+        // A transport error means the handle is suspect; drop it so the next
+        // call re-enumerates instead of failing forever.
+        if let Ok(mut slot) = state.reader.lock() {
+            *slot = None;
+        }
+    }
+    let outcome = write_outcome::classify(evidence, identity);
+
+    let readback = match attempt {
+        LfWriteAttempt::Transmitted(card) => card,
+        _ => None,
+    };
+
+    // Record the count after the fact: the Tag is written either way, so a
+    // library that cannot be written to is reported, never raised.
+    let mut count_problem = None;
+    let record = match library_store(&app) {
+        Err(e) => {
+            count_problem = Some(e);
+            WriteCountOutcome::NoSnapshot
+        }
+        Ok(store) => match store.load() {
+            Err(problem) => {
+                count_problem = Some(problem.message());
+                WriteCountOutcome::NoSnapshot
+            }
+            Ok(mut library) => {
+                let record = library.record_write(&identity, outcome);
+                if record.incremented() {
+                    if let Err(e) = store.save(&library) {
+                        count_problem = Some(match e {
+                            SaveError::Refused(problem) => problem.message(),
+                            SaveError::Io(detail) => {
+                                format!("The library could not be saved: {detail}")
+                            }
+                        });
+                    }
+                }
+                record
+            }
+        },
+    };
+
+    Ok(WriteResult {
+        customer,
+        data32,
+        readback,
+        outcome: outcome.as_str(),
+        verified: outcome.counts_as_confirmed_copy(),
+        message,
+        // A count that failed to persist is not reported as if it had.
+        confirmed_copies: match count_problem {
+            None => record.confirmed_copies(),
+            Some(_) => None,
+        },
+        count_problem,
     })
 }
 
