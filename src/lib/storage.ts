@@ -35,6 +35,30 @@ export function loadSavedTags(): SavedTag[] {
   }
 }
 
+/**
+ * The old store exactly as it was written, for the one-time migration into the
+ * library file. Unlike `loadSavedTags` this filters nothing: a stored read the
+ * old loader would skip is still handed over, so migration can preserve it
+ * instead of dropping it. It only ever reads; the old store is never cleared or
+ * marked, so a failed migration loses nothing.
+ */
+export function loadLegacyStore(storage?: Pick<Storage, "getItem">): unknown[] {
+  let source = storage;
+  if (!source) {
+    if (typeof localStorage === "undefined") return [];
+    source = localStorage;
+  }
+  try {
+    const raw = source.getItem(KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    // Anything but the array the store writes is not a list of stored reads.
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 export function persistSavedTags(tags: SavedTag[]): void {
   if (typeof localStorage === "undefined") return;
   try {
