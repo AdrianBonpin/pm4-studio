@@ -4,34 +4,46 @@
  * reading or an explicit raw-only reading. It is pure: bytes in, value out, no
  * hardware and no Reader knowledge.
  *
- * ## The layout is a HYPOTHESIS
+ * ## The layout is measured
  *
- * Every offset below comes from third-party client source. Not one byte of it
- * has been confirmed against a capture from this Reader:
+ * Two captures from this Reader, one MIFARE Classic 1K and one NTAG215, settle
+ * the offsets below. Their ATQA and SAK values agree with the published NXP
+ * assignments, which is what makes this a measurement rather than a fit; the
+ * full table and both captures are in the spec ("The verified HF reply
+ * layout").
  *
- * | Payload byte | Meaning (hypothesis)                          |
- * |--------------|-----------------------------------------------|
- * | 0            | validity flag: `0x01` = a Tag is latched      |
- * | 1            | constant `0x01`, carries nothing              |
- * | 2..6         | UID, 4 bytes                                  |
- * | 6..14        | unconfirmed tail                              |
- * | 14..16       | ATQA, two bytes, byte-swapped relative to how |
- * |              | NXP quotes it (feed straight to the resolver) |
- * | 16           | unconfirmed single byte                       |
- * | 17           | SAK of the last cascade level                 |
- * | 18           | unconfirmed trailing byte                     |
+ * | Payload byte | Meaning                                                |
+ * |--------------|--------------------------------------------------------|
+ * | 0            | validity flag: `0x01` = a Tag is latched               |
+ * | 1            | constant `0x01`, carries nothing                       |
+ * | 2..12        | UID buffer, ten bytes; only the first `LEN` are the UID  |
+ * | 12           | UID length in bytes: `0x04`, `0x07` or `0x0A`          |
+ * | 13..15       | ATQA, transmission order (LSByte first)                |
+ * | 15           | SAK of the last cascade level                          |
+ * | 16           | cascade level count — consistent with both captures,   |
+ * |              | not established, so nothing is decoded from it         |
+ * | 17..19       | unexplained; no meaning is invented for them           |
+ *
+ * The previous table read a 4-byte UID at 2..6 with ATQA at 14..16 and SAK at
+ * 17. It was one byte off, which is why a real Classic 1K matched nothing.
+ *
+ * The **UID length byte is what makes the layout self-describing**: the UID is
+ * the first `uidLength` bytes of the buffer, never a fixed width and never a
+ * width inferred from ATQA bits. Bytes between the UID and the length byte are
+ * stale buffer residue — the same Reader returned different values for them
+ * across captures of one Tag, and zeros when the buffer was clean — so they are
+ * never presented as UID or as content.
  *
  * The reply is 19 bytes and arrives in a single USB report, so nothing needs
- * reassembling here. Ticket 12 replaces the table above with a real capture,
- * which is why `HF_OFFSETS_CONFIRMED` stays false and every decoded value is
- * reported as provisional until then.
+ * reassembling here.
  *
  * ## Decode policy
  *
  * Decoded values appear only when the payload is the expected 19-byte shape,
- * the validity flag is set, the UID field holds a 4-byte UID, and the ATQA/SAK
- * pair resolves in the card type table. Anything else is a raw-only reading with
- * a reason: no card type, no capacity, no technologies, no UID split. A
+ * the validity flag is set, the stated UID length is one ISO/IEC 14443-3
+ * allows (4, 7 or 10 bytes), the UID is not all zeros, and the ATQA/SAK pair
+ * resolves in the card type table. Anything else is a raw-only reading with a
+ * reason: no card type, no capacity, no technologies, no UID split. A
  * confident wrong field is worse than a byte string, because the user cannot
  * tell it is wrong.
  *
@@ -44,26 +56,23 @@ import type { TagNdefOutcome, TagRecordsRead } from "./tagRecords";
 /** The 13.56 MHz poll reply is 19 payload bytes. */
 export const HF_POLL_PAYLOAD_LEN = 19;
 
-/** A Tag this decoder can split has a 4-byte UID; wider UIDs are ticket 12. */
-export const HF_UID_WIDTH = 4;
+/** The UID widths ISO/IEC 14443-3 defines, in bytes. Any other stated length
+ *  is refused rather than truncated or padded. */
+const UID_WIDTHS: readonly number[] = [4, 7, 10];
 
-/** Offsets, kept in one place so the readout can describe them and so ticket 12
- *  has a single table to correct. Ranges are half-open. */
+/** Offsets, kept in one place so the readout can describe them and so a future
+ *  firmware revision has a single table to correct. Ranges are half-open. */
 export const HF_POLL_LAYOUT = {
   validity: 0,
-  uid: [2, 6],
-  atqa: [14, 16],
-  sak: 17,
+  constant: 1,
+  uid: [2, 12],
+  uidLength: 12,
+  atqa: [13, 15],
+  sak: 15,
+  /** Consistent with a 4-byte (01) and a 7-byte (02) capture, not established.
+   *  Recorded so a future capture can settle it; nothing is decoded from it. */
+  cascadeLevels: 16,
 } as const;
-
-/**
- * Whether a real capture has settled the offsets above.
- *
- * False: derived from third-party source only, so the readout labels every
- * decoded value provisional. Ticket 12 flips this after capturing a real Tag —
- * flipping it without a capture would present a guess as a measurement.
- */
-export const HF_OFFSETS_CONFIRMED = false;
 
 /** Why a reading could not be decoded. Each maps to a message in the readout. */
 export type HfRawOnlyReason =
@@ -73,9 +82,9 @@ export type HfRawOnlyReason =
   | "unexpected-length"
   /** The validity flag was clear: nothing is latched in the field. */
   | "not-latched"
-  /** A Tag is latched but its UID field is all zeros. */
+  /** A Tag is latched but the bytes its length byte claims are all zeros. */
   | "empty-uid"
-  /** The ATQA announces a 7- or 10-byte UID, which this layout cannot hold. */
+  /** The reply's own UID length byte is not 4, 7 or 10 bytes. */
   | "unsupported-uid-width"
   /** The ATQA/SAK pair matches nothing in the published table. */
   | "unknown-card-type";
@@ -187,10 +196,11 @@ export function capacityForReading(
 /**
  * Whether a memory read describes the Tag a reading came from.
  *
- * A poll's UID field holds the first four bytes of a wider UID, and a memory read
- * reports the whole thing, so the reading's bytes are a **prefix** of the dump's.
- * An empty UID never matches: a memory read of some other Tag must not be applied
- * to a reading that named none.
+ * A poll states its own UID length, so the two reads of one Tag normally carry
+ * the same bytes. The reading's bytes are still allowed to be a **prefix** of
+ * the dump's: a narrower source must not be applied to a different Tag, but a
+ * prefix of the same UID is the same Tag. An empty UID never matches: a memory
+ * read of some other Tag must not be applied to a reading that named none.
  */
 export function uidMatchesMemory(readingUid: string, dumpUid: string): boolean {
   const reading = readingUid.trim().toUpperCase();
@@ -212,8 +222,6 @@ export type HfDecodedReading = {
   /** What the pair identifies, straight from the card type table. */
   cardType: CardType;
   ndef: NdefStatus;
-  /** True while the offsets are unconfirmed — see `HF_OFFSETS_CONFIRMED`. */
-  provisional: boolean;
 };
 
 export type HfRawReading = {
@@ -246,23 +254,6 @@ function hex2(byte: number): string {
 
 function rawOnly(raw: string, reason: HfRawOnlyReason, detail: string): HfRawReading {
   return { state: "raw", raw, reason, detail };
-}
-
-/** Where ISO/IEC 14443-3 keeps the UID size: the top two bits of the ATQA byte
- *  that carries bits 16..15. In this codebase's ATQA order that byte is
- *  `atqa[0]` — `cardType.ts` supplies the bytes transmission-order-first, so
- *  NXP's 0x0044 arrives as [0x44, 0x00]. */
-function uidSizeName(atqa0: number): string | null {
-  switch (atqa0 >> 6) {
-    case 0:
-      return null; // single size: 4 bytes
-    case 1:
-      return "a 7-byte";
-    case 2:
-      return "a 10-byte";
-    default:
-      return "a reserved-size";
-  }
 }
 
 /**
@@ -303,22 +294,28 @@ export function decodeHfPayload(payload: readonly number[]): HfReading {
     );
   }
 
-  const [uidFrom, uidTo] = HF_POLL_LAYOUT.uid;
-  const uidBytes = payload.slice(uidFrom, uidTo);
-  if (uidBytes.length !== HF_UID_WIDTH) {
+  // The reply states its own UID length. It is never inferred from ATQA bits,
+  // and never assumed: a stated width this decoder cannot split is its own
+  // refusal rather than a truncated or zero-padded UID.
+  const uidLength = payload[HF_POLL_LAYOUT.uidLength];
+  if (!UID_WIDTHS.includes(uidLength)) {
     return rawOnly(
       raw,
       "unsupported-uid-width",
-      `The UID field is ${uidBytes.length} bytes and this decoder only splits ` +
-        `${HF_UID_WIDTH}, so no UID is shown.`,
+      `The reply's UID length byte is 0x${hex2(uidLength)}; ISO/IEC 14443-3 allows ` +
+        `${UID_WIDTHS.join(", ")} bytes and nothing else, so no UID is split. A truncated or ` +
+        "padded UID would be a serial this Tag does not have.",
     );
   }
+
+  const [uidFrom] = HF_POLL_LAYOUT.uid;
+  const uidBytes = payload.slice(uidFrom, uidFrom + uidLength);
   if (uidBytes.every((b) => b === 0)) {
     return rawOnly(
       raw,
       "empty-uid",
-      "The validity flag says a Tag is latched, but the UID field is all zeros. That is not " +
-        "a UID, so none is shown.",
+      `The validity flag says a Tag is latched and its length byte says ${uidLength} bytes, ` +
+        "but those bytes are all zeros. That is not a UID, so none is shown.",
     );
   }
 
@@ -336,17 +333,6 @@ export function decodeHfPayload(payload: readonly number[]): HfReading {
     );
   }
 
-  const widerUid = uidSizeName(atqa[0]);
-  if (widerUid) {
-    return rawOnly(
-      raw,
-      "unsupported-uid-width",
-      `The ATQA announces ${widerUid} UID, but this reply's UID field holds ` +
-        `${HF_UID_WIDTH} bytes and where the remaining bytes sit has never been captured. ` +
-        "No UID is split rather than showing a fragment as if it were the whole UID.",
-    );
-  }
-
   return {
     state: "decoded",
     raw,
@@ -355,6 +341,5 @@ export function decodeHfPayload(payload: readonly number[]): HfReading {
     sak,
     cardType,
     ndef: NDEF_NOT_READ_YET,
-    provisional: !HF_OFFSETS_CONFIRMED,
   };
 }

@@ -11,17 +11,17 @@
 The two captured payloads recorded in the spec are the expected values, and they are independent of the implementation: they came off hardware and their ATQA/SAK values are the published ones for those families.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/13
-**Status:** ready
+**Status:** done
 
-- [ ] The real MIFARE Classic 1K capture decodes as MIFARE Classic 1K with UID `31 F3 0E 0A`, ATQA `0x0004`, SAK `0x08` and capacity 1024.
-- [ ] The real NTAG215 capture decodes with its full 7-byte UID `04 43 8A 01 22 09 03`, ATQA `0x0044`, SAK `0x00`, and its capacity marked unavailable rather than guessed.
-- [ ] ATQA is read from the corrected positions and reported in transmission order; SAK from its own corrected position.
-- [ ] UID width comes from the reply's own length byte. Widths of 4, 7 and 10 bytes are accepted; any other width is its own distinct refusal, never a truncated or zero-padded UID.
-- [ ] No width is inferred from ATQA bits anywhere. The padded-UID failure that made a four-byte card report a seven-byte serial cannot recur.
-- [ ] The residue bytes between the UID and the length byte are never presented as UID or as content.
-- [ ] A pair that no published table assigns still shows raw bytes with a reason and no family, capacity or technologies.
-- [ ] Neither a provisional badge nor a provisional explanation section exists anywhere in the interface.
-- [ ] The memory dump does not name a tag family it has not resolved. A tag whose memory cannot be read says so and names nothing.
-- [ ] The two captures are fixtures, and every existing synthetic 13.56 MHz fixture that encoded the refuted layout is corrected or removed.
-- [ ] The protocol document's layout table is corrected, and the bytes it still cannot explain remain documented as unexplained.
-- [ ] A reply of an unexpected length still falls back to raw with its own reason.
+- [x] The real MIFARE Classic 1K capture decodes as MIFARE Classic 1K with UID `31 F3 0E 0A`, ATQA `0x0004`, SAK `0x08` and capacity 1024.
+- [x] The real NTAG215 capture decodes with its full 7-byte UID `04 43 8A 01 22 09 03`, ATQA `0x0044`, SAK `0x00`, and its capacity marked unavailable rather than guessed.
+- [x] ATQA is read from the corrected positions and reported in transmission order; SAK from its own corrected position.
+- [x] UID width comes from the reply's own length byte. Widths of 4, 7 and 10 bytes are accepted; any other width is its own distinct refusal, never a truncated or zero-padded UID.
+- [x] No width is inferred from ATQA bits anywhere. The padded-UID failure that made a four-byte card report a seven-byte serial cannot recur.
+- [x] The residue bytes between the UID and the length byte are never presented as UID or as content.
+- [x] A pair that no published table assigns still shows raw bytes with a reason and no family, capacity or technologies.
+- [x] Neither a provisional badge nor a provisional explanation section exists anywhere in the interface.
+- [x] The memory dump does not name a tag family it has not resolved. A tag whose memory cannot be read says so and names nothing.
+- [x] The two captures are fixtures, and every existing synthetic 13.56 MHz fixture that encoded the refuted layout is corrected or removed.
+- [x] The protocol document's layout table is corrected, and the bytes it still cannot explain remain documented as unexplained.
+- [x] A reply of an unexpected length still falls back to raw with its own reason.

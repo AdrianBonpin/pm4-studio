@@ -17,9 +17,9 @@ export type LfCard = {
 
 /** One 13.56 MHz poll reply, undecoded.
  *
- * The payload's field offsets are an unverified hypothesis, so the backend hands
- * over the bytes and the frontend decoder (`src/lib/hfDecoder.ts`) decides what
- * — if anything — can be named. */
+ * The backend hands over the bytes and the frontend decoder
+ * (`src/lib/hfDecoder.ts`) decides what — if anything — can be named. The reply
+ * layout is measured against two real tags; see docs/PROTOCOL.md. */
 export type HfCard = {
   /** Payload byte for byte as the Reader reported it. */
   payload: number[];

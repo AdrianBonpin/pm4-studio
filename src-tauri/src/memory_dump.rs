@@ -88,17 +88,19 @@ impl std::error::Error for DumpError {}
 
 /// Which tag a dump came from.
 ///
-/// The UID and the timestamp are what tell two exports apart. The label is a
-/// convenience and is derived from the tag type the info reply reported.
+/// The UID and the timestamp are what tell two exports apart. A dump cannot
+/// resolve a family: it has no ATQA/SAK pair, and the memory a Classic needs
+/// sector authentication to read is memory this Reader cannot read at all. So
+/// the tag type the info reply reported is kept as the number it is, which is
+/// evidence, and never turned into a chip name — a conclusion the dump cannot
+/// support.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TagIdentity {
     /// The tag's UID, as hex bytes: `04 43 8A 01 22 09 03`.
     pub uid: String,
-    /// The tag type from the `0x0083` info reply.
+    /// The tag type from the `0x0083` info reply, as reported.
     pub tag_type: u32,
-    /// The tag type in words, or `tag type N` when it is not a known one.
-    pub tag_label: String,
     /// When the memory was read, ISO 8601, from the caller's clock.
     pub captured_at: String,
 }
@@ -108,20 +110,8 @@ impl TagIdentity {
         Self {
             uid: uid.into(),
             tag_type,
-            tag_label: tag_label(tag_type),
             captured_at: captured_at.into(),
         }
-    }
-}
-
-/// The tag type in words, for the tag types the protocol names.
-///
-/// `5` is the only value docs/PROTOCOL.md assigns, and it assigns it to an
-/// NTAG215. Any other value is reported by number rather than guessed at.
-pub fn tag_label(tag_type: u32) -> String {
-    match tag_type {
-        5 => "NTAG215".to_string(),
-        other => format!("tag type {other}"),
     }
 }
 
@@ -300,7 +290,7 @@ impl MemoryDump {
     pub fn to_text(&self) -> String {
         let mut text = String::new();
         text.push_str("PM4 Studio — memory dump\n");
-        text.push_str(&format!("Tag: {}\n", self.tag.tag_label));
+        text.push_str(&format!("Tag type: {}\n", self.tag.tag_type));
         text.push_str(&format!("UID: {}\n", self.tag.uid));
         text.push_str(&format!("Read at: {}\n", self.tag.captured_at));
         text.push_str(&format!("Status: {} (read completed)\n", self.status));
@@ -499,7 +489,14 @@ mod tests {
         let text = recorded_dump().to_text();
 
         assert!(text.starts_with("PM4 Studio — memory dump\n"), "{text}");
-        assert!(text.contains("Tag: NTAG215\n"));
+        assert!(
+            text.contains("Tag type: 5\n"),
+            "the reported type, as a number"
+        );
+        assert!(
+            !text.contains("NTAG215"),
+            "a dump has no ATQA/SAK pair, so it must not name a family: {text}"
+        );
         assert!(
             text.contains("UID: 04 43 8A 01 22 09 03\n"),
             "UID identifies the tag"
@@ -572,6 +569,27 @@ mod tests {
             "{}",
             refused.message()
         );
+
+        // A refused read names nothing: no dump was produced, so there is no Tag
+        // to name and no family to resolve.
+        for message in [
+            DumpError::Status { status: 1 }.message(),
+            DumpError::Status { status: 32 }.message(),
+            DumpError::WrongLength { got: 3 }.message(),
+        ] {
+            assert!(
+                message.contains("no dump") || message.contains("no memory"),
+                "{message}"
+            );
+            assert!(
+                !message.contains("NTAG"),
+                "a failed read names no family: {message}"
+            );
+            assert!(
+                !message.contains("MIFARE"),
+                "a failed read names no family: {message}"
+            );
+        }
     }
 
     #[test]
@@ -587,10 +605,13 @@ mod tests {
     }
 
     #[test]
-    fn a_tag_type_the_protocol_has_not_named_is_reported_by_number() {
-        assert_eq!(tag_label(5), "NTAG215");
-        let unknown = TagIdentity::new(NTAG215_UID, 7, CAPTURED_AT);
-        assert_eq!(unknown.tag_label, "tag type 7");
+    fn the_identity_carries_the_tag_type_as_a_number_never_a_family() {
+        // Every type is reported by number: the dump cannot resolve a family, so
+        // it does not promote a known one either.
+        let identity = TagIdentity::new(NTAG215_UID, 5, CAPTURED_AT);
+        assert_eq!(identity.tag_type, 5);
+        assert_eq!(identity.uid, NTAG215_UID);
+        assert_eq!(identity.captured_at, CAPTURED_AT);
     }
 
     #[test]

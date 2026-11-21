@@ -1,5 +1,6 @@
 /**
- * A small label that carries meaning: a status, or why a reading is provisional.
+ * A small label that carries meaning: a status, or why a reading could not be
+ * decoded.
  *
  * It takes a **tone**, not a colour. The hue lives in `src/index.css` (`--color-warn`,
  * `--color-ok`, `--color-err`, `--color-text-muted`), and the classes below are the

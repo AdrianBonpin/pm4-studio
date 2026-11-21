@@ -7,18 +7,21 @@
  * is the wire type plus the few pure sentences the dump view reads, so the words
  * can be tested without a desktop window.
  *
- * A dump interprets nothing. The only tag facts it carries are the UID and the
- * read time, which are there so two exports can be told apart.
+ * A dump interprets nothing. The tag facts it carries are the UID, the read time
+ * and the tag type number the info reply reported, which are there so two
+ * exports can be told apart and so the evidence is complete. It names no family:
+ * a dump has no ATQA/SAK pair to resolve one from, and the memory a MIFARE
+ * Classic needs sector authentication to read is memory this Reader cannot read
+ * at all.
  */
 
 /** Which tag a dump came from. */
 export interface DumpTag {
   /** The tag's UID as hex bytes: `04 43 8A 01 22 09 03`. */
   uid: string;
-  /** The tag type from the `0x0083` info reply. */
+  /** The tag type number the `0x0083` info reply reported. Kept as a number so
+   *  the dump never claims a family it has not resolved. */
   tagType: number;
-  /** The tag type in words, or `tag type N` when it is not a known one. */
-  tagLabel: string;
   /** When the memory was read, ISO 8601. */
   capturedAt: string;
 }
