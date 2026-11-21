@@ -39,6 +39,7 @@ beforeEach(() => {
 /** Severity per discriminator, written out again so a silent edit to the table fails here. */
 const EXPECTED_SEVERITY: Record<OutcomeKind, Severity> = {
   read: "success",
+  "beep-test": "success",
   "nothing-latched": "info",
   "read-incomplete": "warning",
   verified: "success",
@@ -112,6 +113,7 @@ describe("the discriminator set", () => {
     expect([...ALL_OUTCOME_KINDS].sort()).toEqual(
       [
         "announcement",
+        "beep-test",
         "blanked",
         "erased",
         "failed",
@@ -360,6 +362,24 @@ describe("the compatibility chirp", () => {
   });
 });
 
+describe("the beeper test", () => {
+  it("sounds, and says what was sent rather than what was heard", () => {
+    // The firmware never acknowledges the beep frame, so a message claiming the
+    // buzzer sounded would be a claim the app cannot support. What it can say is
+    // that the signal a completed operation makes was sent.
+    const { symbols, stop } = hearSignals();
+
+    report(outcomes.beepTest());
+
+    const [toast] = toastStore.getState().toasts;
+    expect(toast?.severity).toBe("success");
+    expect(symbols).toEqual(["done"]);
+    expect(toast?.message ?? "").not.toMatch(/heard|sounded|confirmed/i);
+    expect(toast?.detail ?? "").toMatch(/never confirms/i);
+    stop();
+  });
+});
+
 describe("every outcome the vocabulary can build", () => {
   const built: Outcome[] = [
     outcomes.tagRead("read", "55 00 84 82 12"),
@@ -373,6 +393,7 @@ describe("every outcome the vocabulary can build", () => {
     outcomes.refusedByReader("the frame was malformed"),
     outcomes.readerFailure("no such device"),
     outcomes.announcement("Saved."),
+    outcomes.beepTest(),
   ];
 
   it("has a non-empty message, a discriminator in the set, and a known severity", () => {

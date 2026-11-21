@@ -97,7 +97,12 @@ export type OutcomeKind =
   /** The Reader failed in a way none of the above name. */
   | "reader-failure"
   /** A stored preference changed. Informational: says something, sounds nothing. */
-  | "announcement";
+  | "announcement"
+  /**
+   * The beeper test was pressed in Settings. An operation the user started — it
+   * sounds, and it says what was sent rather than what was heard.
+   */
+  | "beep-test";
 
 /** Every discriminator, for the exhaustiveness tests and for documentation. */
 export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
@@ -117,6 +122,7 @@ export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
   "reader-wedged",
   "reader-failure",
   "announcement",
+  "beep-test",
 ];
 
 /**
@@ -140,6 +146,7 @@ const SEVERITY_OF: Record<OutcomeKind, Severity> = {
   "reader-wedged": "warning",
   "reader-failure": "error",
   announcement: "info",
+  "beep-test": "success",
 };
 
 /** A control a message can offer: reconnect the Reader, and so on. */
@@ -425,5 +432,25 @@ export const outcomes = {
    */
   announcement(message: string, detail?: string): Outcome {
     return make("announcement", "preferences", message, detail === undefined ? {} : { detail });
+  },
+
+  /**
+   * The beeper test in Settings: the one sound the app can make on request
+   * without an operation behind it.
+   *
+   * It is an outcome rather than a bare `beep` command because the audible
+   * channel is reachable only through this seam (ADR 0008), and because the test
+   * a user wants is of the whole path — the preference included — not of the
+   * wire. Diagnostics keeps the frame-level probe.
+   *
+   * The message states what was **sent**, never what was heard: the beep frame is
+   * fire-and-forget, so the app must not claim the buzzer sounded.
+   */
+  beepTest(): Outcome {
+    return make("beep-test", "preferences", "Signal sent.", {
+      detail:
+        "The same signal a completed operation makes. The firmware never confirms that " +
+        "the buzzer sounded.",
+    });
   },
 };

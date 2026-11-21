@@ -13,13 +13,23 @@ import { PAGES, PAGE_SUBTITLES } from "./pageCopy";
  */
 
 describe("the shell's page copy", () => {
-  it("covers every page in the sidebar", () => {
+  it("covers exactly the five destinations, in the order the sidebar shows them", () => {
+    // The set is the ticket: 125 kHz · 13.56 MHz · Library · Tools · Settings.
+    // A sixth entry, or a renamed one, is a change to the shell's navigation and
+    // fails here rather than shipping quietly.
     expect(PAGES.map((page) => page.id)).toEqual([
       "lf",
       "hf",
-      "drafts",
       "library",
       "tools",
+      "settings",
+    ]);
+    expect(PAGES.map((page) => page.label)).toEqual([
+      "125 kHz",
+      "13.56 MHz",
+      "Library",
+      "Tools",
+      "Settings",
     ]);
     expect(PAGE_SUBTITLES).toHaveLength(PAGES.length);
     // Nothing may be blank: an empty hint is a hole, not restraint.
@@ -27,6 +37,13 @@ describe("the shell's page copy", () => {
       expect(page.title.trim()).not.toBe("");
       expect(page.subtitle.trim()).not.toBe("");
     }
+  });
+
+  it("does not offer Drafts as a destination, because Library holds it", () => {
+    // Drafts stops being somewhere you navigate to. Library's subtitle may name
+    // it — the collection is reachable from there — but no destination may.
+    expect(PAGES.some((page) => (page.id as string) === "drafts")).toBe(false);
+    expect(PAGES.some((page) => page.label === "Drafts")).toBe(false);
   });
 
   it("never calls a Tag a badge, fob, chip or transponder", () => {

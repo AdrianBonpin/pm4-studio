@@ -9,17 +9,17 @@
 - Confirmation gates (existing) — catches a packaged control that stopped asking; misses nothing currently covered.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/14
-**Status:** ready
+**Status:** done
 
-- [ ] The sidebar offers exactly five destinations, and the current one is marked for assistive technology.
-- [ ] The destination you are on survives navigating away and back within a session.
-- [ ] Drafts is reachable inside Library as a second collection, so no saved thing is unreachable at any point in the work.
-- [ ] Settings opens with Feedback, About and Diagnostics, each reachable in one click; the page is built to take a fourth group without relayout.
-- [ ] Feedback holds a control over the corner messages appear in, persisted, and a beep test.
-- [ ] About shows the version, the credits, the repository link, the licence, and the Reader's product, manufacturer, serial and firmware.
-- [ ] The version has one authoritative source, and a test fails when either of the other two build manifests disagrees with it.
-- [ ] Diagnostics holds the indicator test — a beep and an LED-off — and the capability limits, so a limitation is stated once rather than repeated per tag.
-- [ ] Tools holds only the raw console, including the release build's read-only statement, which is shown before the console is used rather than when a frame is refused.
-- [ ] The sidebar no longer carries a beep control, and the control is not disabled by the Reader being disconnected.
-- [ ] The credits footer that repeated on every page is gone.
-- [ ] Every destination is reachable and renders with no Reader attached.
+- [x] The sidebar offers exactly five destinations, and the current one is marked for assistive technology.
+- [x] The destination you are on survives navigating away and back within a session.
+- [x] Drafts is reachable inside Library as a second collection, so no saved thing is unreachable at any point in the work.
+- [x] Settings opens with Feedback, About and Diagnostics, each reachable in one click; the page is built to take a fourth group without relayout.
+- [x] Feedback holds a control over the corner messages appear in, persisted, and a beep test.
+- [x] About shows the version, the credits, the repository link, the licence, and the Reader's product, manufacturer, serial and firmware.
+- [x] The version has one authoritative source, and a test fails when either of the other two build manifests disagrees with it.
+- [x] Diagnostics holds the indicator test — a beep and an LED-off — and the capability limits, so a limitation is stated once rather than repeated per tag.
+- [x] Tools holds only the raw console, including the release build's read-only statement, which is shown before the console is used rather than when a frame is refused.
+- [x] The sidebar no longer carries a beep control, and the control is not disabled by the Reader being disconnected.
+- [x] The credits footer that repeated on every page is gone.
+- [x] Every destination is reachable and renders with no Reader attached.
