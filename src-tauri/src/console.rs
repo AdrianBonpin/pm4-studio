@@ -381,6 +381,34 @@ mod tests {
     }
 
     #[test]
+    fn the_refusal_crosses_the_boundary_in_the_shape_the_console_reads() {
+        // `src/types.ts`'s `BuildRefusal` is this shape: the console tells a build
+        // refusal from a device failure by `kind` alone, so the tag is the
+        // contract and a rename here is a silent failure in the webview.
+        let refusal = decide(Capability::ReadOnly, NTAG_WRITE)
+            .refusal()
+            .expect("a refusal is returned for a refused command");
+        let json = serde_json::to_value(&refusal).expect("the refusal serialises");
+        assert_eq!(json["kind"], "refusedByBuild");
+        assert_eq!(json["cmd"], "0x0082");
+        assert!(json["message"]
+            .as_str()
+            .expect("the message is a string")
+            .contains("development build"));
+    }
+
+    #[test]
+    fn a_device_failure_is_tagged_apart_from_a_refusal() {
+        // One is the build's decision, the other is the frame or the Reader. A
+        // webview that could not tell them apart would report a broken Reader as
+        // a read-only build.
+        let json = serde_json::to_value(ConsoleError::failed("the reader is not plugged in"))
+            .expect("the failure serialises");
+        assert_eq!(json["kind"], "failed");
+        assert_eq!(json["message"], "the reader is not plugged in");
+    }
+
+    #[test]
     fn the_built_capability_is_the_one_the_compiler_flag_states() {
         // Debug builds (including this test's own build) keep the full range, so
         // this asserts `Full` here and asserts `ReadOnly` in the same test run
