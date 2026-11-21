@@ -1,5 +1,6 @@
 //! Tauri command surface for PM4 Studio.
 
+pub mod batch;
 pub mod blank;
 pub mod identity;
 pub mod library;
@@ -14,6 +15,7 @@ pub mod write_outcome;
 #[cfg(test)]
 mod test_frames;
 
+use batch::BatchAttempt;
 use blank::BlankAttempt;
 use identity::Identity;
 use library::{
@@ -206,6 +208,38 @@ pub struct WriteResult {
     pub count_problem: Option<String>,
 }
 
+/// Apply one write outcome to the Snapshot that carries this Identity.
+///
+/// The counting rule is `WriteOutcome::counts_as_confirmed_copy`'s, so a caller
+/// only has to hand over the outcome it observed. Recorded after the fact: the
+/// Tag is written either way, so a library that cannot be written to is
+/// reported, never raised.
+fn record_write_count(
+    app: &AppHandle,
+    identity: &Identity,
+    outcome: write_outcome::WriteOutcome,
+) -> (WriteCountOutcome, Option<String>) {
+    let store = match library_store(app) {
+        Ok(store) => store,
+        Err(e) => return (WriteCountOutcome::NoSnapshot, Some(e)),
+    };
+    let mut library = match store.load() {
+        Ok(library) => library,
+        Err(problem) => return (WriteCountOutcome::NoSnapshot, Some(problem.message())),
+    };
+    let record = library.record_write(identity, outcome);
+    if record.incremented() {
+        if let Err(e) = store.save(&library) {
+            let problem = match e {
+                SaveError::Refused(problem) => problem.message(),
+                SaveError::Io(detail) => format!("The library could not be saved: {detail}"),
+            };
+            return (record, Some(problem));
+        }
+    }
+    (record, None)
+}
+
 /// Write an Identity onto the 125 kHz tag currently on the reader.
 ///
 /// The Identity is validated before any device access, and the write itself is
@@ -248,35 +282,7 @@ fn lf_write(
         _ => None,
     };
 
-    // Record the count after the fact: the Tag is written either way, so a
-    // library that cannot be written to is reported, never raised.
-    let mut count_problem = None;
-    let record = match library_store(&app) {
-        Err(e) => {
-            count_problem = Some(e);
-            WriteCountOutcome::NoSnapshot
-        }
-        Ok(store) => match store.load() {
-            Err(problem) => {
-                count_problem = Some(problem.message());
-                WriteCountOutcome::NoSnapshot
-            }
-            Ok(mut library) => {
-                let record = library.record_write(&identity, outcome);
-                if record.incremented() {
-                    if let Err(e) = store.save(&library) {
-                        count_problem = Some(match e {
-                            SaveError::Refused(problem) => problem.message(),
-                            SaveError::Io(detail) => {
-                                format!("The library could not be saved: {detail}")
-                            }
-                        });
-                    }
-                }
-                record
-            }
-        },
-    };
+    let (record, count_problem) = record_write_count(&app, &identity, outcome);
 
     Ok(WriteResult {
         customer,
@@ -286,6 +292,75 @@ fn lf_write(
         verified: outcome.counts_as_confirmed_copy(),
         message,
         // A count that failed to persist is not reported as if it had.
+        confirmed_copies: match count_problem {
+            None => record.confirmed_copies(),
+            Some(_) => None,
+        },
+        count_problem,
+    })
+}
+
+/// What one attempt of a Batch Clone produced, in the shape the webview reads.
+///
+/// The batch holds one source Identity and writes it to successive Blanks. Each
+/// attempt reports its own outcome, which is why this view is one attempt and
+/// not a run: `skipped` is the case where the Tag in the write position already
+/// presents the Identity, so nothing was written and nothing is counted.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BatchAttemptView {
+    pub customer: u8,
+    pub data32: u32,
+    /// "verified" | "skipped" | "unverified" | "refused" | "failed" — see
+    /// `batch::BatchOutcome`.
+    pub outcome: &'static str,
+    /// Why this attempt did not confirm a copy, when it did not.
+    pub message: Option<String>,
+    /// What the Tag read as for this attempt, when it read as anything.
+    pub readback: Option<LfCard>,
+    /// Confirmed copies of this Identity after the attempt, when a Snapshot in
+    /// the library carries it. A skip never moves this number.
+    pub confirmed_copies: Option<u32>,
+    /// Set when the count could not be written to the library file.
+    pub count_problem: Option<String>,
+}
+
+/// One attempt of a Batch Clone: write `customer`/`data32` to the Tag now on the
+/// reader, guarded exactly as a single Clone is.
+///
+/// Called once per Blank. The Identity comes from the caller, which read the
+/// source Tag once when the run started, so no attempt re-reads the source. The
+/// Tag in the *write* position is re-read on every attempt (ADR 0001), so a Tag
+/// that cannot be read is refused rather than written blind, and a Tag that
+/// already presents this Identity is not written again — it is reported as
+/// `skipped`, which is legible and is never counted as a copy.
+#[tauri::command]
+fn lf_clone_attempt(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    customer: u8,
+    data32: u32,
+) -> Result<BatchAttemptView, String> {
+    let identity = Identity::new(customer, data32).map_err(|e| e.to_string())?;
+    let attempt = with_reader(&state, |r| Ok(batch::guarded_attempt(r, identity)))?;
+    if matches!(attempt, BatchAttempt::Failed(_)) {
+        // A transport error means the handle is suspect; drop it so the next
+        // attempt re-enumerates instead of failing forever.
+        if let Ok(mut slot) = state.reader.lock() {
+            *slot = None;
+        }
+    }
+    let verdict = batch::verdict(&attempt, identity);
+    let outcome = verdict.outcome;
+
+    let (record, count_problem) = record_write_count(&app, &identity, outcome.write_outcome());
+
+    Ok(BatchAttemptView {
+        customer,
+        data32,
+        outcome: outcome.as_str(),
+        message: verdict.message,
+        readback: verdict.readback,
         confirmed_copies: match count_problem {
             None => record.confirmed_copies(),
             Some(_) => None,
@@ -1027,6 +1102,7 @@ pub fn run() {
             beep,
             led_off,
             lf_write,
+            lf_clone_attempt,
             lf_blank,
             hf_ndef_preview,
             hf_ndef_write,

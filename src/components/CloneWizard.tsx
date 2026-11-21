@@ -1,14 +1,24 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowRight, Check, RotateCcw } from "lucide-react";
+import { ArrowRight, Check, Layers, RotateCcw } from "lucide-react";
 import { Button } from "./ui/Button";
+import { BatchClone } from "./BatchClone";
 import { Field, Readout } from "./Section";
 import { useLfPoller } from "../hooks/useReader";
 import { describeDeviceFailure } from "../lib/readerIdentity";
 import { confirmedCopiesLabel, writeNotice } from "../lib/writeOutcome";
 import type { LfCard, WriteResult } from "../types";
 
-type Step = "idle" | "awaitSource" | "sourceReady" | "awaitDest" | "writing" | "done" | "failed";
+type Step =
+  | "idle"
+  | "awaitSource"
+  | "sourceReady"
+  | "awaitDest"
+  | "writing"
+  | "done"
+  | "failed"
+  /** Several Blanks from the one source reading. Rendered by `BatchClone`. */
+  | "batch";
 
 const STEP_ORDER: Step[] = ["awaitSource", "sourceReady", "awaitDest", "writing", "done"];
 
@@ -30,6 +40,11 @@ interface CloneWizardProps {
 /**
  * Guided clone: tap the original, confirm what was read, swap in a blank, write,
  * verify. One linear flow with the current step always visible.
+ *
+ * The same source reading also feeds a Batch Clone (`batch` step): one Identity
+ * written to successive Blanks, each attempt reporting its own result. Sharing
+ * the read here is the point — the original is tapped once either way, and the
+ * batch path must never re-read it per attempt.
  */
 export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: CloneWizardProps) {
   const [step, setStep] = useState<Step>("idle");
@@ -91,7 +106,7 @@ export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: Clon
       }
       if (step === "awaitDest" && source) {
         if (card.id === source.id) {
-          setNote("That is still the source badge. Take it off and tap a blank tag.");
+          setNote("That is still the original tag. Take it off and tap a blank tag.");
           return;
         }
         setDest(card);
@@ -101,7 +116,7 @@ export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: Clon
     onDeviceError,
   );
 
-  // Clear a stale "still the source badge" note once the flow moves on.
+  // Clear a stale "still the original tag" note once the flow moves on.
   useEffect(() => {
     if (step !== "awaitDest") setNote(null);
   }, [step]);
@@ -110,7 +125,7 @@ export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: Clon
     return (
       <div className="flex flex-col gap-3">
         <p className="text-sm leading-relaxed text-text-muted">
-          Copies a badge id onto a blank tag. You will tap the original first, then a
+          Copies a tag's identity onto a blank tag. You will tap the original first, then a
           blank, and the result is read back to prove it matches.
         </p>
         <div>
@@ -119,6 +134,20 @@ export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: Clon
           </Button>
         </div>
       </div>
+    );
+  }
+
+  // The batch is its own run: it holds the reader and reports attempt by attempt,
+  // so it takes over the whole step rather than sitting inside the stepper.
+  if (step === "batch" && source) {
+    return (
+      <BatchClone
+        source={source}
+        connected={connected}
+        onChirp={onChirp}
+        onExit={() => setStep("sourceReady")}
+        onDeviceError={onDeviceError}
+      />
     );
   }
 
@@ -150,7 +179,7 @@ export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: Clon
 
       {step === "awaitSource" && (
         <p className="text-sm text-text-muted">
-          Tap the badge you want to copy on the reader, flat and centred.
+          Tap the tag you want to copy on the reader, flat and centred.
         </p>
       )}
 
@@ -161,9 +190,12 @@ export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: Clon
             <Field label="Facility / card" value={`${source.facility} / ${source.card}`} />
             <Field label="data32" value={`0x${source.data32.toString(16).padStart(8, "0").toUpperCase()}`} />
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <Button variant="primary" onClick={() => setStep("awaitDest")}>
-              Use this badge
+              Use this tag
+            </Button>
+            <Button variant="secondary" onClick={() => setStep("batch")}>
+              <Layers size={13} /> Write it to several blanks
             </Button>
             <Button variant="ghost" onClick={reset}>
               Cancel

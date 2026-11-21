@@ -158,7 +158,7 @@ pub struct DeviceInfo {
     pub serial: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LfCard {
     /// EM4100 customer/version byte.
     pub customer: u8,
@@ -481,7 +481,11 @@ impl Reader {
 
     /// Read the tag currently in the write position, retrying briefly because a
     /// tag that was just placed needs a moment to be seen.
-    fn read_tag_in_position(&self) -> Result<Option<LfCard>, String> {
+    ///
+    /// `pub(crate)` so a Batch Clone attempt (`crate::batch`) re-reads the Tag in
+    /// the write position for every attempt, exactly as ADR 0001 requires, using
+    /// the same retry window the single-clone path uses.
+    pub(crate) fn read_tag_in_position(&self) -> Result<Option<LfCard>, String> {
         for attempt in 0..10 {
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(200));
