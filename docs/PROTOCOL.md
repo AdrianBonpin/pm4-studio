@@ -161,9 +161,33 @@ IN   55 00 69 00 13 ST 01 [UID(4)] …tail…
   garbage and must be ignored)
 - UID at payload offset 2..6
 
-**Not verified:** ATQA/SAK tail offsets. Upstream reports `ATQA 0x0004,
-SAK 0x08` (MIFARE Classic 1K) for one card, but we have not reproduced this on
-real HF hardware. This app therefore reports only the UID plus the raw payload.
+**Not verified — the tail offsets are a hypothesis.** Upstream reports `ATQA
+0x0004, SAK 0x08` (MIFARE Classic 1K) for one card, but we have not reproduced
+this on real HF hardware. Nothing below is backed by a capture from this
+Reader; it comes from third-party client source:
+
+| Payload offset | Meaning (hypothesis) |
+|---|---|
+| 0 | validity flag (`0x01` latched) — the byte right after the header |
+| 1 | constant `0x01`, carries nothing |
+| 2..6 | UID, 4 bytes |
+| 6..14 | unconfirmed |
+| 14..16 | ATQA, byte-swapped relative to how NXP quotes it |
+| 16 | unconfirmed |
+| 17 | SAK of the last cascade level |
+| 18 | unconfirmed |
+
+The whole reply is 19 bytes in one USB report, so nothing needs reassembling.
+The app decodes this layout in `src/lib/hfDecoder.ts` and **labels every decoded
+value provisional** until a real capture confirms or corrects it. A reply of a
+different length, an ATQA/SAK pair no published table assigns, or a UID field
+that cannot hold the announced UID all fall back to raw bytes with the reason
+shown — no card type, no capacity, no UID split.
+
+Earlier app code read the validity flag from payload byte 1 instead of byte 0,
+which is why it reported no tag for a latched reply. `hf_card_from_payload` in
+`src-tauri/src/reader.rs` now reads byte 0 and hands the raw payload to the
+frontend undecoded.
 
 ### `0x0072` — 125 kHz read (EM4100)
 
@@ -252,7 +276,8 @@ before the payload is meaningful.
 ## Open problems
 
 1. **ATQA/SAK offsets** for the HF poll tail. Not yet captured from a real
-   13.56 MHz card, so this app reports only the UID plus the raw payload.
+   13.56 MHz card, so the app decodes the layout above and marks every decoded
+   value provisional.
 2. **Multi-report reassembly** for NTAG responses.
 3. **`C8 42`** meaning in the LF read payload.
 4. **What sets the T5577 lock bit.** One write locked a chip; another did not.

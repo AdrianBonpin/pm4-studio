@@ -51,7 +51,7 @@ const PAGES: {
     id: "hf",
     label: "13.56 MHz",
     title: "13.56 MHz",
-    subtitle: "ISO14443-A cards. Read the UID of whatever is in the field.",
+    subtitle: "ISO14443-A tags. Read the UID and the card type the pair identifies.",
     icon: Radio,
   },
   {
