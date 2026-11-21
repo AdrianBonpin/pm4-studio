@@ -19,7 +19,6 @@ type Step = "idle" | "await" | "confirm" | "writing" | "done";
 
 interface BlankTagProps {
   connected: boolean;
-  onChirp: () => void;
   /** Surfaces a dead or wedged Reader in the shell's notice strip. */
   onDeviceError?: (message: string) => void;
 }
@@ -39,13 +38,15 @@ interface BlankTagProps {
  *
  * Reset is also the only writability test this Reader can offer, and the
  * confirmation says so before the write (ADR 0007). The component decides
- * neither the wording nor the classification: Rust judges the re-read, this panel
- * reports the one outcome through the seam, and the message and the signal both
- * come from there. So a re-read that still finds an Identity reports "this tag
- * will not accept writes" and sounds attention, while a never-written Tag still
- * blanks and is reported as blanked rather than as verified.
+ * neither the wording nor the classification: Rust judges the re-read, and every
+ * step that completes reports its own outcome through the seam, with the message
+ * and the signal both coming from there. So the reading that produces the
+ * confirmation is reported as a read, and a re-read that still finds an Identity
+ * reports "this tag will not accept writes" and sounds attention — while a
+ * never-written Tag still blanks and is reported as blanked rather than as
+ * verified.
  */
-export function BlankTag({ connected, onChirp, onDeviceError }: BlankTagProps) {
+export function BlankTag({ connected, onDeviceError }: BlankTagProps) {
   const [step, setStep] = useState<Step>("idle");
   const [card, setCard] = useState<LfCard | null>(null);
   const [result, setResult] = useState<BlankResult | null>(null);
@@ -68,7 +69,11 @@ export function BlankTag({ connected, onChirp, onDeviceError }: BlankTagProps) {
     (read) => {
       setCard(read);
       setStep("confirm");
-      onChirp();
+      // The Tag the user asked to blank was read: that reading is an operation
+      // of its own and reports itself, the same way a Clone's two reads do. The
+      // blanking write that may follow reports separately, so no step of this
+      // flow is silent and none of them is heard twice.
+      report(outcomes.tagRead("reset", read.id));
     },
     onDeviceError,
   );
@@ -101,7 +106,7 @@ export function BlankTag({ connected, onChirp, onDeviceError }: BlankTagProps) {
         setStep("done");
       }
     },
-    [onChirp],
+    [],
   );
 
   const checkTag = useCallback(async () => {

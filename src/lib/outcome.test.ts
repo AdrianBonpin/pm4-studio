@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ALL_OUTCOME_KINDS,
-  legacyChirp,
+  ALL_OUTCOME_OPERATIONS,
   outcomes,
   report,
   severityOf,
@@ -14,6 +14,7 @@ import {
 import { ATTENTION_LED_HOLD_MS, chirpSequenceForOutcome } from "./chirpSequence";
 import { subscribeSignals, type SignalSymbol } from "./signal";
 import { toastStore } from "./toastStore";
+import type { NdefWriteResult } from "./tagWrite";
 import { BUILD_REFUSAL_LABEL } from "./consoleRefusal";
 import { writeNotice } from "./writeOutcome";
 import { attemptNotice } from "./batchClone";
@@ -217,6 +218,30 @@ describe("the discriminator set", () => {
         "unreadable",
         "unverified",
         "verified",
+      ].sort(),
+    );
+  });
+
+  it("names every operation once, so an operation is a decision and not a word", () => {
+    // The operations the seam can speak about. `src/reporting.test.tsx` drives
+    // one real operation per entry here and fails when one reports nothing, so a
+    // new operation cannot slip in as a silence: adding it to this list fails
+    // until something reports it.
+    expect([...ALL_OUTCOME_OPERATIONS].sort()).toEqual(
+      [
+        "batch",
+        "clone",
+        "console",
+        "copy",
+        "draft",
+        "erase",
+        "hf-read",
+        "library",
+        "preferences",
+        "read",
+        "reader",
+        "reset",
+        "write",
       ].sort(),
     );
   });
@@ -654,18 +679,6 @@ describe("one batch attempt", () => {
   });
 });
 
-describe("the compatibility chirp", () => {
-  it("still reaches the audible half, and raises no message", () => {
-    const { symbols, stop } = hearSignals();
-
-    legacyChirp();
-
-    expect(symbols).toEqual(["done"]);
-    expect(toastStore.getState().toasts).toHaveLength(0);
-    stop();
-  });
-});
-
 describe("the beeper test", () => {
   it("sounds, and says what was sent rather than what was heard", () => {
     // The firmware never acknowledges the beep frame, so a message claiming the
@@ -709,12 +722,31 @@ describe("the beeper test", () => {
   });
 });
 
+/**
+ * One 13.56 MHz write, as `hf_ndef_write` answers it.
+ *
+ * A write of a whole NDEF message reports in the same vocabulary as a 125 kHz
+ * one — verified, unverified, refused, failed — and its words come from
+ * `lib/tagWrite` so the notice beside the result is the message in the corner.
+ */
+const ndefWriteResult: NdefWriteResult = {
+  outcome: "verified",
+  message: null,
+  before: null,
+  after: null,
+  capacityBytes: 144,
+  requiredBytes: 20,
+  wrotePages: [4],
+  acceptedPages: [4],
+};
+
 describe("every outcome the vocabulary can build", () => {
   const built: Outcome[] = [
     outcomes.tagRead("read", "55 00 84 82 12"),
     outcomes.tagRead("hf-read", "04 A2 24 5A 6C 71 80"),
     outcomes.nothingLatched("hf-read"),
     outcomes.write("batch", writeResult("verified")),
+    outcomes.ndefWrite(ndefWriteResult),
     outcomes.blank(BLANK),
     outcomes.blank(WILL_NOT_ACCEPT),
     outcomes.erase(ERASE),

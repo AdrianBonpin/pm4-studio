@@ -7,13 +7,12 @@
  * by whoever reports; it is derived from the outcome's severity in `outcome.ts`,
  * so a message and the sound it makes cannot disagree.
  *
- * `report` is the only caller of `emitSignal` in the app, with one marked
- * exception (`legacyChirp` in `outcome.ts`) for call sites ticket 17 rewires.
- * Nothing here reaches the hardware: turning a symbol into chirps — counts, gaps,
- * the two-second LED hold, a bounded queue, the three-way quiet level — is
- * ticket 04's work, and it arrives by subscribing here. A beep failure is
- * swallowed by the subscriber: the signal is never the only report of an outcome
- * and never gates the operation that produced it.
+ * `report` is the only caller of `emitSignal` in the app. Nothing here reaches
+ * the hardware: turning a symbol into chirps — counts, gaps, the two-second LED
+ * hold, a bounded queue, the three-way quiet level — is ticket 04's work, and it
+ * arrives by subscribing here. A beep failure is swallowed by the subscriber: the
+ * signal is never the only report of an outcome and never gates the operation
+ * that produced it.
  */
 
 /**

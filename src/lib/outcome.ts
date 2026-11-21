@@ -26,8 +26,7 @@
  *
  * Background work — connecting, the firmware query, autosave, the poll loop's
  * iterations — reports nothing, by design. The rule is that an operation the user
- * starts ends in exactly one outcome; the compatibility chirp below is the one
- * marked exception, and it disappears in ticket 17.
+ * starts ends in exactly one outcome, and `report` is the only way to say one.
  */
 
 import type {
@@ -37,6 +36,7 @@ import type {
   BuildRefusal,
   EraseResult,
   RefusalCause,
+  WriteOutcome,
   WriteResult,
 } from "../types";
 import type { SaveResult } from "./library";
@@ -48,6 +48,7 @@ import { eraseNotice } from "./eraseTag";
 import { QUIET_LEVEL_LABEL, type QuietLevel } from "./quietLevel";
 import { classifyDeviceFailure, deviceFailureNotice } from "./readerIdentity";
 import { emitSignal } from "./signal";
+import { writeNotice as ndefWriteNotice, type NdefWriteResult } from "./tagWrite";
 import { pushToast } from "./toastStore";
 import { refusalCauseOf, writeNotice } from "./writeOutcome";
 import type { SignalSymbol } from "./signal";
@@ -72,6 +73,30 @@ export type OutcomeOperation =
   | "console"
   | "reader"
   | "preferences";
+
+/**
+ * Every operation, for the enumeration test and for documentation.
+ *
+ * `src/reporting.test.tsx` drives one real operation per entry and fails when one
+ * of them reports nothing. That is what makes coverage a property of the
+ * structure: adding an operation means adding it here, and adding it here fails
+ * until something reports it.
+ */
+export const ALL_OUTCOME_OPERATIONS: readonly OutcomeOperation[] = [
+  "read",
+  "hf-read",
+  "library",
+  "write",
+  "copy",
+  "reset",
+  "clone",
+  "batch",
+  "erase",
+  "draft",
+  "console",
+  "reader",
+  "preferences",
+];
 
 /**
  * What an operation did, as a closed set.
@@ -324,24 +349,10 @@ export function report(outcome: Outcome): void {
   emitSignal(signalOf(outcome));
 }
 
-/**
- * Compatibility: one `done` signal for a call site that still calls the pre-seam
- * `chirp()` helper.
- *
- * Those call sites have no outcome to describe yet — the pages are rewired in
- * tickets 11–16 — so this raises a sound and no message, and the toast half stays
- * exactly as silent as it is today. It is the only signal emitted without an
- * outcome, it exists so nothing regresses audibly in the meantime, and ticket 17
- * deletes it along with the `onChirp` props that carry it.
- */
-export function legacyChirp(): void {
-  emitSignal(signalFor("success"));
-}
-
 /** Everything a caller may need to describe what an operation did. */
 export const outcomes = {
   /** A Tag was read and the read is the result: `Read 55 00 84 82 12.` */
-  tagRead(operation: "read" | "hf-read", identity: string): Outcome {
+  tagRead(operation: "read" | "hf-read" | "reset", identity: string): Outcome {
     return make("read", operation, `Read ${identity}.`);
   },
 
@@ -537,6 +548,28 @@ export const outcomes = {
       failed: "failed",
     };
     return make(kind[result.outcome], "erase", eraseNotice(result).text);
+  },
+
+  /**
+   * What became of one 13.56 MHz write: a whole NDEF message put on a Tag,
+   * whether those Records came from a Draft or from a Snapshot.
+   *
+   * The words are `lib/tagWrite`'s, because that module already words the notice
+   * beside the result: the line on the page and the message in the corner come
+   * from one sentence rather than two that can drift. `blanked` and `erased` are
+   * things writing a message cannot do, so a backend reporting either is a bug
+   * and is reported as a failure rather than as a success nobody would believe.
+   */
+  ndefWrite(result: NdefWriteResult): Outcome {
+    const kind: Record<WriteOutcome, OutcomeKind> = {
+      verified: "verified",
+      unverified: "unverified",
+      refused: "refused",
+      failed: "failed",
+      blanked: "failed",
+      erased: "failed",
+    };
+    return make(kind[result.outcome], "write", ndefWriteNotice(result).text);
   },
 
   /**

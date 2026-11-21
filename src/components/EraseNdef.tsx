@@ -11,6 +11,7 @@ import {
   type NdefErasePreview,
 } from "../lib/eraseTag";
 import { pagesLabel } from "../lib/tagWrite";
+import { outcomes, report } from "../lib/outcome";
 import { NOTICE_TONE_CLASS } from "../lib/writeOutcome";
 import type { EraseResult } from "../types";
 
@@ -66,10 +67,18 @@ export function EraseNdef({ connected }: EraseNdefProps) {
     setPhase("erasing");
     const release = beginDeviceOperation();
     try {
-      setResult(await invoke<EraseResult>("hf_ndef_erase"));
+      const erased = await invoke<EraseResult>("hf_ndef_erase");
+      setResult(erased);
       setPreview(null);
+      // The erase is the operation the user confirmed, so it reports itself: the
+      // words come from `eraseNotice` and the severity from the outcome's kind,
+      // so the notice on the page and the sound cannot disagree.
+      report(outcomes.erase(erased));
     } catch (e) {
       setError(String(e));
+      // A Reader that could not send the erase is its own news, with its own
+      // remedy — never an erase that did not happen.
+      report(outcomes.readerFailure(e));
     } finally {
       release();
       setPhase("idle");

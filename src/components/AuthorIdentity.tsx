@@ -37,6 +37,7 @@ import {
   type AuthorMode,
 } from "../lib/authorIdentity";
 import { classifyDeviceFailure, describeDeviceFailure } from "../lib/readerIdentity";
+import { outcomes, report } from "../lib/outcome";
 import {
   replacementConfirmation,
   type WritePosition,
@@ -59,7 +60,6 @@ const LIBRARY_NOTE_TONE: Record<LibraryNote["tone"], string> = {
 
 interface AuthorIdentityProps {
   connected: boolean;
-  onChirp: () => void;
   /** Snapshots live in a file, so keeping one is a call into the Rust store. */
   library: LibraryState;
   /** Surfaces a dead or wedged Reader in the shell's notice strip. */
@@ -93,7 +93,7 @@ interface AuthorIdentityProps {
  * carrying this Identity is refused, and neither refusal is a prompt. There is no
  * override in this component, and there is not meant to be one.
  */
-export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: AuthorIdentityProps) {
+export function AuthorIdentity({ connected, library, onDeviceError }: AuthorIdentityProps) {
   const [phase, setPhase] = useState<Phase>("entry");
   const [mode, setMode] = useState<AuthorMode>("parts");
   const [entry, setEntry] = useState<AuthorEntry>(EMPTY_ENTRY);
@@ -230,8 +230,12 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
         });
         setResult(written);
         setNotice(authorWriteNotice(written, target.id));
+        // Whatever the write came to, in the write vocabulary's own words: a
+        // verified write, a refusal the guard reported, a sent write the read-back
+        // could not confirm, or a failure. One outcome, reported once, so the
+        // notice beside the form and the message in the corner cannot disagree.
+        report(outcomes.write("write", written));
         if (written.verified) {
-          onChirp();
           // One action: a kept Identity is saved from the read-back that proved
           // the write, so the Snapshot records what the Tag really holds.
           if (keepSnapshot) await keepInLibrary(written);
@@ -239,15 +243,14 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
       } catch (e) {
         // A wedged, absent or claimed Reader is reported with its remedy, never
         // as a write that happened.
-        const text = describeDeviceFailure(e);
-        setNotice({ tone: "err", text });
-        if (classifyDeviceFailure(String(e)) !== "unknown") onDeviceError?.(text);
+        setNotice({ tone: "err", text: describeDeviceFailure(e) });
+        report(outcomes.readerFailure(e));
       } finally {
         setBusy(false);
         setPhase("done");
       }
     },
-    [keepSnapshot, keepInLibrary, onChirp, onDeviceError],
+    [keepSnapshot, keepInLibrary, onDeviceError],
   );
 
   const confirmation = preview ? authorConfirmation(preview, keepSnapshot) : null;

@@ -241,7 +241,7 @@ describe("reading the list", () => {
     const backend = fakeBackend({ drafts_load: () => view(stored) });
     const { user } = renderUi(
       <DraftsProvider>
-        <LibraryPage connected={false} library={libraryState()} onChirp={() => {}} />
+        <LibraryPage connected={false} library={libraryState()} />
       </DraftsProvider>,
     );
     await waitFor(() => {
@@ -358,7 +358,6 @@ describe("a library that cannot be written", () => {
               problem: PROBLEM,
             },
           })}
-          onChirp={() => {}}
         />
       </DraftsProvider>,
     );

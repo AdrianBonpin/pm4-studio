@@ -22,8 +22,8 @@ import type { LfCard, WriteOutcome, WriteResult } from "../types";
  *     a refusal;
  *   * the two refusal conditions are named apart, because they have two
  *     different fixes;
- *   * nothing reaches the beeper except through the seam — the legacy chirp
- *     callback is not called at all.
+ *   * nothing reaches the beeper except through the seam: the wizard takes no
+ *     callback that could make a sound, so every chirp here came from `report`.
  */
 
 const SOURCE: LfCard = {
@@ -86,18 +86,17 @@ function newestToast(): Toast | undefined {
   return toastStore.getState().toasts[0];
 }
 
-/** Render the wizard with a chirp spy, so the legacy sound path is observable. */
+/**
+ * Render the wizard.
+ *
+ * There is no sound-making prop to spy on, which is the point: the type has none,
+ * so a test cannot hand the wizard a second way to beep. Everything audible in
+ * this file arrives through `report(outcome)` and is heard by `subscribeSignals`.
+ */
 function renderWizard(answers: Record<string, CommandAnswer>) {
   const backend = fakeBackend(answers);
-  const chirps: number[] = [];
-  const ui = renderUi(
-    <CloneWizard
-      connected
-      onChirp={() => chirps.push(1)}
-      onDeviceError={() => {}}
-    />,
-  );
-  return { backend, chirps, ...ui };
+  const ui = renderUi(<CloneWizard connected onDeviceError={() => {}} />);
+  return { backend, ...ui };
 }
 
 /** Read the original, then the destination, and stop on the confirmation. */
@@ -280,17 +279,18 @@ describe("what the write came to", () => {
 });
 
 describe("the beeper in this flow", () => {
-  it("is reached only through the outcome seam, never the legacy chirp prop", async () => {
+  it("is reached only through the outcome seam", async () => {
     const heard = hearSignals();
     stopHearing = heard.stop;
-    const { user, chirps } = await upToConfirmation({ lf_write: () => result("verified") });
+    const { user } = await upToConfirmation({ lf_write: () => result("verified") });
 
     await user.click(screen.getByRole("button", { name: ACTION }));
     await waitFor(() => expect(newestToast()?.kind).toBe("verified"));
 
-    // Three outcomes, three signals, and not one of them went through the
-    // callback the components used to hand around.
+    // Three operations, three signals, and every one of them arrived through
+    // `report`. The wizard takes no callback that could make a sound, so there is
+    // no second channel for a test to observe and none for the app to use.
     expect(heard.symbols).toHaveLength(3);
-    expect(chirps).toHaveLength(0);
+    expect(toastStore.getState().toasts.length).toBeGreaterThanOrEqual(3);
   });
 });

@@ -66,7 +66,7 @@ async function upToConfirmation(reply: BlankResult = BLANKED) {
     lf_blank: () => reply,
   });
   const { user } = renderUi(
-    <BlankTag connected onChirp={() => {}} onDeviceError={() => {}} />,
+    <BlankTag connected onDeviceError={() => {}} />,
   );
 
   await user.click(screen.getByRole("button", { name: "Read the tag to blank" }));
@@ -134,8 +134,11 @@ describe("a tag that will not accept writes", () => {
 
     await user.click(screen.getByRole("button", { name: "Blank this tag permanently" }));
 
+    // Two outcomes were reported, because the flow is two operations: the read
+    // that produced the confirmation, and the blanking write. The newest is the
+    // write's.
     const [toast] = await waitFor(() => {
-      expect(toastStore.getState().toasts.length).toBe(1);
+      expect(toastStore.getState().toasts.length).toBe(2);
       return toastStore.getState().toasts;
     });
     expect(toast?.message).toContain("This tag will not accept writes.");
@@ -151,7 +154,10 @@ describe("a tag that will not accept writes", () => {
     await user.click(screen.getByRole("button", { name: "Blank this tag permanently" }));
 
     await waitFor(() => {
-      expect(symbols).toEqual(["attention"]);
+      // The read that produced the confirmation sounds *done*; the refusal that
+      // followed is the attention. Both came through `report`, and neither came
+      // from a callback the component was handed.
+      expect(symbols).toEqual(["done", "attention"]);
     });
     stop();
   });
@@ -181,13 +187,14 @@ describe("a never-written tag", () => {
 
     expect(backend.callsTo("lf_blank")).toHaveLength(1);
     const [toast] = await waitFor(() => {
-      expect(toastStore.getState().toasts.length).toBe(1);
+      // The read, then the blanked write: two operations, two outcomes.
+      expect(toastStore.getState().toasts.length).toBe(2);
       return toastStore.getState().toasts;
     });
     expect(toast?.message).toContain("Blanked");
     expect(toast?.message).not.toMatch(/verified/i);
     expect(toast?.severity).toBe("success");
-    expect(symbols).toEqual(["done"]);
+    expect(symbols).toEqual(["done", "done"]);
     stop();
   });
 });

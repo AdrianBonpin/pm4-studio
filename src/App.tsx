@@ -69,7 +69,7 @@ export default function App() {
   const [hfMode, setHfMode] = useState<HfMode>("read");
   const reader = useReader();
   const library = useLibrary();
-  const { quietLevel, setQuietLevel, chirp } = useBeep();
+  const { quietLevel, setQuietLevel } = useBeep();
 
   const current = PAGES.find((p) => p.id === page) ?? PAGES[0];
   const connected = reader.connected;
@@ -189,7 +189,6 @@ export default function App() {
               {page === "lf" && (
                 <LfPage
                   connected={connected}
-                  onChirp={chirp}
                   library={library}
                   onDeviceError={reader.setError}
                 />
@@ -205,7 +204,7 @@ export default function App() {
                 />
               )}
               {page === "library" && (
-                <LibraryPage connected={connected} library={library} onChirp={chirp} />
+                <LibraryPage connected={connected} library={library} />
               )}
               {page === "tools" && <ToolsPage connected={connected} />}
               {page === "settings" && (

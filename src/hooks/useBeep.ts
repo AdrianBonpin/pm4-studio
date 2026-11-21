@@ -19,11 +19,13 @@
  *     fire-and-forget and the firmware never acknowledges it, so every send is
  *     swallowed here. The signal is never the only report of an outcome.
  *
- * Two deliberate leftovers. `chirp()` is the pre-seam helper that pages which
- * have not been rewired still pass around as a prop: it raises a `done` symbol
- * through the same seam, and ticket 17 deletes it. And the level's own migration
- * lives in `lib/quietLevel`, which reads the boolean preference this replaced
- * rather than reinterpreting it.
+ * The level's own migration lives in `lib/quietLevel`, which reads the boolean
+ * preference this replaced rather than reinterpreting it.
+ *
+ * There is exactly one way into the beeper and it is the seam: `report(outcome)`
+ * is what emits a symbol, and this subscriber is the only thing that plays one.
+ * Nothing else in the app can make a sound, which is why an operation that
+ * forgets to report itself is a visible gap rather than a silence (ADR 0008).
  *
  * Clear-all-saved-data is the third thing here: it removes the stored keys this
  * preference is read from, so the hook listens for that and returns the level to
@@ -33,7 +35,6 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { legacyChirp } from "../lib/outcome";
 import { subscribePreferenceReset } from "../lib/preferences";
 import {
   DEFAULT_QUIET_LEVEL,
@@ -102,9 +103,5 @@ export function useBeep(options: UseBeepOptions = {}) {
     saveQuietLevel(level);
   }, []);
 
-  const chirp = useCallback(async () => {
-    legacyChirp();
-  }, []);
-
-  return { quietLevel, setQuietLevel, chirp };
+  return { quietLevel, setQuietLevel };
 }

@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import { LibraryPage } from "./LibraryPage";
 import { fakeBackend, renderUi } from "../test/dom";
+import { toastStore } from "../lib/toastStore";
 import { SNAPSHOT, libraryState, libraryView } from "../test/libraryState";
 import { EMPTY_LIBRARY_TITLE } from "../lib/library";
 import type { LibraryState } from "../hooks/useLibrary";
@@ -109,7 +110,6 @@ function render(snapshots: Snapshot[] = [SNAPSHOT], overrides: Partial<LibrarySt
     <LibraryPage
       connected={false}
       library={state(snapshots, overrides)}
-      onChirp={() => {}}
     />,
   );
 }
@@ -268,13 +268,16 @@ describe("deleting from the detail pane", () => {
   });
 });
 
+beforeEach(() => {
+  toastStore.clear();
+});
+
 describe("writing a Snapshot back to a tag", () => {
   it("writes the Snapshot in the pane, reports the outcome and counts the copy", async () => {
     const backend = fakeBackend({ lf_write: () => VERIFIED });
-    const onChirp = vi.fn();
     const reload = vi.fn(async () => {});
     const { user } = renderUi(
-      <LibraryPage connected library={state([SNAPSHOT], { reload })} onChirp={onChirp} />,
+      <LibraryPage connected library={state([SNAPSHOT], { reload })} />,
     );
 
     await user.click(within(pane()).getByRole("button", { name: "Write to tag" }));
@@ -288,8 +291,11 @@ describe("writing a Snapshot back to a tag", () => {
       customer: SNAPSHOT.identity?.customer,
       data32: SNAPSHOT.identity?.data32,
     });
+    // The write reports itself through the seam: one message, carrying the write
+    // vocabulary's own word for a confirmed copy. There is no second channel for
+    // it to disagree with.
     await waitFor(() => {
-      expect(onChirp).toHaveBeenCalled();
+      expect(toastStore.getState().toasts[0]?.kind).toBe("verified");
     });
     expect(reload).toHaveBeenCalled();
     expect(pane().textContent).toContain("Verified");
@@ -363,7 +369,7 @@ describe("writing a saved 13.56 MHz Snapshot back to a tag", () => {
     });
     const reload = vi.fn(async () => {});
     const { user } = renderUi(
-      <LibraryPage connected library={state([HF_SNAPSHOT], { reload })} onChirp={() => {}} />,
+      <LibraryPage connected library={state([HF_SNAPSHOT], { reload })} />,
     );
 
     // Reading the tag is the first half: nothing is written by it.
@@ -397,7 +403,7 @@ describe("writing a saved 13.56 MHz Snapshot back to a tag", () => {
     });
     const reload = vi.fn(async () => {});
     const { user } = renderUi(
-      <LibraryPage connected library={state([HF_SNAPSHOT], { reload })} onChirp={() => {}} />,
+      <LibraryPage connected library={state([HF_SNAPSHOT], { reload })} />,
     );
 
     await user.click(within(pane()).getByRole("button", { name: "Check tag" }));

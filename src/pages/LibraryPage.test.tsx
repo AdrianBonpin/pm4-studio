@@ -25,7 +25,7 @@ describe("deleting a Snapshot", () => {
     fakeBackend();
     const remove = vi.fn(async (_id: string) => {});
     const { user } = renderUi(
-      <LibraryPage connected={false} library={libraryState({ remove })} onChirp={() => {}} />,
+      <LibraryPage connected={false} library={libraryState({ remove })} />,
     );
 
     await user.click(screen.getByRole("button", { name: `Delete ${SNAPSHOT.name}` }));
@@ -46,7 +46,7 @@ describe("deleting a Snapshot", () => {
     fakeBackend();
     const remove = vi.fn(async (_id: string) => {});
     const { user } = renderUi(
-      <LibraryPage connected={false} library={libraryState({ remove })} onChirp={() => {}} />,
+      <LibraryPage connected={false} library={libraryState({ remove })} />,
     );
 
     await user.click(screen.getByRole("button", { name: `Delete ${SNAPSHOT.name}` }));
@@ -80,7 +80,6 @@ describe("a lift that could not be written", () => {
         library={libraryState({
           view: { ...libraryView(), migrationWarning: WARNING },
         })}
-        onChirp={() => {}}
       />,
     );
 
@@ -96,7 +95,7 @@ describe("a lift that could not be written", () => {
   it("says nothing when the file was lifted and written", () => {
     fakeBackend();
     renderUi(
-      <LibraryPage connected={false} library={libraryState()} onChirp={() => {}} />,
+      <LibraryPage connected={false} library={libraryState()} />,
     );
 
     expect(screen.queryByText(/could not be rewritten/)).toBeNull();

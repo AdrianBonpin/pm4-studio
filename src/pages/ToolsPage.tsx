@@ -13,6 +13,7 @@ import {
   permittedSentence,
 } from "../lib/consoleRefusal";
 import { isTauri } from "../lib/platform";
+import { outcomes, report } from "../lib/outcome";
 import type { BuildRefusal, ConsoleCapability, RawResponse } from "../types";
 
 interface ToolsPageProps {
@@ -86,9 +87,21 @@ export function ToolsPage({ connected }: ToolsPageProps) {
     } catch (e) {
       // Two different pieces of news: the build refused the command, or the
       // frame or the Reader failed. Only the first is shown as the build's.
+      //
+      // Both are reported through the seam, because both are the result of an
+      // operation the user pressed: a frame this build will not send is
+      // *attention* with the build's name on it, and a Reader that did not answer
+      // is its own outcome with its own remedy. A reply that arrived is the
+      // readout below and nothing else — the reply is evidence, not a verdict,
+      // and inventing a success kind for it would say more than a raw frame can.
       const refused = buildRefusalFrom(e);
-      if (refused) setRefusal(refused);
-      else setRawErr(String(e));
+      if (refused) {
+        setRefusal(refused);
+        report(outcomes.refusedByBuild(refused));
+      } else {
+        setRawErr(String(e));
+        report(outcomes.readerFailure(e));
+      }
     } finally {
       setRawBusy(false);
     }
