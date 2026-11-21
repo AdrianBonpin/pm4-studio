@@ -8,10 +8,10 @@
 - S8 Library store — catches round-trip fidelity and conflict handling; misses UI state.
 
 **Tracker:** None
-**Status:** ready
+**Status:** done
 
-- [ ] Exporting produces a file that re-imports to an identical library.
-- [ ] Import previews how many Snapshots and Drafts will be added before applying.
-- [ ] Importing over existing entries neither silently duplicates nor destroys them.
-- [ ] A malformed import file is rejected without modifying the library.
-- [ ] Cancelling an import leaves the library untouched.
+- [x] Exporting produces a file that re-imports to an identical library.
+- [x] Import previews how many Snapshots and Drafts will be added before applying.
+- [x] Importing over existing entries neither silently duplicates nor destroys them.
+- [x] A malformed import file is rejected without modifying the library.
+- [x] Cancelling an import leaves the library untouched.

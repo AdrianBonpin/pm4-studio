@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "../lib/platform";
 import { migrateLegacyReads } from "../lib/libraryMigration";
 import type { LibraryView, SaveResult } from "../lib/library";
+import type { ExportResult, ImportPreview, ImportResult, PickMode } from "../lib/libraryFiles";
 import type { LfCard } from "../types";
 
 /** Everything the shell needs to show and edit the library of Snapshots. */
@@ -22,6 +23,20 @@ export interface LibraryState {
   edit: (id: string, draft: { name: string; note: string }) => Promise<void>;
   remove: (id: string) => Promise<void>;
   reload: () => Promise<void>;
+  /**
+   * Choose a file with the system dialog. `null` means the user cancelled, and
+   * nothing has been read or written.
+   */
+  pickPath: (mode: PickMode, suggestedName?: string) => Promise<string | null>;
+  /** Write the whole library to `path`. `null` means it was not written. */
+  exportTo: (path: string) => Promise<ExportResult | null>;
+  /**
+   * Count what importing `path` would add, writing nothing. Cancelling an
+   * import is simply never calling `applyImport`.
+   */
+  previewImport: (path: string) => Promise<ImportPreview | null>;
+  /** Merge `path` into the library, keeping everything already here. */
+  applyImport: (path: string) => Promise<ImportResult | null>;
 }
 
 /**
@@ -109,5 +124,73 @@ export function useLibrary(): LibraryState {
     }
   }, []);
 
-  return { view, error, loading, saveLf, rename, edit, remove, reload };
+  const pickPath = useCallback(
+    async (mode: PickMode, suggestedName?: string): Promise<string | null> => {
+      if (!isTauri()) {
+        setError("Files are chosen through the desktop app; this preview cannot open a dialog.");
+        return null;
+      }
+      try {
+        const chosen = await invoke<string | null>("library_pick_file", {
+          mode,
+          suggestedName: suggestedName ?? null,
+        });
+        setError(null);
+        return chosen;
+      } catch (e) {
+        setError(String(e));
+        return null;
+      }
+    },
+    [],
+  );
+
+  const exportTo = useCallback(async (path: string): Promise<ExportResult | null> => {
+    try {
+      const result = await invoke<ExportResult>("library_export", { path });
+      setError(null);
+      return result;
+    } catch (e) {
+      setError(String(e));
+      return null;
+    }
+  }, []);
+
+  const previewImport = useCallback(async (path: string): Promise<ImportPreview | null> => {
+    try {
+      const preview = await invoke<ImportPreview>("library_import_preview", { path });
+      setError(null);
+      return preview;
+    } catch (e) {
+      setError(String(e));
+      return null;
+    }
+  }, []);
+
+  const applyImport = useCallback(async (path: string): Promise<ImportResult | null> => {
+    try {
+      const result = await invoke<ImportResult>("library_import_apply", { path });
+      setView(result.library);
+      setError(null);
+      return result;
+    } catch (e) {
+      setError(String(e));
+      return null;
+    }
+  }, []);
+
+  return {
+    view,
+    error,
+    loading,
+    saveLf,
+    rename,
+    edit,
+    remove,
+    reload,
+    pickPath,
+    exportTo,
+    previewImport,
+    applyImport,
+  };
 }

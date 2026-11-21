@@ -130,7 +130,9 @@ pub enum InsertOutcome {
 
 impl Snapshot {
     /// Two Snapshots with the same key are the same read of the same Tag.
-    fn tag_key(&self) -> Option<String> {
+    /// `library_io` imports on this same key, so a conflict means the same
+    /// thing wherever it is decided.
+    pub(crate) fn tag_key(&self) -> Option<String> {
         match (&self.identity, &self.hf) {
             (Some(identity), _) => Some(identity_key(identity.customer, identity.data32)),
             (None, Some(hf)) => Some(format!("HF:{}", hf.uid)),
