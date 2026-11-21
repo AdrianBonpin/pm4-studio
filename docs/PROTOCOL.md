@@ -106,13 +106,7 @@ OUT  55 00 51 00 01 01 FE 01
 IN   55 00 51 00 01 01 FE 01
 ```
 
-### `0x0055` — beep
-
-```
-OUT  55 00 55 00 00 FF 00
-```
-
-### `0x0053` — beep (and LED on)
+### `0x0053` — chirp, and LED on
 
 Confirmed on hardware: chirps once and drives the LED **off → on** as a side
 effect. Fire-and-forget — the firmware sends **no reply**, so do not wait for one
@@ -123,7 +117,8 @@ OUT  55 00 53 00 00 FF 00
 ```
 
 An earlier build of this app had `0x0055` wired to the beeper, so the beep never
-fired and only the LED reacted.
+fired and only the LED reacted. `0x0055` is the LED-off frame (below), not a
+beep.
 
 ### `0x0054` — firmware version — VERIFIED
 
