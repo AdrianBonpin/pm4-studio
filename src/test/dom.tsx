@@ -36,6 +36,7 @@ import { afterEach } from "vitest";
 import { cleanup, render, type RenderResult } from "@testing-library/react";
 import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { resetDeviceOperationsForTest } from "../lib/deviceLock";
+import { resetSessionModesForTest } from "../hooks/useSessionMode";
 
 /** One command the interface sent to the backend. */
 export interface SentCommand {
@@ -167,6 +168,10 @@ afterEach(() => {
   // A component that did not release the Reader (an unmount mid-operation, a
   // rejected call) must not leave the next test's poller waiting on the flag.
   resetDeviceOperationsForTest();
+  // A band page remembers the mode you were on for the length of a session. The
+  // session belongs to the webview, so one test's mode must not be the next
+  // test's default — a fresh test starts where a fresh launch would.
+  resetSessionModesForTest();
   // The boundary belongs to the webview, not to the test runner: leaving it
   // behind would make `isTauri()` true in a test that never asked for it.
   delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;

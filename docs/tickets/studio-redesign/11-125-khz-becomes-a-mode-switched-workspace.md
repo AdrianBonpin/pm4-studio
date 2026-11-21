@@ -9,14 +9,14 @@
 - Confirmation gates (existing) — catches an operation whose confirmation was lost in the move; misses nothing currently covered.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/19
-**Status:** ready
+**Status:** done
 
-- [ ] The page offers Read, Write, Reset, Clone and Batch in that order, with one visible at a time.
-- [ ] Read is the default mode, because it is both the base capability and the precondition every write depends on.
-- [ ] Every mode is reachable in one click and needs no scrolling at the minimum window size.
-- [ ] The mode you were last in is restored when you return to the page within a session.
-- [ ] Read shows the Identity large, the decoded facility and card values, and the raw payload available but collapsed.
-- [ ] Reading a tag can still be saved to the library in one action, and the save reports its outcome.
-- [ ] Write still accepts customer, facility and card entry or a raw five-byte value, and out-of-range entry is still refused with the valid range shown, inline.
-- [ ] The section that only pointed at the Library destination is removed.
-- [ ] Every safety gate the operations had before the move still fires after it: the read-before-write refusal, the already-presents-this-Identity refusal, and the confirmation naming what will be replaced.
+- [x] The page offers Read, Write, Reset, Clone and Batch in that order, with one visible at a time.
+- [x] Read is the default mode, because it is both the base capability and the precondition every write depends on.
+- [x] Every mode is reachable in one click and needs no scrolling at the minimum window size.
+- [x] The mode you were last in is restored when you return to the page within a session.
+- [x] Read shows the Identity large, the decoded facility and card values, and the raw payload available but collapsed.
+- [x] Reading a tag can still be saved to the library in one action, and the save reports its outcome.
+- [x] Write still accepts customer, facility and card entry or a raw five-byte value, and out-of-range entry is still refused with the valid range shown, inline.
+- [x] The section that only pointed at the Library destination is removed.
+- [x] Every safety gate the operations had before the move still fires after it: the read-before-write refusal, the already-presents-this-Identity refusal, and the confirmation naming what will be replaced.
