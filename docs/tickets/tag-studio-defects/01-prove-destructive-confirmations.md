@@ -41,13 +41,15 @@ confirmation; this ticket proves the seven gates that are actually in the app.
 
 ## Outcome
 
-Seven gates carry the pair of proofs. Draft delete carries the confirming half only,
-because there is no confirmation to dismiss; that gate is ticket 06.
+All eight gates carry the pair of proofs. The seven below were proven here; the
+Draft delete gate had no confirmation when this ticket ran (see ticket 06), and
+the dismissal half was added with the confirmation itself, in
+`DraftsPage.test.tsx`.
 
 | Gate | Dismissal proof | Confirmation proof |
 | :--- | :--- | :--- |
 | 1 Snapshot delete | `LibraryPage.test.tsx` "keeping the Snapshot removes nothing" | "removes that Snapshot" |
-| 2 Draft delete | — (no gate exists; ticket 06) | "removes that Draft through the store" |
+| 2 Draft delete | `DraftsPage.test.tsx` "asks before it removes anything, and keeping the Draft removes nothing" (added by ticket 06) | "removes that Draft through the store" |
 | 3 clone | `CloneWizard.test.tsx` "cancelling writes nothing" | "writes the Identity that was read" |
 | 4 author | `AuthorIdentity.test.tsx` "going back writes nothing" | "writes the previewed Identity" |
 | 5 blank | `BlankTag.test.tsx` "keeping the tag as it is blanks nothing" | "blanks the Identity that was read" |
