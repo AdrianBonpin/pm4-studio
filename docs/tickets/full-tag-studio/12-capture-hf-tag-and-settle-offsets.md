@@ -7,7 +7,7 @@
 **Seams:**
 - S5 HF decoder — the captured fixture becomes the independent expected value the decoder is tested against, replacing the current hypothesis.
 
-**Tracker:** None
+**Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/2
 **Status:** ready
 
 - [ ] At least one real 13.56 MHz capture is recorded, with its card family identified independently of the app.
