@@ -5,6 +5,8 @@ pub mod identity;
 pub mod library;
 pub mod library_io;
 pub mod library_migration;
+pub mod memory_dump;
+pub mod ntag;
 pub mod reader;
 pub mod stream;
 pub mod write_guard;
@@ -19,6 +21,7 @@ use library::{
     WriteCountOutcome,
 };
 use library_io::{FileError, ImportPreview};
+use memory_dump::MemoryDump;
 use reader::{DeviceInfo, Frame, HfCard, LfCard, LfWriteAttempt, Reader, REPORT_LEN};
 use write_outcome::Evidence;
 use serde::{Deserialize, Serialize};
@@ -129,6 +132,45 @@ fn hf_poll(state: State<'_, AppState>) -> Result<Option<HfCard>, String> {
         r.wake()?;
         r.hf_poll_once()
     })
+}
+
+/// Read the 13.56 MHz tag's memory as a page dump.
+///
+/// Read-only: the tag is asked for its info and its memory and nothing else.
+/// A tag that does not answer is an error the page shows; the Reader handle is
+/// dropped so the next attempt re-enumerates instead of failing forever.
+#[tauri::command]
+fn ntag_memory_read(
+    state: State<'_, AppState>,
+    captured_at: String,
+) -> Result<MemoryDump, String> {
+    with_reader(&state, |r| {
+        let info = ntag::read_info(r)?;
+        let payload = ntag::read_payload(r, &info)?;
+        MemoryDump::parse(&payload, info.identity(&captured_at)).map_err(|e| e.message())
+    })
+}
+
+/// Write a memory dump to a text file the user chooses.
+///
+/// `None` means the dialog was cancelled, and nothing was written. The dump is
+/// rendered here rather than accepted as text from the webview, so the file is
+/// always the dump this build formatted.
+#[tauri::command]
+async fn memory_dump_export(app: AppHandle, dump: MemoryDump) -> Result<Option<String>, String> {
+    let chosen = ask_where_to_save(
+        &app,
+        "Save memory dump",
+        "Text file",
+        &["txt"],
+        Some(dump.suggested_file_name()),
+    )
+    .await?;
+    let Some(path) = chosen else {
+        return Ok(None);
+    };
+    library_io::write_text(Path::new(&path), &dump.to_text()).map_err(|e| e.message())?;
+    Ok(Some(path))
 }
 
 #[tauri::command]
@@ -709,6 +751,45 @@ enum PickMode {
     Save,
 }
 
+/// Ask the user where to save a file the app is about to write.
+///
+/// Driven from Rust for the same reason `library_pick_file` is: the plugin's own
+/// IPC commands are never invoked from the webview, so no capability permission
+/// beyond the window's own is needed. `None` means the dialog was cancelled and
+/// the caller must write nothing.
+async fn ask_where_to_save(
+    app: &AppHandle,
+    title: &str,
+    filter_name: &str,
+    extensions: &[&str],
+    suggested_name: Option<String>,
+) -> Result<Option<String>, String> {
+    // The dialog answers on the main thread, which is not allowed to block, so
+    // the answer comes back through a channel this command awaits instead.
+    let (tx, mut answer) = tauri::async_runtime::channel(1);
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title(title)
+        .add_filter(filter_name, extensions);
+    if let Ok(downloads) = app.path().download_dir() {
+        dialog = dialog.set_directory(downloads);
+    }
+    if let Some(name) = suggested_name {
+        dialog = dialog.set_file_name(name);
+    }
+    dialog.save_file(move |chosen| {
+        let _ = tx.try_send(chosen);
+    });
+    let chosen = answer
+        .recv()
+        .await
+        .ok_or_else(|| "the file dialog closed without choosing anything".to_string())?;
+    Ok(chosen
+        .and_then(|file| file.into_path().ok())
+        .map(|path| path.display().to_string()))
+}
+
 /// Ask the user for a file path with the system dialog.
 ///
 /// `null` means the dialog was cancelled, and the caller must change nothing.
@@ -829,6 +910,8 @@ pub fn run() {
             firmware_version,
             lf_poll,
             hf_poll,
+            ntag_memory_read,
+            memory_dump_export,
             beep,
             led_off,
             lf_write,
