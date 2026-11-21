@@ -585,6 +585,46 @@ the gap is visible rather than assumed away.
 
 Destructive and out of scope for this app. Request is the 8-byte session token.
 
+## Password protection (`AUTH0` / `PWD` / `PACK`) — NOT ACHIEVABLE
+
+Password protection on an NTAG21x is three configuration pages: `AUTH0` on page
+131, `PWD` on 133, `PACK` on 134. Writing them is how protection is switched on.
+**This Reader cannot switch it off again, and cannot even read whether it is on.**
+
+**No authentication command exists.** The command family above is complete: no
+`PWD_AUTH`, no MIFARE key authentication, no APDU passthrough. So a password set
+through `0x0082` could never be presented at the Tag, and the write that would
+put `AUTH0` back to `0xFF` is itself behind the protection it clears. Setting one
+is one-way.
+
+**The configuration-area read is not the Tag's configuration.** Pages ≥ 130
+return an identical block on two different UIDs (open problem 5). Ticket 21 adds
+the argument that settles it — the reported `AUTH0` is contradicted by the same
+dump:
+
+```
+page   3   E1 10 3E 00       CC, 496 bytes of user memory
+page   4   03 09 D1 01 54    the NDEF message, state 1 (read ok)
+page 130   00 00 00 BD
+page 131   04 00 00 FF       reported AUTH0 = 0x04
+page 132   00 05 00 00
+page 133   00 00 00 00       reported PWD
+page 134   00 00 00 00       reported PACK
+page 135   (state 3 — outside the tag's memory)
+```
+
+An `AUTH0` of `0x04` would put every access from page 4 onwards behind
+`PWD_AUTH`. Pages 4..16 of that same reply read back in full with state `1`. Both
+cannot be true, so page 131 is not `AUTH0`: the firmware does not read the
+configuration block. `AUTH0 = 0x04` must not be read as "this Tag is protected" —
+it was that misreading that made the `status 32` write refusals look like a
+hardware limit (open problem 3 has the real cause).
+
+Consequences for the app: protection status is reported as *cannot be
+determined*, never as "off"; a Tag whose password is unknown is never presented
+as recoverable; and neither setting nor removing a password is offered
+(`src-tauri/src/password.rs`, ticket 21).
+
 ## `0x0069` payloads, for the record
 
 **Nothing latched.** The poll still returns `LEN 0x13`, and every byte after the

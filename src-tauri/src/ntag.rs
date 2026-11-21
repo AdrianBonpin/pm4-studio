@@ -302,6 +302,10 @@ pub enum PlanError {
     /// A page that holds UID, BCC, lock bytes or the CC, or one past the user
     /// area. Writing any of them corrupts the Tag.
     PageNotUser { page: usize, user_pages: usize },
+    /// A page in the configuration area (`AUTH0`, `PWD`, `PACK`, lock bytes).
+    /// Never user memory, whatever the Capability Container claims: writing one
+    /// can enable password protection that this Reader cannot undo.
+    PageIsConfiguration { page: usize },
     /// The image the read returned does not cover a page that would be written,
     /// so the request cannot carry that page's current contents.
     ImageIncomplete { page: usize },
@@ -333,6 +337,13 @@ impl std::fmt::Display for PlanError {
                 "page {page} is not user memory (pages 0-3 hold the UID, lock bytes and \
                  Capability Container; user memory is pages 4 to {})",
                 USER_FIRST_PAGE + user_pages - 1
+            ),
+            PlanError::PageIsConfiguration { page } => write!(
+                f,
+                "page {page} is configuration, not user memory. Pages {} and above hold \
+                 lock bytes and password settings (AUTH0, PWD, PACK), which a message write \
+                 must never change",
+                CONFIG_FIRST_PAGE
             ),
             PlanError::ImageIncomplete { page } => write!(
                 f,
@@ -403,10 +414,27 @@ pub fn write_payload(
     Ok(payload)
 }
 
-/// The guard that stops an NDEF write reaching the UID, the lock bytes or the
-/// Capability Container. Pages 0..3 hold exactly those; user memory runs from
-/// page 4 for as many pages as the CC declares and no further.
+/// First page of the NTAG21x configuration area. Pages from here on hold lock
+/// bytes and the password settings (`AUTH0`, `PWD`, `PACK`), so they are never
+/// user memory — not even when a Tag's Capability Container claims otherwise.
+/// `src-tauri/src/password.rs` decides what may be done with them, which on
+/// this Reader is nothing.
+pub const CONFIG_FIRST_PAGE: usize = 130;
+
+/// The guard that stops an NDEF write reaching the UID, the lock bytes, the
+/// Capability Container or the configuration area.
+///
+/// Pages 0..3 hold the UID, lock bytes and CC; user memory runs from page 4 for
+/// as many pages as the CC declares, **clamped at the configuration area**. The
+/// clamp is not redundant: `user_pages` comes from the Tag's own
+/// Capability Container, so a Tag claiming a large capacity would otherwise be
+/// able to steer a message write into `AUTH0`/`PWD`/`PACK` on pages 131-134.
+/// Enabling password protection there is unrecoverable over this protocol; see
+/// `password.rs`.
 fn guard_write_page(page: usize, user_pages: usize) -> Result<(), PlanError> {
+    if page >= CONFIG_FIRST_PAGE {
+        return Err(PlanError::PageIsConfiguration { page });
+    }
     if page < USER_FIRST_PAGE || page >= USER_FIRST_PAGE + user_pages {
         return Err(PlanError::PageNotUser { page, user_pages });
     }
@@ -1435,6 +1463,30 @@ mod tests {
             .expect_err("page 128 is outside the user area");
         assert_eq!(error, PlanError::PageNotUser { page: 128, user_pages: 124 });
         assert!(write_payload(&recorded_token(), 3, &image, &[(127, [0; 4])], 124).is_ok());
+    }
+
+    #[test]
+    fn a_capability_container_cannot_open_the_configuration_area() {
+        let image = vec![0u8; PAGE_COUNT * PAGE_LEN];
+        // A CC that claims the whole 256-page image as user memory: without the
+        // clamp, pages 131-134 would pass the user-memory guard and a message
+        // write could set AUTH0/PWD/PACK.
+        for page in CONFIG_FIRST_PAGE..PAGE_COUNT {
+            assert_eq!(
+                write_payload(&recorded_token(), 3, &image, &[(page, [0; 4])], 252),
+                Err(PlanError::PageIsConfiguration { page }),
+                "page {page} is configuration"
+            );
+        }
+        assert!(write_payload(&recorded_token(), 3, &image, &[(129, [0; 4])], 252).is_ok());
+    }
+
+    #[test]
+    fn the_configuration_refusal_names_the_page_and_the_reason() {
+        let message = PlanError::PageIsConfiguration { page: 131 }.to_string();
+        assert!(message.contains("page 131"), "{message}");
+        assert!(message.contains("AUTH0"), "{message}");
+        assert!(message.contains("password"), "{message}");
     }
 
     #[test]
