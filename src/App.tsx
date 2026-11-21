@@ -1,556 +1,178 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
-import { Nfc, Radio, ScanLine, Terminal, Cpu, X } from "lucide-react";
+import { useState } from "react";
+import { Nfc, Radio, Terminal, X } from "lucide-react";
 import { Badge } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
-import { Card } from "./components/ui/Card";
-import { Input } from "./components/ui/Input";
 import { Toggle } from "./components/ui/Toggle";
+import { useBeep } from "./hooks/useBeep";
+import { useReader } from "./hooks/useReader";
 import { isMacOS, isTauri } from "./lib/platform";
-import type { DeviceInfo, HfCard, LfCard, RawResponse, WriteResult } from "./types";
+import { HfPage } from "./pages/HfPage";
+import { LfPage } from "./pages/LfPage";
+import { ToolsPage } from "./pages/ToolsPage";
 
-type Status = "idle" | "connecting" | "connected" | "error";
+type Page = "lf" | "hf" | "tools";
 
-const BEEP_PREF_KEY = "pm4studio.beep";
-
-const SCAN_TIMEOUT_MS = 30_000;
-const SCAN_INTERVAL_MS = 350;
-
-const STATUS_COLOR: Record<Status, string> = {
+const STATUS_COLOR = {
   idle: "#A1A1AA",
   connecting: "#FBBF24",
   connected: "#4ADE80",
   error: "#F87171",
-};
+} as const;
 
-function Field({ label, value, mono = true }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="flex flex-col gap-0.5 min-w-0">
-      <span className="text-[11px] uppercase tracking-wide text-text-muted">{label}</span>
-      <span className={`text-sm text-text truncate ${mono ? "font-mono" : ""}`}>{value}</span>
-    </div>
-  );
-}
+const PAGES: {
+  id: Page;
+  label: string;
+  title: string;
+  subtitle: string;
+  icon: typeof Nfc;
+}[] = [
+  {
+    id: "lf",
+    label: "125 kHz",
+    title: "125 kHz",
+    subtitle: "Badges, fobs and elevator tags. Read, clone and write EM4100.",
+    icon: Nfc,
+  },
+  {
+    id: "hf",
+    label: "13.56 MHz",
+    title: "13.56 MHz",
+    subtitle: "ISO14443-A cards. Read the UID of whatever is in the field.",
+    icon: Radio,
+  },
+  {
+    id: "tools",
+    label: "Tools",
+    title: "Tools",
+    subtitle: "Hardware probes and raw command frames.",
+    icon: Terminal,
+  },
+];
 
 export default function App() {
-  const [status, setStatus] = useState<Status>("idle");
-  const [info, setInfo] = useState<DeviceInfo | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [page, setPage] = useState<Page>("lf");
+  const reader = useReader();
+  const { beepOn, setBeepOn, chirp } = useBeep();
 
-  const [lfScanning, setLfScanning] = useState(false);
-  const [lfElapsed, setLfElapsed] = useState(0);
-  const [lfCard, setLfCard] = useState<LfCard | null>(null);
-
-  const [hfPolling, setHfPolling] = useState(false);
-  const [hfCard, setHfCard] = useState<HfCard | null>(null);
-
-  const [rawHex, setRawHex] = useState("55 00 51 00 01 01 FE 01");
-  const [rawResult, setRawResult] = useState<RawResponse | null>(null);
-  const [rawError, setRawError] = useState<string | null>(null);
-  const [rawBusy, setRawBusy] = useState(false);
-
-  const [beepOn, setBeepOn] = useState<boolean>(() => {
-    if (typeof localStorage === "undefined") return true;
-    const v = localStorage.getItem(BEEP_PREF_KEY);
-    return v === null ? true : v === "1";
-  });
-  const beepRef = useRef(beepOn);
-
-  const [writeArmed, setWriteArmed] = useState(false);
-  const [writeBusy, setWriteBusy] = useState(false);
-  const [writeResult, setWriteResult] = useState<WriteResult | null>(null);
-  const [writeError, setWriteError] = useState<string | null>(null);
-
-  const stopRef = useRef(false);
-
-  useEffect(() => {
-    beepRef.current = beepOn;
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(BEEP_PREF_KEY, beepOn ? "1" : "0");
-    }
-  }, [beepOn]);
-
-  /** Chirp the reader, when the user has the beep option enabled. */
-  const chirp = useCallback(async () => {
-    if (!beepRef.current) return;
-    try {
-      await invoke("beep");
-    } catch {
-      // A beep failing must never break the operation it accompanies.
-    }
-  }, []);
-
-  const connect = useCallback(async () => {
-    setStatus("connecting");
-    setError(null);
-    try {
-      const d = await invoke<DeviceInfo>("connect");
-      setInfo(d);
-      setStatus("connected");
-    } catch (e) {
-      setError(String(e));
-      setStatus("error");
-      setInfo(null);
-    }
-  }, []);
-
-  useEffect(() => {
-    void connect();
-  }, [connect]);
-
-  useEffect(() => {
-    if (!lfScanning) return;
-    stopRef.current = false;
-    setLfCard(null);
-    setLfElapsed(0);
-    const started = Date.now();
-
-    const tick = async () => {
-      if (stopRef.current) return;
-      const elapsed = Date.now() - started;
-      setLfElapsed(elapsed);
-      if (elapsed > SCAN_TIMEOUT_MS) {
-        setLfScanning(false);
-        setError("Scan timed out. Place the badge flat on the reader, case off.");
-        return;
-      }
-      try {
-        const card = await invoke<LfCard | null>("lf_poll");
-        if (stopRef.current) return;
-        if (card) {
-          setLfCard(card);
-          setLfScanning(false);
-          void chirp();
-          return;
-        }
-      } catch (e) {
-        setLfScanning(false);
-        setError(String(e));
-        return;
-      }
-      if (!stopRef.current) setTimeout(tick, SCAN_INTERVAL_MS);
-    };
-
-    void tick();
-    return () => {
-      stopRef.current = true;
-    };
-  }, [lfScanning]);
-
-  const pollHf = async () => {
-    setHfPolling(true);
-    setError(null);
-    try {
-      const card = await invoke<HfCard | null>("hf_poll");
-      setHfCard(card);
-      if (card) void chirp();
-      if (!card) setError("No 13.56 MHz tag in the field.");
-    } catch (e) {
-      setError(String(e));
-    } finally {
-      setHfPolling(false);
-    }
-  };
-
-  const sendRaw = async () => {
-    setRawBusy(true);
-    setRawError(null);
-    setRawResult(null);
-    try {
-      const r = await invoke<RawResponse | null>("raw_send", { hex: rawHex });
-      if (!r) setRawError("No reply within 1.5 s.");
-      else setRawResult(r);
-    } catch (e) {
-      setRawError(String(e));
-    } finally {
-      setRawBusy(false);
-    }
-  };
-
-  const beep = async () => {
-    try {
-      await invoke("beep");
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
-  const confirmWrite = async () => {
-    if (!lfCard) return;
-    setWriteBusy(true);
-    setWriteError(null);
-    setWriteResult(null);
-    try {
-      const res = await invoke<WriteResult>("lf_write", {
-        customer: lfCard.customer,
-        data32: lfCard.data32,
-      });
-      setWriteResult(res);
-      if (res.verified) void chirp();
-      else setWriteError("Write sent, but the tag did not read back the expected id.");
-    } catch (e) {
-      setWriteError(String(e));
-    } finally {
-      setWriteBusy(false);
-      setWriteArmed(false);
-    }
-  };
-
-  const connected = status === "connected";
-  const progress = Math.min(100, (lfElapsed / SCAN_TIMEOUT_MS) * 100);
+  const current = PAGES.find((p) => p.id === page) ?? PAGES[0];
+  const connected = reader.connected;
 
   return (
     <div className="flex h-svh flex-col overflow-hidden bg-canvas text-text select-none">
-      {/* macOS "Overlay" title bar: in-flow strip the window can be dragged by.
-          Traffic lights float over it. Only inside Tauri on macOS. */}
+      {/* macOS "Overlay" title bar: in-flow strip the window can be dragged by. */}
       {isTauri() && isMacOS() && (
         <div data-tauri-drag-region aria-hidden className="h-9 shrink-0 bg-canvas" />
       )}
 
-      <header
-        data-tauri-drag-region
-        className="flex shrink-0 items-center justify-between gap-4 border-b border-border px-6 py-4"
-      >
-        <div className="flex min-w-0 items-center gap-3">
-          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-border bg-surface-raised text-accent-muted">
-            <Nfc size={20} />
-          </div>
-          <div className="min-w-0">
-            <h1 className="font-heading text-lg leading-tight text-text">PM4 Studio</h1>
-            <p className="truncate text-xs text-text-muted">
-              NFC-PM4 · CYBDZKJ-BSJ reader studio
+      <div className="flex min-h-0 flex-1">
+        <aside className="flex w-56 shrink-0 flex-col border-r border-border">
+          <div className="px-4 pb-4 pt-1">
+            <p className="font-heading text-sm text-text">PM4 Studio</p>
+            <p className="mt-0.5 text-[11px] leading-tight text-text-muted">
+              NFC-PM4 reader
             </p>
           </div>
-        </div>
-        <div className="flex shrink-0 items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xs text-text-muted">Beep</span>
-            <Toggle
-              checked={beepOn}
-              onChange={setBeepOn}
-              label="Beep on read and write"
-              disabled={!connected}
-            />
-          </div>
-          <Badge label={status} color={STATUS_COLOR[status]} />
-          <Button variant="secondary" onClick={() => void connect()}>
-            {connected ? "Reconnect" : "Connect"}
-          </Button>
-        </div>
-      </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-6 py-5">
-        <div className="mx-auto flex max-w-4xl flex-col gap-4">
-          {error && (
-            <div className="flex items-start justify-between gap-3 rounded-xl border border-err/40 bg-err/10 px-4 py-3 text-sm text-err">
-              <span>{error}</span>
-              <button
-                onClick={() => setError(null)}
-                aria-label="Dismiss"
-                className="cursor-pointer text-err/70 transition-colors hover:text-err"
-              >
-                <X size={16} />
-              </button>
-            </div>
-          )}
-
-          <Card>
-            <div className="mb-3 flex items-center gap-2">
-              <Cpu size={14} className="text-text-muted" />
-              <h2 className="font-heading text-sm text-text">Device</h2>
-            </div>
-            {info ? (
-              <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
-                <Field
-                  label="VID:PID"
-                  value={`${info.vid.toString(16).padStart(4, "0")}:${info.pid
-                    .toString(16)
-                    .padStart(4, "0")}`}
-                />
-                <Field label="Product" value={info.product || "—"} />
-                <Field label="Manufacturer" value={info.manufacturer || "—"} />
-                <Field label="Serial" value={info.serial || "—"} />
-              </div>
-            ) : (
-              <p className="text-sm text-text-muted">
-                Not connected. Plug the reader in and press Connect.
-              </p>
-            )}
-          </Card>
-
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Card>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <ScanLine size={14} className="text-text-muted" />
-                  <h2 className="font-heading text-sm text-text">125 kHz badge</h2>
-                </div>
-                <Badge label="EM4100" color="#60A5FA" />
-              </div>
-              <p className="mb-4 text-xs leading-relaxed text-text-muted">
-                Elevator / access badges. Polls command{" "}
-                <span className="font-mono text-accent-muted">0x0072</span> until a badge latches.
-              </p>
-
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="primary"
-                  disabled={!connected}
-                  onClick={() => setLfScanning((s) => !s)}
-                >
-                  {lfScanning ? "Stop" : "Scan badge"}
-                </Button>
-                <Button variant="ghost" disabled={!connected} onClick={() => void beep()}>
-                  Beep
-                </Button>
-              </div>
-
-              {lfScanning && (
-                <div className="mt-4 h-1 overflow-hidden rounded-full bg-surface-raised">
-                  <div
-                    className="h-full rounded-full bg-accent transition-[width] duration-200 ease-linear"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              )}
-
-              {lfCard ? (
-                <div className="mt-4 border-t border-border pt-4">
-                  <div className="mb-3 font-mono text-2xl tracking-wider text-accent-muted">
-                    {lfCard.id}
-                  </div>
-                  <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-                    <Field
-                      label="data32"
-                      value={`0x${lfCard.data32.toString(16).padStart(8, "0").toUpperCase()}`}
-                    />
-                    <Field label="Facility / card" value={`${lfCard.facility} / ${lfCard.card}`} />
-                    <Field
-                      label="Customer byte"
-                      value={`0x${lfCard.customer.toString(16).padStart(2, "0").toUpperCase()}`}
-                    />
-                  </div>
-                  <details className="mt-3">
-                    <summary className="cursor-pointer text-[11px] uppercase tracking-wide text-text-muted hover:text-text">
-                      Raw payload
-                    </summary>
-                    <code className="mt-2 block select-text break-all rounded-lg border border-border bg-canvas px-3 py-2 font-mono text-xs leading-relaxed text-accent-muted">
-                      {lfCard.raw}
-                    </code>
-                  </details>
-
-                  <div className="mt-4 rounded-lg border border-border bg-canvas px-3 py-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="text-xs text-text">Clone to a blank tag</p>
-                        <p className="truncate text-[11px] text-text-muted">
-                          Writes {lfCard.id} onto the tag on the reader.
-                        </p>
-                      </div>
-                      {!writeArmed && (
-                        <Button
-                          variant="secondary"
-                          disabled={!connected || writeBusy}
-                          onClick={() => {
-                            setWriteArmed(true);
-                            setWriteResult(null);
-                            setWriteError(null);
-                          }}
-                        >
-                          Clone
-                        </Button>
-                      )}
-                    </div>
-
-                    {writeArmed && (
-                      <div className="mt-3 flex flex-col gap-2">
-                        <p className="rounded-md border border-warn/30 bg-warn/10 px-2 py-1.5 text-[11px] leading-relaxed text-warn">
-                          <strong className="font-semibold">Swap the tag first.</strong> Take the
-                          badge you just scanned OFF the reader and put a blank one on. The write
-                          is permanent, and writing to your original badge can lock it.
-                        </p>
-                        <div className="flex gap-2">
-                          <Button
-                            variant="primary"
-                            disabled={writeBusy}
-                            onClick={() => void confirmWrite()}
-                          >
-                            {writeBusy ? "Writing…" : "Write now"}
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            disabled={writeBusy}
-                            onClick={() => setWriteArmed(false)}
-                          >
-                            Cancel
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-
-                    {writeError && <p className="mt-2 text-[11px] text-err">{writeError}</p>}
-                    {writeResult?.verified && (
-                      <p className="mt-2 text-[11px] text-ok">
-                        Verified — the tag now reads {writeResult.readback?.id}.
-                      </p>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <p className="mt-4 text-xs text-text-muted">
-                  {lfScanning ? "Listening for a badge…" : "No badge read yet."}
-                </p>
-              )}
-            </Card>
-
-            <Card>
-              <div className="mb-2 flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <Radio size={14} className="text-text-muted" />
-                  <h2 className="font-heading text-sm text-text">13.56 MHz tag</h2>
-                </div>
-                <Badge label="ISO14443-A" color="#C084FC" />
-              </div>
-              <p className="mb-4 text-xs leading-relaxed text-text-muted">
-                Single poll via <span className="font-mono text-accent-muted">0x0069</span>. Reports
-                the UID when a card is present.
-              </p>
-
-              <Button
-                variant="secondary"
-                disabled={!connected || hfPolling}
-                onClick={() => void pollHf()}
-              >
-                {hfPolling ? "Polling…" : "Poll once"}
-              </Button>
-
-              {hfCard ? (
-                <div className="mt-4 border-t border-border pt-4">
-                  <div className="mb-3 font-mono text-2xl tracking-wider text-accent-muted">
-                    {hfCard.uid}
-                  </div>
-                  <Field label="UID" value={hfCard.uid} />
-                  <details className="mt-3">
-                    <summary className="cursor-pointer text-[11px] uppercase tracking-wide text-text-muted hover:text-text">
-                      Raw payload
-                    </summary>
-                    <code className="mt-2 block select-text break-all rounded-lg border border-border bg-canvas px-3 py-2 font-mono text-xs leading-relaxed text-accent-muted">
-                      {hfCard.raw}
-                    </code>
-                  </details>
-                </div>
-              ) : (
-                <p className="mt-4 text-xs text-text-muted">No tag polled yet.</p>
-              )}
-
-              <p className="mt-4 rounded-lg border border-warn/25 bg-warn/5 px-3 py-2 text-[11px] leading-relaxed text-warn">
-                ATQA/SAK offsets are not confirmed on real hardware yet, so only the UID is decoded.
-                Use the console below to inspect the full payload.
-              </p>
-            </Card>
-          </div>
-
-          <Card>
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <Terminal size={14} className="text-text-muted" />
-                <h2 className="font-heading text-sm text-text">Raw command console</h2>
-              </div>
-              <Badge label="hex" color="#A1A1AA" />
-            </div>
-            <p className="mb-4 text-xs leading-relaxed text-text-muted">
-              Frame format{" "}
-              <span className="font-mono text-accent-muted">55 · cmd(2) · len(2) · payload · (x^FF, x)</span>
-              , zero-padded to 64 bytes. Tag writes are not implemented.
-            </p>
-
-            <div className="flex items-center gap-2">
-              <Input
-                className="font-mono"
-                value={rawHex}
-                placeholder="55 00 72 00 02 00 01 FE 01"
-                onChange={setRawHex}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && connected && !rawBusy) void sendRaw();
-                }}
-              />
-              <Button
-                variant="primary"
-                className="shrink-0"
-                disabled={!connected || rawBusy}
-                onClick={() => void sendRaw()}
-              >
-                {rawBusy ? "Sending…" : "Send"}
-              </Button>
-            </div>
-
-            <div className="mt-3 flex flex-wrap gap-2">
-              {[
-                ["Wake 0x51", "55 00 51 00 01 01 FE 01"],
-                ["LF read 0x72", "55 00 72 00 02 00 01 FE 01"],
-                ["HF poll 0x69", "55 00 69 00 00 FF 00"],
-                ["Beep 0x55", "55 00 55 00 00 FF 00"],
-                ["NTAG info 0x83", "55 00 83 00 00 FF 00"],
-              ].map(([label, hex]) => (
+          <nav className="flex flex-col gap-0.5 px-2">
+            {PAGES.map((p) => {
+              const Icon = p.icon;
+              const active = p.id === page;
+              return (
                 <button
-                  key={label}
-                  onClick={() => setRawHex(hex)}
-                  className="cursor-pointer rounded-full border border-border px-2.5 py-1 font-mono text-[11px] text-text-muted transition-colors hover:border-border-hover hover:text-text"
+                  key={p.id}
+                  onClick={() => setPage(p.id)}
+                  aria-current={active ? "page" : undefined}
+                  className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
+                    active
+                      ? "bg-surface-raised text-text"
+                      : "text-text-muted hover:bg-surface hover:text-text"
+                  }`}
                 >
-                  {label}
+                  <Icon size={14} className={active ? "text-accent-muted" : ""} />
+                  {p.label}
                 </button>
-              ))}
+              );
+            })}
+          </nav>
+
+          <div className="mt-auto flex flex-col gap-3 border-t border-border p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="truncate font-mono text-[11px] text-text-muted">
+                {reader.info ? reader.info.product : "no reader"}
+              </span>
+              <Badge label={reader.status} color={STATUS_COLOR[reader.status]} />
             </div>
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-text-muted">Beep</span>
+              <Toggle
+                checked={beepOn}
+                onChange={setBeepOn}
+                label="Beep on read and write"
+                disabled={!connected}
+              />
+            </div>
+            <Button variant="secondary" className="w-full" onClick={() => void reader.connect()}>
+              {connected ? "Reconnect" : "Connect"}
+            </Button>
+          </div>
+        </aside>
 
-            {rawError && <p className="mt-3 text-xs text-err">{rawError}</p>}
-            {rawResult && (
-              <div className="mt-4 border-t border-border pt-4">
-                <div className="grid grid-cols-2 gap-x-6 gap-y-3">
-                  <Field
-                    label="Reply cmd"
-                    value={`0x${rawResult.cmd.toString(16).padStart(4, "0").toUpperCase()}`}
-                  />
-                  <div className="flex flex-col gap-0.5">
-                    <span className="text-[11px] uppercase tracking-wide text-text-muted">
-                      Checksum
-                    </span>
-                    <span
-                      className={`text-sm ${rawResult.checksum_ok ? "text-ok" : "text-warn"}`}
-                    >
-                      {rawResult.checksum_ok ? "verified" : "not verified"}
-                    </span>
-                  </div>
+        <main className="flex min-w-0 flex-1 flex-col">
+          <div className="flex-1 overflow-y-auto overscroll-contain px-8 py-6">
+            <div className="mx-auto flex max-w-3xl flex-col gap-6">
+              <header className="flex flex-col gap-1">
+                <h1 className="font-heading text-xl text-text">{current.title}</h1>
+                <p className="text-sm text-text-muted">{current.subtitle}</p>
+              </header>
+
+              {reader.error && (
+                <div className="flex items-start justify-between gap-3 border-l-2 border-err bg-err/5 px-3 py-2 text-sm text-err">
+                  <span>{reader.error}</span>
+                  <button
+                    aria-label="Dismiss"
+                    onClick={() => reader.setError(null)}
+                    className="cursor-pointer text-err/70 transition-colors hover:text-err"
+                  >
+                    <X size={15} />
+                  </button>
                 </div>
-                <code className="mt-3 block select-text break-all rounded-lg border border-border bg-canvas px-3 py-2 font-mono text-xs leading-relaxed text-accent-muted">
-                  {rawResult.payload || "(empty)"}
-                </code>
-              </div>
-            )}
-          </Card>
+              )}
 
-          <footer className="px-1 pb-2 text-[11px] leading-relaxed text-text-muted">
-            Protocol reverse-engineered from USB captures. Credits:{" "}
-            <a
-              href="https://github.com/vicrodh/cyb-nfc"
-              target="_blank"
-              rel="noreferrer"
-              className="text-accent-muted hover:underline"
-            >
-              vicrodh/cyb-nfc
-            </a>{" "}
-            and{" "}
-            <a
-              href="https://github.com/journeyman846/nfcx-tool"
-              target="_blank"
-              rel="noreferrer"
-              className="text-accent-muted hover:underline"
-            >
-              journeyman846/nfcx-tool
-            </a>
-            . Not PC/SC, not CCID.
-          </footer>
-        </div>
-      </main>
+              {page === "lf" && <LfPage connected={connected} onChirp={chirp} />}
+              {page === "hf" && (
+                <HfPage
+                  connected={connected}
+                  onPoll={reader.pollHfOnce}
+                  onChirp={chirp}
+                />
+              )}
+              {page === "tools" && <ToolsPage connected={connected} />}
+
+              <footer className="border-t border-border pt-4 text-[11px] leading-relaxed text-text-muted">
+                Protocol reverse-engineered from USB captures. Credits:{" "}
+                <a
+                  href="https://github.com/vicrodh/cyb-nfc"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-accent-muted hover:underline"
+                >
+                  vicrodh/cyb-nfc
+                </a>{" "}
+                and{" "}
+                <a
+                  href="https://github.com/journeyman846/nfcx-tool"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-accent-muted hover:underline"
+                >
+                  journeyman846/nfcx-tool
+                </a>
+                . Not PC/SC, not CCID.
+              </footer>
+            </div>
+          </div>
+        </main>
+      </div>
     </div>
   );
 }

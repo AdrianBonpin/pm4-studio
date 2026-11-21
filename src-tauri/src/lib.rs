@@ -171,6 +171,31 @@ fn frame_with_meta(f: &Frame) -> String {
     s
 }
 
+/// Send a command by id with a hex payload, building a correctly checksummed
+/// frame. Used by the diagnostics page so probe frames are never malformed.
+#[tauri::command]
+fn send_cmd(
+    state: State<'_, AppState>,
+    cmd: u16,
+    payload: String,
+) -> Result<Option<RawResponse>, String> {
+    let bytes = reader::parse_hex(&payload)?;
+    if bytes.len() > reader::REPORT_LEN - 7 {
+        return Err(format!("payload is {} bytes, maximum is {}", bytes.len(), reader::REPORT_LEN - 7));
+    }
+    with_reader(&state, |r| {
+        let frame = reader::make_frame(cmd, &bytes);
+        let resp = r.raw_command(&frame)?;
+        Ok(resp.map(|f| RawResponse {
+            sent: reader::hex(&frame),
+            cmd: f.cmd,
+            payload: reader::hex(&f.payload),
+            checksum_ok: f.checksum_ok,
+            raw: frame_with_meta(&f),
+        }))
+    })
+}
+
 pub fn run() {
     tauri::Builder::default()
         .manage(AppState::default())
@@ -182,7 +207,8 @@ pub fn run() {
             hf_poll,
             beep,
             lf_write,
-            raw_send
+            raw_send,
+            send_cmd
         ])
         .run(tauri::generate_context!())
         .expect("error while running PM4 Studio");
