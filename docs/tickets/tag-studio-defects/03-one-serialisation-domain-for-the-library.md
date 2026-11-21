@@ -13,11 +13,11 @@ an interleaving that drops an update. Misses operating-system rename semantics, 
 the atomic-write behaviour already relies on.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/5
-**Status:** ready
+**Status:** done
 
-- [ ] Every write to the library file passes through one serialisation domain.
-- [ ] A Draft save and a Snapshot save in quick succession both land.
-- [ ] Overlapping saves queue rather than fail.
-- [ ] The file parses after any interleaving of the two paths.
-- [ ] No caller can reach the file except through the one path that holds the lock.
-- [ ] Single-writer behaviour is unchanged, including the atomic replace.
+- [x] Every write to the library file passes through one serialisation domain.
+- [x] A Draft save and a Snapshot save in quick succession both land.
+- [x] Overlapping saves queue rather than fail.
+- [x] The file parses after any interleaving of the two paths.
+- [x] No caller can reach the file except through the one path that holds the lock.
+- [x] Single-writer behaviour is unchanged, including the atomic replace.

@@ -14,25 +14,21 @@
 //!
 //! Nothing here touches the Reader, so every test runs against a real temp
 //! directory with no hardware attached.
+//!
+//! Every write here happens inside the library's serialisation domain (see
+//! [`crate::library::serialised`]): an import merges into the library and then
+//! replaces it, and a save from the store could otherwise read the same starting
+//! library and replace it too, losing the merge.
 
 use serde::Serialize;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
-use std::fs::{self, File};
-use std::io::Write;
-use std::path::{Path, PathBuf};
+use std::fs;
+use std::path::Path;
 
-use crate::library::{Draft, Library, LibraryProblem, LibraryStore, Snapshot};
-
-/// Suffix of the staging file a document write renames into place.
-///
-/// It deliberately differs from the store's own staging suffix: an export or an
-/// import must never stage bytes in the same file a library save is about to
-/// rename into place, or the two could commit each other's half-written bytes.
-const TEMP_SUFFIX: &str = ".document.tmp";
-
-/// Two document writes must not stage into one temp file at the same time.
-static WRITE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+use crate::library::{
+    serialised, write_atomically, Domain, Draft, Library, LibraryProblem, LibraryStore, Snapshot,
+};
 
 /// Top-level keys the typed half of a library owns.
 ///
@@ -156,12 +152,17 @@ fn current_document(store: &LibraryStore) -> Result<Document, FileError> {
 ///
 /// The file this writes is a library file, so it re-imports to the same
 /// library: that round trip is the point of an export.
+///
+/// The read and the write are one step in the domain, so an export is a copy of
+/// one state of the library rather than of a state a save changed underneath it.
 pub fn export(store: &LibraryStore, dest: &Path) -> Result<Document, FileError> {
-    // An unreadable library is never exported: a backup of bytes nobody can
-    // read is not a backup, and pretending otherwise would hide the problem.
-    let document = current_document(store)?;
-    write_document(dest, &document)?;
-    Ok(document)
+    serialised(|domain| {
+        // An unreadable library is never exported: a backup of bytes nobody can
+        // read is not a backup, and pretending otherwise would hide the problem.
+        let document = current_document(store)?;
+        write_document(domain, dest, &document)?;
+        Ok(document)
+    })
 }
 
 /// What an import would do, counted so the user can be told before anything is
@@ -190,10 +191,16 @@ pub fn preview(store: &LibraryStore, source: &Path) -> Result<ImportPreview, Fil
 ///
 /// Existing entries win: an import adds what is missing and never overwrites
 /// what is already here, so a renamed Snapshot keeps its name.
+///
+/// The merge is decided and written in one step in the domain. Read outside it,
+/// the merge would be based on a library a save had already moved past, and
+/// writing it back would silently drop that save.
 pub fn apply(store: &LibraryStore, source: &Path) -> Result<(Document, ImportPreview), FileError> {
-    let (merged, preview) = plan(store, source)?;
-    write_document(store.path(), &merged)?;
-    Ok((merged, preview))
+    serialised(|domain| {
+        let (merged, preview) = plan(store, source)?;
+        write_document(domain, store.path(), &merged)?;
+        Ok((merged, preview))
+    })
 }
 
 fn plan(store: &LibraryStore, source: &Path) -> Result<(Document, ImportPreview), FileError> {
@@ -274,55 +281,21 @@ fn draft_key(draft: &Draft) -> String {
 
 /// Write one library document, atomically: staged beside the target and renamed
 /// over it, so the file the user already had survives a failed write.
-fn write_document(path: &Path, document: &Document) -> Result<(), FileError> {
-    let bytes = serde_json::to_vec_pretty(&document.to_json()).map_err(|e| FileError::Io(e.to_string()))?;
-    write_bytes(path, &bytes)
+fn write_document(domain: &Domain, path: &Path, document: &Document) -> Result<(), FileError> {
+    let bytes =
+        serde_json::to_vec_pretty(&document.to_json()).map_err(|e| FileError::Io(e.to_string()))?;
+    write_atomically(domain, path, &bytes).map_err(|e| FileError::Io(e.to_string()))
 }
 
 /// Write one file the user chose, atomically.
 ///
-/// The staging-and-rename in `write_bytes` is the same rule a library export
-/// follows, so a dump could not leave a half-written file where a complete one
-/// was promised either.
+/// The staging-and-rename in `write_atomically` is the same rule a library
+/// export follows, so a dump could not leave a half-written file where a
+/// complete one was promised either.
 pub fn write_text(path: &Path, text: &str) -> Result<(), FileError> {
-    write_bytes(path, text.as_bytes())
-}
-
-/// Stage a file beside its target, flush it, then rename it into place, so the
-/// file the user already had survives a failed write.
-fn write_bytes(path: &Path, bytes: &[u8]) -> Result<(), FileError> {
-    let _staged = WRITE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent).map_err(|e| {
-                FileError::Io(format!("could not create {}: {e}", parent.display()))
-            })?;
-        }
-    }
-    let staged = staging_path(path);
-    write_and_flush(&staged, bytes).map_err(|e| FileError::Io(e.to_string()))?;
-    fs::rename(&staged, path).map_err(|e| FileError::Io(e.to_string()))?;
-    if let Some(parent) = path.parent() {
-        // Flush the directory entry so the rename itself is durable.
-        if let Ok(dir) = File::open(parent) {
-            let _ = dir.sync_all();
-        }
-    }
-    Ok(())
-}
-
-fn staging_path(path: &Path) -> PathBuf {
-    let mut staged = path.to_path_buf().into_os_string();
-    staged.push(TEMP_SUFFIX);
-    PathBuf::from(staged)
-}
-
-fn write_and_flush(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut file = File::create(path)?;
-    file.write_all(bytes)?;
-    // The bytes must be on the platter before the rename, or a power cut can
-    // leave an empty file where a complete one was promised.
-    file.sync_all()
+    serialised(|domain| {
+        write_atomically(domain, path, text.as_bytes()).map_err(|e| FileError::Io(e.to_string()))
+    })
 }
 
 #[cfg(test)]
@@ -960,5 +933,125 @@ mod tests {
         );
         assert_eq!(bytes_at(store.path()), before, "left byte for byte");
         assert_eq!(library_at(store.path()), original);
+    }
+
+    // Ticket 03: one serialisation domain for the library file.
+    //
+    // The store's own write path and the import path each replace the whole
+    // file. Each is atomic on its own and the pair is not: two writes that
+    // overlap can each read the same starting library and each rename a file
+    // holding only its own change, so one whole update is lost and neither path
+    // reports anything, because from either side the write succeeded.
+
+    /// A Draft save, as the app performs it: one step in the domain that reads
+    /// the library, adds the Draft and writes the library back.
+    fn save_a_draft(store: &LibraryStore, name: &str) {
+        store
+            .update(|library| {
+                library.add_draft(name, CAPTURED_AT);
+            })
+            .expect("save a Draft");
+    }
+
+    /// A Snapshot save, as the app performs it when a read is saved.
+    fn save_a_snapshot(store: &LibraryStore, data32: u32) {
+        store
+            .update(|library| {
+                library.add_lf(0x55, data32, "00 01 01", CAPTURED_AT);
+            })
+            .expect("save a Snapshot");
+    }
+
+    #[test]
+    fn a_draft_save_a_snapshot_save_and_an_import_that_overlap_all_land() {
+        const ROUNDS: u32 = 20;
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+
+        // What the import brings: one Snapshot per imported read, each on a
+        // different Tag, so a lost import is a Snapshot that never arrives.
+        let source = dir.path().join("incoming.json");
+        let mut incoming = Library::empty();
+        for round in 0..ROUNDS {
+            incoming.add_lf(0x56, 0x0080_0000 + round, "00 01 01", CAPTURED_AT);
+        }
+        LibraryStore::new(&source)
+            .save(&incoming)
+            .expect("write the import file");
+
+        // Every write the app can make, launched at once, each from its own
+        // handle on the same file — which is exactly how the app calls them.
+        let mut handles = Vec::new();
+        for round in 0..ROUNDS {
+            let named = format!("Draft {round}");
+            let draft_path = path.clone();
+            handles.push(std::thread::spawn(move || {
+                save_a_draft(&LibraryStore::new(&draft_path), &named);
+            }));
+
+            let snapshot_path = path.clone();
+            handles.push(std::thread::spawn(move || {
+                save_a_snapshot(&LibraryStore::new(&snapshot_path), 0x0200_0000 + round);
+            }));
+
+            let import_path = path.clone();
+            let import_source = source.clone();
+            handles.push(std::thread::spawn(move || {
+                apply(&LibraryStore::new(&import_path), &import_source).expect("import");
+            }));
+        }
+
+        // A reader alongside them: the file must parse at every moment, not
+        // only once the writers have finished.
+        let writing = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let reader_writing = std::sync::Arc::clone(&writing);
+        let reader_path = path.clone();
+        let reader = std::thread::spawn(move || {
+            let store = LibraryStore::new(&reader_path);
+            while reader_writing.load(std::sync::atomic::Ordering::SeqCst) {
+                if let Err(problem) = store.load() {
+                    panic!("a reader saw a file that is not a library: {problem:?}");
+                }
+            }
+        });
+
+        for handle in handles {
+            handle.join().expect("a write path panicked");
+        }
+        writing.store(false, std::sync::atomic::Ordering::SeqCst);
+        reader.join().expect("the reader saw a torn file");
+
+        // The file still parses, and it holds every update: each write is based
+        // on the file as it was when that write began, so no save can have
+        // replaced another's change. Every Tag here is distinct, so a count is
+        // an identity check on what survived.
+        let after = library_at(&path);
+        assert_eq!(
+            after.drafts.len(),
+            ROUNDS as usize,
+            "every Draft save must land, got {:?}",
+            after.drafts.iter().map(|d| &d.name).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            after.snapshots.len(),
+            2 * ROUNDS as usize,
+            "every saved and every imported Snapshot must land"
+        );
+
+        // The atomic replace is unchanged: the staging file is gone.
+        let names: Vec<String> = fs::read_dir(dir.path())
+            .expect("read dir")
+            .map(|entry| {
+                entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect();
+        assert!(
+            names.iter().all(|name| !name.ends_with(".tmp")),
+            "a staging file survived: {names:?}"
+        );
     }
 }

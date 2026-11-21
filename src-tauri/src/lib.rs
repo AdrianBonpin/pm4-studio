@@ -314,21 +314,15 @@ fn record_write_count(
         Ok(store) => store,
         Err(e) => return (WriteCountOutcome::NoSnapshot, Some(e)),
     };
-    let mut library = match store.load() {
-        Ok(library) => library,
-        Err(problem) => return (WriteCountOutcome::NoSnapshot, Some(problem.message())),
-    };
-    let record = library.record_write(identity, outcome);
-    if record.incremented() {
-        if let Err(e) = store.save(&library) {
-            let problem = match e {
-                SaveError::Refused(problem) => problem.message(),
-                SaveError::Io(detail) => format!("The library could not be saved: {detail}"),
-            };
-            return (record, Some(problem));
+    // Read, count and write as one step, so a count recorded now cannot replace
+    // a Draft or a Snapshot another part of the app saved a moment ago.
+    match store.update(|library| library.record_write(identity, outcome)) {
+        Ok((_, record)) => (record, None),
+        Err(SaveError::Refused(problem)) => {
+            (WriteCountOutcome::NoSnapshot, Some(problem.message()))
         }
+        Err(e) => (WriteCountOutcome::NoSnapshot, Some(save_message(e))),
     }
-    (record, None)
 }
 
 /// Write an Identity onto the 125 kHz tag currently on the reader.
@@ -1005,16 +999,42 @@ fn refused_view(store: &LibraryStore, problem: LibraryProblem) -> LibraryView {
     }
 }
 
-/// Load the library for writing, or the view that explains why it is read-only.
-fn load_writable(store: &LibraryStore) -> Result<Library, LibraryView> {
-    store.load().map_err(|problem| refused_view(store, problem))
-}
-
-fn commit(store: &LibraryStore, library: &Library) -> Result<(), String> {
-    store.save(library).map_err(|e| match e {
+/// The message a save that did not happen is reported with.
+fn save_message(error: SaveError) -> String {
+    match error {
         SaveError::Refused(problem) => problem.message(),
         SaveError::Io(detail) => format!("The library could not be saved: {detail}"),
-    })
+    }
+}
+
+/// What a change to the library came to.
+enum Changed<R> {
+    /// The library was read, changed and written back as one step. `library` is
+    /// the library the change produced.
+    Done { library: Library, result: R },
+    /// The file is not one this build may touch, and nothing was written.
+    Refused(LibraryProblem),
+}
+
+/// Change the library in one step, so that no save of any kind can land between
+/// this command's read and its write.
+///
+/// A caller that reads the library itself and then saves it hands over a version
+/// that may already be out of date: another part of the app can save in between,
+/// and the write then replaces that save with this one, silently. Handing the
+/// change to the store is what makes two saves in quick succession both land.
+///
+/// A refusal is not an error: it is the file this build must not touch, and the
+/// caller reports it as the view that says so.
+fn change_library<R>(
+    store: &LibraryStore,
+    change: impl FnOnce(&mut Library) -> R,
+) -> Result<Changed<R>, String> {
+    match store.update(change) {
+        Ok((library, result)) => Ok(Changed::Done { library, result }),
+        Err(SaveError::Refused(problem)) => Ok(Changed::Refused(problem)),
+        Err(e) => Err(save_message(e)),
+    }
 }
 
 #[derive(Serialize)]
@@ -1048,31 +1068,26 @@ fn library_save_lf(
     captured_at: String,
 ) -> Result<SaveResult, String> {
     let store = library_store(&app)?;
-    let mut library = match load_writable(&store) {
-        Ok(library) => library,
-        Err(refused) => {
-            return Ok(SaveResult {
-                outcome: "refused",
-                library: refused,
-                snapshot: None,
-            })
-        }
-    };
-
-    match library.add_lf(customer, data32, &raw, &captured_at) {
-        InsertOutcome::Duplicate(existing) => Ok(SaveResult {
-            outcome: "duplicate",
-            library: loaded_view(&store, library),
-            snapshot: Some(existing),
+    match change_library(&store, |library| {
+        library.add_lf(customer, data32, &raw, &captured_at)
+    })? {
+        Changed::Refused(problem) => Ok(SaveResult {
+            outcome: "refused",
+            library: refused_view(&store, problem),
+            snapshot: None,
         }),
-        InsertOutcome::Added(added) => {
-            commit(&store, &library)?;
-            Ok(SaveResult {
+        Changed::Done { library, result } => match result {
+            InsertOutcome::Duplicate(existing) => Ok(SaveResult {
+                outcome: "duplicate",
+                library: loaded_view(&store, library),
+                snapshot: Some(existing),
+            }),
+            InsertOutcome::Added(added) => Ok(SaveResult {
                 outcome: "added",
                 library: loaded_view(&store, library),
                 snapshot: Some(added),
-            })
-        }
+            }),
+        },
     }
 }
 
@@ -1080,14 +1095,10 @@ fn library_save_lf(
 #[tauri::command]
 fn library_rename(app: AppHandle, id: String, name: String) -> Result<LibraryView, String> {
     let store = library_store(&app)?;
-    let mut library = match load_writable(&store) {
-        Ok(library) => library,
-        Err(refused) => return Ok(refused),
-    };
-    if library.rename(&id, &name) {
-        commit(&store, &library)?;
+    match change_library(&store, |library| library.rename(&id, &name))? {
+        Changed::Refused(problem) => Ok(refused_view(&store, problem)),
+        Changed::Done { library, .. } => Ok(loaded_view(&store, library)),
     }
-    Ok(loaded_view(&store, library))
 }
 
 /// Write the name and note a user gave one Snapshot. Both are user copy, so
@@ -1101,28 +1112,20 @@ fn library_edit(
     note: String,
 ) -> Result<LibraryView, String> {
     let store = library_store(&app)?;
-    let mut library = match load_writable(&store) {
-        Ok(library) => library,
-        Err(refused) => return Ok(refused),
-    };
-    if library.edit(&id, &name, &note) {
-        commit(&store, &library)?;
+    match change_library(&store, |library| library.edit(&id, &name, &note))? {
+        Changed::Refused(problem) => Ok(refused_view(&store, problem)),
+        Changed::Done { library, .. } => Ok(loaded_view(&store, library)),
     }
-    Ok(loaded_view(&store, library))
 }
 
 /// Delete one Snapshot. Permanent, as the spec requires.
 #[tauri::command]
 fn library_delete(app: AppHandle, id: String) -> Result<LibraryView, String> {
     let store = library_store(&app)?;
-    let mut library = match load_writable(&store) {
-        Ok(library) => library,
-        Err(refused) => return Ok(refused),
-    };
-    if library.remove(&id) {
-        commit(&store, &library)?;
+    match change_library(&store, |library| library.remove(&id))? {
+        Changed::Refused(problem) => Ok(refused_view(&store, problem)),
+        Changed::Done { library, .. } => Ok(loaded_view(&store, library)),
     }
-    Ok(loaded_view(&store, library))
 }
 
 /// What one migration run did, in the shape the webview reads it.
@@ -1231,41 +1234,32 @@ fn drafts_load(app: AppHandle) -> Result<DraftsView, String> {
 #[tauri::command]
 fn draft_create(app: AppHandle, name: String, updated_at: String) -> Result<DraftsView, String> {
     let store = library_store(&app)?;
-    let mut library = match store.load() {
-        Ok(library) => library,
-        Err(problem) => return Ok(refused_drafts_view(problem)),
-    };
-    library.add_draft(&name, &updated_at);
-    commit(&store, &library)?;
-    Ok(drafts_view(library))
+    match change_library(&store, |library| {
+        library.add_draft(&name, &updated_at);
+    })? {
+        Changed::Refused(problem) => Ok(refused_drafts_view(problem)),
+        Changed::Done { library, .. } => Ok(drafts_view(library)),
+    }
 }
 
 /// Replace one Draft whole: name and Records in the order given.
 #[tauri::command]
 fn draft_save(app: AppHandle, draft: Draft) -> Result<DraftsView, String> {
     let store = library_store(&app)?;
-    let mut library = match store.load() {
-        Ok(library) => library,
-        Err(problem) => return Ok(refused_drafts_view(problem)),
-    };
-    if library.save_draft(draft) {
-        commit(&store, &library)?;
+    match change_library(&store, |library| library.save_draft(draft))? {
+        Changed::Refused(problem) => Ok(refused_drafts_view(problem)),
+        Changed::Done { library, .. } => Ok(drafts_view(library)),
     }
-    Ok(drafts_view(library))
 }
 
 /// Delete one Draft. The file is rewritten, so the delete survives a restart.
 #[tauri::command]
 fn draft_delete(app: AppHandle, id: String) -> Result<DraftsView, String> {
     let store = library_store(&app)?;
-    let mut library = match store.load() {
-        Ok(library) => library,
-        Err(problem) => return Ok(refused_drafts_view(problem)),
-    };
-    if library.remove_draft(&id) {
-        commit(&store, &library)?;
+    match change_library(&store, |library| library.remove_draft(&id))? {
+        Changed::Refused(problem) => Ok(refused_drafts_view(problem)),
+        Changed::Done { library, .. } => Ok(drafts_view(library)),
     }
-    Ok(drafts_view(library))
 }
 
 /// What the file dialog is being opened for.
