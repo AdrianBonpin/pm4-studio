@@ -91,8 +91,12 @@ export type BlankResult = {
   /** The Identity the user confirmed, which is what was blanked. */
   customer: number;
   data32: number;
-  /** See `src/lib/blankTag.ts` for the wording of each outcome. */
-  outcome: "refused" | "blanked" | "unverified" | "failed";
+  /** See `src/lib/blankTag.ts` for the wording of each outcome.
+   *
+   * `willNotAcceptWrites` is the re-read that still found an Identity: the tag
+   * refused the write, which is a fact about the tag rather than a generic
+   * failure or an unknown (ADR 0007). */
+  outcome: "refused" | "blanked" | "unverified" | "failed" | "willNotAcceptWrites";
   /** True only when the re-read found no Identity. Never a "verified" claim. */
   blanked: boolean;
   /** The Identity the tag still presents, when it still presents one. */

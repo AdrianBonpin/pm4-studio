@@ -65,6 +65,14 @@ export const READER_CAPABILITY_LIMITS: readonly CapabilityLimit[] = [
     detail:
       "Not possible. A T5577 configuration block cannot be written, and a Tag locked by an earlier write cannot be recovered.",
   },
+  {
+    // Stated once, here, so a missing check reads as a documented limit rather
+    // than a missing feature (ADR 0007). The absence is deliberate and permanent.
+    id: "writability",
+    label: "125 kHz writability",
+    detail:
+      "Cannot be determined without attempting a write. A 125 kHz reply carries no Tag family and no writability flag, so no command can answer whether a Tag will accept a write — and every command that would answer is itself a write. There is therefore no probe, in this app or in the protocol, and none is planned: Reset is the test.",
+  },
 ];
 
 /**

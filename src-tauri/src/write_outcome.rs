@@ -69,6 +69,12 @@ pub enum WriteOutcome {
     /// The write could not be transmitted, or a blanking write was transmitted
     /// and the Tag still presents an Identity.
     Failed,
+    /// A blanking write was transmitted and the Tag still presents an Identity,
+    /// so it will not accept a write. Distinct from `Failed` because it is not a
+    /// generic failure but a fact about the chip — it has already been written
+    /// once, or it was never writable — and distinct from `Unverified` because
+    /// the state of the Tag is known: nothing changed (ADR 0007).
+    WillNotAcceptWrites,
 }
 
 impl WriteOutcome {
@@ -81,6 +87,7 @@ impl WriteOutcome {
             WriteOutcome::Erased => "erased",
             WriteOutcome::Unverified => "unverified",
             WriteOutcome::Failed => "failed",
+            WriteOutcome::WillNotAcceptWrites => "willNotAcceptWrites",
         }
     }
 
@@ -144,13 +151,18 @@ pub fn classify(evidence: Evidence, target: Identity) -> WriteOutcome {
 ///
 ///   * nothing was transmitted → `Refused` or `Failed`, as for a copy;
 ///   * transmitted and the Tag presents no Identity → `Blanked`;
-///   * transmitted and the Tag still presents an Identity → `Failed`, because
-///     the blank did not take;
+///   * transmitted and the Tag still presents an Identity →
+///     `WillNotAcceptWrites`, because a chip that reads back its own Identity
+///     after a write is one that will not take one: it has already been written
+///     once, or it was never writable. Its own outcome, not `Failed`, because
+///     the useful reading is about the chip rather than about the attempt
+///     (ADR 0007);
 ///   * transmitted but the Tag could not be read back → `Unverified`, because
 ///     the write may or may not have landed.
 ///
 /// A `Blanked` outcome is never a confirmed copy: it destroys an Identity
-/// rather than creating one, so it must not raise any Snapshot's count.
+/// rather than creating one, so it must not raise any Snapshot's count. Nor is
+/// `WillNotAcceptWrites`: it places nothing.
 pub fn classify_blank(evidence: Evidence) -> WriteOutcome {
     match evidence {
         Evidence::Refused => WriteOutcome::Refused,
@@ -162,7 +174,7 @@ pub fn classify_blank(evidence: Evidence) -> WriteOutcome {
         // A Tag that still presents an Identity was not blanked. Any Identity
         // counts here, including a different one: a read-back that reports an
         // Identity at all is not a blank.
-        Evidence::Readback(Some(_)) => WriteOutcome::Failed,
+        Evidence::Readback(Some(_)) => WriteOutcome::WillNotAcceptWrites,
         Evidence::ReadbackUnreadable => WriteOutcome::Unverified,
     }
 }
@@ -253,6 +265,7 @@ mod tests {
         assert!(!WriteOutcome::Refused.counts_as_confirmed_copy());
         assert!(!WriteOutcome::Unverified.counts_as_confirmed_copy());
         assert!(!WriteOutcome::Failed.counts_as_confirmed_copy());
+        assert!(!WriteOutcome::WillNotAcceptWrites.counts_as_confirmed_copy());
     }
 
     #[test]
@@ -351,13 +364,48 @@ mod tests {
             WriteOutcome::Erased,
             WriteOutcome::Unverified,
             WriteOutcome::Failed,
+            WriteOutcome::WillNotAcceptWrites,
         ]
         .iter()
         .map(|o| o.as_str())
         .collect();
         assert_eq!(
             names,
-            vec!["refused", "verified", "blanked", "erased", "unverified", "failed"]
+            vec![
+                "refused",
+                "verified",
+                "blanked",
+                "erased",
+                "unverified",
+                "failed",
+                "willNotAcceptWrites"
+            ]
+        );
+    }
+
+    // ---- reset: a read-back that still identifies is its own fact --------
+
+    #[test]
+    fn a_blank_whose_readback_still_identifies_will_not_accept_writes() {
+        // The tag read back, and it still carries an Identity: the write did not
+        // take. That is evidence about the chip, not a generic failure and not an
+        // unknown, so it gets its own outcome (ADR 0007).
+        let outcome = classify_blank(Evidence::Readback(Some(target())));
+        assert_eq!(outcome, WriteOutcome::WillNotAcceptWrites);
+        assert_ne!(outcome, WriteOutcome::Failed);
+        assert_ne!(outcome, WriteOutcome::Unverified);
+        assert_ne!(outcome, WriteOutcome::Blanked);
+        assert!(!outcome.is_unknown());
+        assert!(!outcome.counts_as_confirmed_copy());
+    }
+
+    #[test]
+    fn a_still_identifying_readback_is_not_a_refusal() {
+        // The guard never saw it: bytes were sent. Reporting a refusal would say
+        // nothing was attempted, which is the opposite of what happened.
+        assert_ne!(
+            classify_blank(Evidence::Readback(Some(other()))),
+            WriteOutcome::Refused
         );
     }
 
@@ -453,17 +501,19 @@ mod tests {
     }
 
     #[test]
-    fn a_transmitted_blank_that_still_presents_an_identity_failed() {
-        // The blank did not take. This is a failure, not "unknown": the Tag
-        // was read and it still carries a credential.
+    fn a_transmitted_blank_that_still_presents_an_identity_will_not_accept_writes() {
+        // The blank did not take. That is not "unknown" — the Tag was read and it
+        // still carries a credential — and it is no longer a generic failure
+        // either: it is the one thing this app can learn about whether a 125 kHz
+        // tag accepts writes (ADR 0007).
         let outcome = classify_blank(Evidence::Readback(Some(target())));
-        assert_eq!(outcome, WriteOutcome::Failed);
+        assert_eq!(outcome, WriteOutcome::WillNotAcceptWrites);
         assert!(!outcome.counts_as_confirmed_copy());
 
-        // A different Identity is just as much a failed blank.
+        // A different Identity is just as much a Tag that took nothing.
         assert_eq!(
             classify_blank(Evidence::Readback(Some(other()))),
-            WriteOutcome::Failed
+            WriteOutcome::WillNotAcceptWrites
         );
     }
 
