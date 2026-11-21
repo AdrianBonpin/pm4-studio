@@ -66,6 +66,26 @@ impl Identity {
         (self.data32 & 0xFFFF) as u16
     }
 
+    /// The Identity for a customer byte, a facility code and a card number, as
+    /// the authoring form collects them.
+    ///
+    /// This is the exact inverse of [`Identity::facility`] and [`Identity::card`]
+    /// and is defined here, beside them, so the form a user types into and the
+    /// decoder that reports a read cannot drift apart: the bit layout is written
+    /// once, in this module. Authoring therefore never re-derives it.
+    ///
+    /// `facility` occupies the byte above the card number and `card` the low two
+    /// bytes, so the top byte of the data field is not reachable from these two
+    /// values — which is why out-of-range input is rejected here rather than
+    /// truncated.
+    pub fn from_facility_card(
+        customer: u8,
+        facility: u8,
+        card: u16,
+    ) -> Result<Self, IdentityError> {
+        Self::new(customer, ((facility as u32) << 16) | card as u32)
+    }
+
     /// The five-byte EM4100 id as it is shown to the user:
     /// `customer`, then the data field big endian.
     pub fn id(&self) -> String {
@@ -353,6 +373,39 @@ mod tests {
         };
         let payload = identity.write_payload().expect("0x00FFFFFF is in range");
         assert_eq!(&payload[16..20], &[0xFF, 0xFF, 0xFF, 0x00]);
+    }
+
+    #[test]
+    fn authoring_from_facility_and_card_reproduces_the_decoded_identity() {
+        // The authoring form and the decoder share one bit layout: values typed
+        // into the form must produce exactly the Identity the decoder reports for
+        // the same Tag. Asserted against a hardware capture, not against itself.
+        for frame in [test_frames::LF_WRITE_READBACK, test_frames::LF_READ_CARD_PRESENT] {
+            let read = Identity::from_read_payload(&test_frames::payload(frame))
+                .expect("a captured reading decodes");
+            let authored = Identity::from_facility_card(read.customer, read.facility(), read.card())
+                .expect("the fields a reading reports are in range");
+            assert_eq!(authored, read, "authored Identity must equal the decoded one");
+        }
+
+        let authored = Identity::from_facility_card(0x55, 132, 33298).expect("in range");
+        assert_eq!(authored.data32, 0x0084_8212);
+        assert_eq!(authored.id(), "55 00 84 82 12", "the id the UI shows");
+    }
+
+    #[test]
+    fn the_widest_facility_and_card_still_author() {
+        let identity = Identity::from_facility_card(0xFF, 0xFF, 0xFFFF).expect("in range");
+        assert_eq!(identity.data32, MAX_DATA32);
+        assert_eq!(identity.facility(), 0xFF);
+        assert_eq!(identity.card(), 0xFFFF);
+        assert_eq!(&identity.write_payload().expect("in range")[16..20], &[0xFF, 0xFF, 0xFF, 0x00]);
+    }
+
+    #[test]
+    fn the_id_text_is_the_five_bytes_authoring_accepts_back() {
+        let identity = Identity::from_facility_card(0x56, 0x53, 0xC7B3).expect("in range");
+        assert_eq!(identity.id(), "56 00 53 C7 B3");
     }
 
     #[test]

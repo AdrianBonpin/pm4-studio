@@ -1,5 +1,6 @@
 //! Tauri command surface for PM4 Studio.
 
+pub mod author_identity;
 pub mod blank;
 pub mod identity;
 pub mod library;
@@ -182,6 +183,71 @@ fn beep(state: State<'_, AppState>) -> Result<(), String> {
 #[tauri::command]
 fn led_off(state: State<'_, AppState>) -> Result<(), String> {
     with_reader(&state, |r| r.led_off())
+}
+
+/// What the authoring form is about to write, shown before anything is sent.
+///
+/// A confirmation payload, not a report: it is built by the same codec that
+/// encodes the `0x0073` payload, so the Identity on screen and the bytes on the
+/// wire cannot disagree. Producing it touches no device.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IdentityPreview {
+    pub customer: u8,
+    pub data32: u32,
+    /// The five-byte id as every other surface shows it: `55 00 84 82 12`.
+    pub id: String,
+    /// The same five bytes with no separators, for copying back into the form.
+    pub hex: String,
+    pub facility: u8,
+    pub card: u16,
+    /// The 24-byte `0x0073` payload, hex. This is what goes on the wire.
+    pub payload_hex: String,
+}
+
+impl From<author_identity::Preview> for IdentityPreview {
+    fn from(preview: author_identity::Preview) -> Self {
+        let identity = preview.identity;
+        Self {
+            customer: identity.customer,
+            data32: identity.data32,
+            id: preview.id,
+            hex: preview.hex,
+            facility: identity.facility(),
+            card: identity.card(),
+            payload_hex: preview.payload_hex,
+        }
+    }
+}
+
+/// The Identity a customer, facility and card entry describes, before any write.
+///
+/// Pure: it reads no Tag and sends no Frame, so this is safe to call while the
+/// user is still typing, and the confirmation it feeds cannot have had a side
+/// effect. Out-of-range entries are refused here with the valid range named —
+/// see `author_identity`, which owns the ranges and the codec round trip.
+#[tauri::command]
+fn lf_identity_preview(
+    customer: String,
+    facility: String,
+    card: String,
+) -> Result<IdentityPreview, String> {
+    author_identity::from_parts(&customer, &facility, &card)
+        .and_then(author_identity::preview)
+        .map(IdentityPreview::from)
+        .map_err(|e| e.to_string())
+}
+
+/// The Identity a raw five-byte hex entry describes, before any write.
+///
+/// Pure, for the same reason as [`lf_identity_preview`]: the entry may be wrong,
+/// and finding that out must not cost a Tag.
+#[tauri::command]
+fn lf_identity_preview_hex(hex: String) -> Result<IdentityPreview, String> {
+    author_identity::from_hex(&hex)
+        .and_then(author_identity::preview)
+        .map(IdentityPreview::from)
+        .map_err(|e| e.to_string())
 }
 
 #[derive(Serialize)]
@@ -1026,6 +1092,8 @@ pub fn run() {
             memory_dump_export,
             beep,
             led_off,
+            lf_identity_preview,
+            lf_identity_preview_hex,
             lf_write,
             lf_blank,
             hf_ndef_preview,
