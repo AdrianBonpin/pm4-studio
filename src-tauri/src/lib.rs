@@ -13,6 +13,7 @@ pub mod password;
 pub mod reader;
 pub mod stream;
 pub mod tag_records;
+pub mod wire_record;
 pub mod write_guard;
 pub mod write_outcome;
 #[cfg(test)]
