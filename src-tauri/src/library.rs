@@ -6,6 +6,13 @@
 //! written by a newer schema version, is reported and never overwritten: a
 //! clean start on top of unreadable bytes is data loss.
 //!
+//! This module owns the **serialisation domain**: the one lock every write to
+//! the file is performed under, whoever performs it. A save, an import, an
+//! export and a dump all replace the whole file with bytes read moments earlier,
+//! so they must not overlap — two of them reading the same starting state would
+//! each rename a file holding only their own change, and one whole update would
+//! be lost with nothing reported. See [`serialised`].
+//!
 //! Nothing here touches the Reader, so every test runs against a real temp
 //! directory with no hardware attached.
 
@@ -20,14 +27,102 @@ use crate::write_outcome::WriteOutcome;
 /// The schema version this build writes and understands.
 pub const SCHEMA_VERSION: u32 = 1;
 
-/// Suffix of the staging file a save writes before renaming it into place.
+/// Suffix of the staging file a write stages before renaming it into place.
+///
+/// One suffix for every write, because there is one writer at a time: the
+/// domain below is what stops two writes staging into the same path.
 const TEMP_SUFFIX: &str = ".tmp";
 
-/// Saves stage into one fixed temp path, so two of them must not run at once or
-/// they could interleave bytes and then rename the mess into place. The lock
-/// also makes the "may this file be replaced?" check and the rename that
-/// follows it one indivisible step.
-static SAVE_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+/// The one serialisation domain that governs the library file.
+///
+/// Every write to the file — a save from the store, an import that merges a
+/// document into it, an export or a dump staged beside it — is performed while
+/// this is held. One lock is the whole point: two locks would each be sound on
+/// their own and jointly unsound, which is precisely how two saves overlapping
+/// in time could each read the same starting library and each rename a file
+/// reflecting only its own change.
+///
+/// It is held across a whole read-and-write, not just across the write, because
+/// the write replaces the file with a version read a moment earlier. A lock that
+/// only covered the replace would leave the read outside the domain, and the
+/// update another writer made in between would be replaced rather than kept.
+static LIBRARY_DOMAIN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// Proof that the caller holds the one serialisation domain.
+///
+/// Only [`serialised`] mints one, and the functions that write the file demand
+/// it, so a write path that skips the lock does not compile. The guard is the
+/// token: the domain is held exactly as long as this value lives.
+#[derive(Debug)]
+pub(crate) struct Domain {
+    _guard: std::sync::MutexGuard<'static, ()>,
+}
+
+/// Run `f` as the only writer of the library file in this process.
+///
+/// The whole operation goes inside one call — the read, the change, and the
+/// write — so no second writer can slip between them. Calls do not nest: the
+/// functions that assume the domain ask for the [`Domain`] token instead of
+/// taking the lock again, so an operation takes the lock once, at its outer
+/// edge.
+pub(crate) fn serialised<T>(f: impl FnOnce(&Domain) -> T) -> T {
+    // A panic in another writer must not poison the file's domain for good: the
+    // guard is released either way, and nothing here leaves a half-written file
+    // to protect.
+    let guard = LIBRARY_DOMAIN.lock().unwrap_or_else(|e| e.into_inner());
+    f(&Domain { _guard: guard })
+}
+
+/// Write `bytes` to `path` atomically, inside the domain: staged beside the
+/// target, flushed to disk, renamed over it, and the directory entry flushed.
+///
+/// This is the only code that replaces a library file, whether the bytes are a
+/// library from a save, a document from an import, or a copy of either for the
+/// user. A crash at any point leaves the old file or the new one, never a torn
+/// one.
+pub(crate) fn write_atomically(_domain: &Domain, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let staged = stage_bytes(path, bytes)?;
+    commit_staged(&staged, path)
+}
+
+/// Stage `bytes` beside `path` and flush them, creating the directory if the
+/// write is the first thing to happen there.
+fn stage_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)?;
+        }
+    }
+    let staged = staging_path(path);
+    write_and_flush(&staged, bytes)?;
+    Ok(staged)
+}
+
+/// Commit a staged file: one rename, which is atomic on the same filesystem.
+fn commit_staged(staged: &Path, path: &Path) -> std::io::Result<()> {
+    fs::rename(staged, path)?;
+    if let Some(parent) = path.parent() {
+        // Flush the directory entry so the rename itself is durable.
+        if let Ok(dir) = File::open(parent) {
+            let _ = dir.sync_all();
+        }
+    }
+    Ok(())
+}
+
+fn staging_path(path: &Path) -> PathBuf {
+    let mut staged = path.to_path_buf().into_os_string();
+    staged.push(TEMP_SUFFIX);
+    PathBuf::from(staged)
+}
+
+fn write_and_flush(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut file = File::create(path)?;
+    file.write_all(bytes)?;
+    // The bytes must be on the platter before the rename, or a power cut can
+    // leave an empty library where a complete one was promised.
+    file.sync_all()
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Library {
@@ -252,52 +347,72 @@ impl LibraryStore {
     /// The replacement is written to a sibling temp file and flushed to disk
     /// before it is renamed over the library, so a crash at any point leaves
     /// either the previous library or the new one — never a truncated file.
+    ///
+    /// One step in the serialisation domain, so it cannot interleave with
+    /// another writer's read or write.
+    ///
+    /// This writes the library it is handed, so it is for a caller that has
+    /// built a whole library itself — an import that merged a document, a
+    /// migration that lifted an old one. A change to a library that already
+    /// exists goes through [`update`](Self::update), which reads and writes as
+    /// one step; a caller that reads, changes and then calls this hands over a
+    /// version that another writer may already have moved past, and adopting it
+    /// loses that writer's update.
     pub fn save(&self, library: &Library) -> Result<(), SaveError> {
-        let _serialised = SAVE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        serialised(|domain| self.replace(domain, library))
+    }
+
+    /// Change the library as one indivisible step: read it, apply `change`, and
+    /// replace the file, with no other writer able to run in between.
+    ///
+    /// This is how every change to a library that already exists is written, so
+    /// two saves that overlap queue behind one another and both land. Nothing is
+    /// written when `change` changed nothing, so an operation that turned out to
+    /// be a no-op leaves the file byte for byte as it was. The refusal to touch
+    /// a file this build cannot read is decided inside the same step, so it
+    /// cannot be raced either.
+    ///
+    /// `change` must not call back into the store: the domain it would ask for
+    /// is already held.
+    pub fn update<R>(
+        &self,
+        change: impl FnOnce(&mut Library) -> R,
+    ) -> Result<(Library, R), SaveError> {
+        serialised(|domain| {
+            let mut library = self.load().map_err(SaveError::Refused)?;
+            let before = library.clone();
+            let result = change(&mut library);
+            if library != before {
+                self.replace(domain, &library)?;
+            }
+            Ok((library, result))
+        })
+    }
+
+    /// The replacement itself, inside the domain the caller holds.
+    pub(crate) fn replace(&self, domain: &Domain, library: &Library) -> Result<(), SaveError> {
         // Never replace a file this build cannot read: the bytes on disk may be
         // the user's only copy, and a clean start would destroy them.
         if let Err(problem) = self.load() {
             return Err(SaveError::Refused(problem));
         }
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                fs::create_dir_all(parent).map_err(|e| {
-                    SaveError::Io(format!("could not create {}: {e}", parent.display()))
-                })?;
-            }
-        }
         let staged = self
-            .stage(library)
+            .stage(domain, library)
             .map_err(|e| SaveError::Io(e.to_string()))?;
-        self.commit(&staged)
+        self.commit(domain, &staged)
             .map_err(|e| SaveError::Io(e.to_string()))
     }
 
     /// The staging half of an atomic replacement: write the replacement to a
     /// sibling temp file and flush it. Nothing is visible at `path` yet.
-    fn stage(&self, library: &Library) -> std::io::Result<PathBuf> {
+    fn stage(&self, _domain: &Domain, library: &Library) -> std::io::Result<PathBuf> {
         let bytes = serde_json::to_vec_pretty(library)?;
-        let mut tmp = self.path.clone().into_os_string();
-        tmp.push(TEMP_SUFFIX);
-        let tmp = PathBuf::from(tmp);
-        let mut file = File::create(&tmp)?;
-        file.write_all(&bytes)?;
-        // The bytes must be on the platter before the rename, or a power cut can
-        // leave an empty library where a complete one was promised.
-        file.sync_all()?;
-        Ok(tmp)
+        stage_bytes(&self.path, &bytes)
     }
 
     /// The commit half: one rename, which is atomic on the same filesystem.
-    fn commit(&self, staged: &Path) -> std::io::Result<()> {
-        fs::rename(staged, &self.path)?;
-        if let Some(parent) = self.path.parent() {
-            // Flush the directory entry so the rename itself is durable.
-            if let Ok(dir) = File::open(parent) {
-                let _ = dir.sync_all();
-            }
-        }
-        Ok(())
+    fn commit(&self, _domain: &Domain, staged: &Path) -> std::io::Result<()> {
+        commit_staged(staged, &self.path)
     }
 }
 
@@ -647,9 +762,10 @@ mod tests {
             .save(&library_with(&["55 00 84 82 12"]))
             .expect("first save");
 
-        let replacement = store
-            .stage(&library_with(&["56 00 53 C7 B3"]))
-            .expect("stage the replacement, then never commit it");
+        let replacement = serialised(|domain| {
+            store.stage(domain, &library_with(&["56 00 53 C7 B3"]))
+        })
+        .expect("stage the replacement, then never commit it");
         assert!(
             replacement.exists(),
             "the replacement is written to the temp file"
@@ -685,11 +801,12 @@ mod tests {
         let blocked = dir.path().join("blocked");
         fs::create_dir(&blocked).expect("make the commit target impossible");
         let blocked_store = LibraryStore::new(&blocked);
-        let staged = blocked_store
-            .stage(&library_with(&["56 00 53 C7 B3"]))
-            .expect("stage");
+        let staged = serialised(|domain| {
+            blocked_store.stage(domain, &library_with(&["56 00 53 C7 B3"]))
+        })
+        .expect("stage");
         assert!(
-            blocked_store.commit(&staged).is_err(),
+            serialised(|domain| blocked_store.commit(domain, &staged)).is_err(),
             "a commit that cannot rename must report failure"
         );
 
@@ -701,7 +818,10 @@ mod tests {
     }
 
     #[test]
-    fn saves_from_several_threads_leave_one_readable_library() {
+    fn saves_from_several_threads_queue_and_all_land() {
+        // Four writers, forty saves, each on a different Tag. A save is a
+        // read-and-write as one step in the domain, so they queue behind one
+        // another: none fails, and no save replaces another's Snapshot.
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("library.json");
 
@@ -711,9 +831,11 @@ mod tests {
             handles.push(std::thread::spawn(move || {
                 for _ in 0..10 {
                     let store = LibraryStore::new(&path);
-                    let mut library = store.load().unwrap_or_else(|_| Library::empty());
-                    let _ = library.add_lf(0x55, 0x0084_8212 + n, "00 01 01", CAPTURED_AT);
-                    store.save(&library).expect("save");
+                    store
+                        .update(|library| {
+                            library.add_lf(0x55, 0x0084_8212 + n, "00 01 01", CAPTURED_AT);
+                        })
+                        .expect("save");
                 }
             }));
         }
@@ -724,10 +846,10 @@ mod tests {
         let library = LibraryStore::new(&path)
             .load()
             .expect("the file is still a library after concurrent saves");
-        assert!(
-            (1..=4).contains(&library.snapshots.len()),
-            "got {} snapshots",
-            library.snapshots.len()
+        assert_eq!(
+            library.snapshots.len(),
+            4,
+            "every Tag saved by every thread is in the library"
         );
     }
 

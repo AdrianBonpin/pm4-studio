@@ -40,7 +40,8 @@ use serde_json::{Map, Value};
 
 use crate::identity::{Identity, MAX_DATA32};
 use crate::library::{
-    IdentityFields, InsertOutcome, Kind, Library, LibraryProblem, LibraryStore, SaveError, Snapshot,
+    serialised, Domain, IdentityFields, InsertOutcome, Kind, Library, LibraryProblem, LibraryStore,
+    SaveError, Snapshot,
 };
 
 /// The keys the old store wrote. A key outside this list has no home in a
@@ -134,6 +135,18 @@ pub fn migrate(
     entries: &[Value],
     now: &str,
 ) -> Result<Migration, MigrationError> {
+    // Whether the file exists, what would go into it, and the write itself are
+    // one step in the serialisation domain: a file that appeared between the
+    // check and the write would be replaced by a migration that never saw it.
+    serialised(|domain| migrate_in(domain, store, entries, now))
+}
+
+fn migrate_in(
+    domain: &Domain,
+    store: &LibraryStore,
+    entries: &[Value],
+    now: &str,
+) -> Result<Migration, MigrationError> {
     // The criterion is the file, not a flag beside it: a file that exists is
     // either this migration's committed output or the user's own library, and
     // neither may be written into a second time.
@@ -191,7 +204,7 @@ pub fn migrate(
         });
     }
 
-    store.save(&library).map_err(|e| match e {
+    store.replace(domain, &library).map_err(|e| match e {
         SaveError::Refused(problem) => MigrationError::Refused(problem),
         SaveError::Io(detail) => MigrationError::Io(detail),
     })?;
