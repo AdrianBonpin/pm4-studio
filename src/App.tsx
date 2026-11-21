@@ -5,10 +5,13 @@ import { Badge } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
 import { Card } from "./components/ui/Card";
 import { Input } from "./components/ui/Input";
+import { Toggle } from "./components/ui/Toggle";
 import { isMacOS, isTauri } from "./lib/platform";
-import type { DeviceInfo, HfCard, LfCard, RawResponse } from "./types";
+import type { DeviceInfo, HfCard, LfCard, RawResponse, WriteResult } from "./types";
 
 type Status = "idle" | "connecting" | "connected" | "error";
+
+const BEEP_PREF_KEY = "pm4studio.beep";
 
 const SCAN_TIMEOUT_MS = 30_000;
 const SCAN_INTERVAL_MS = 350;
@@ -46,7 +49,36 @@ export default function App() {
   const [rawError, setRawError] = useState<string | null>(null);
   const [rawBusy, setRawBusy] = useState(false);
 
+  const [beepOn, setBeepOn] = useState<boolean>(() => {
+    if (typeof localStorage === "undefined") return true;
+    const v = localStorage.getItem(BEEP_PREF_KEY);
+    return v === null ? true : v === "1";
+  });
+  const beepRef = useRef(beepOn);
+
+  const [writeArmed, setWriteArmed] = useState(false);
+  const [writeBusy, setWriteBusy] = useState(false);
+  const [writeResult, setWriteResult] = useState<WriteResult | null>(null);
+  const [writeError, setWriteError] = useState<string | null>(null);
+
   const stopRef = useRef(false);
+
+  useEffect(() => {
+    beepRef.current = beepOn;
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(BEEP_PREF_KEY, beepOn ? "1" : "0");
+    }
+  }, [beepOn]);
+
+  /** Chirp the reader, when the user has the beep option enabled. */
+  const chirp = useCallback(async () => {
+    if (!beepRef.current) return;
+    try {
+      await invoke("beep");
+    } catch {
+      // A beep failing must never break the operation it accompanies.
+    }
+  }, []);
 
   const connect = useCallback(async () => {
     setStatus("connecting");
@@ -88,6 +120,7 @@ export default function App() {
         if (card) {
           setLfCard(card);
           setLfScanning(false);
+          void chirp();
           return;
         }
       } catch (e) {
@@ -110,6 +143,7 @@ export default function App() {
     try {
       const card = await invoke<HfCard | null>("hf_poll");
       setHfCard(card);
+      if (card) void chirp();
       if (!card) setError("No 13.56 MHz tag in the field.");
     } catch (e) {
       setError(String(e));
@@ -141,6 +175,27 @@ export default function App() {
     }
   };
 
+  const confirmWrite = async () => {
+    if (!lfCard) return;
+    setWriteBusy(true);
+    setWriteError(null);
+    setWriteResult(null);
+    try {
+      const res = await invoke<WriteResult>("lf_write", {
+        customer: lfCard.customer,
+        data32: lfCard.data32,
+      });
+      setWriteResult(res);
+      if (res.verified) void chirp();
+      else setWriteError("Write sent, but the tag did not read back the expected id.");
+    } catch (e) {
+      setWriteError(String(e));
+    } finally {
+      setWriteBusy(false);
+      setWriteArmed(false);
+    }
+  };
+
   const connected = status === "connected";
   const progress = Math.min(100, (lfElapsed / SCAN_TIMEOUT_MS) * 100);
 
@@ -168,6 +223,15 @@ export default function App() {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-text-muted">Beep</span>
+            <Toggle
+              checked={beepOn}
+              onChange={setBeepOn}
+              label="Beep on read and write"
+              disabled={!connected}
+            />
+          </div>
           <Badge label={status} color={STATUS_COLOR[status]} />
           <Button variant="secondary" onClick={() => void connect()}>
             {connected ? "Reconnect" : "Connect"}
@@ -274,6 +338,62 @@ export default function App() {
                       {lfCard.raw}
                     </code>
                   </details>
+
+                  <div className="mt-4 rounded-lg border border-border bg-canvas px-3 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-xs text-text">Clone to a blank tag</p>
+                        <p className="truncate text-[11px] text-text-muted">
+                          Writes {lfCard.id} to the 125 kHz tag on the reader.
+                        </p>
+                      </div>
+                      {!writeArmed && (
+                        <Button
+                          variant="secondary"
+                          disabled={!connected || writeBusy}
+                          onClick={() => {
+                            setWriteArmed(true);
+                            setWriteResult(null);
+                            setWriteError(null);
+                          }}
+                        >
+                          Clone
+                        </Button>
+                      )}
+                    </div>
+
+                    {writeArmed && (
+                      <div className="mt-3 flex flex-col gap-2">
+                        <p className="rounded-md border border-warn/30 bg-warn/10 px-2 py-1.5 text-[11px] leading-relaxed text-warn">
+                          Put ONE blank 125 kHz tag on the reader now. This overwrites it
+                          permanently — never do this with your original badge.
+                        </p>
+                        <div className="flex gap-2">
+                          <Button
+                            variant="primary"
+                            disabled={writeBusy}
+                            onClick={() => void confirmWrite()}
+                          >
+                            {writeBusy ? "Writing…" : "Write now"}
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            disabled={writeBusy}
+                            onClick={() => setWriteArmed(false)}
+                          >
+                            Cancel
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+
+                    {writeError && <p className="mt-2 text-[11px] text-err">{writeError}</p>}
+                    {writeResult?.verified && (
+                      <p className="mt-2 text-[11px] text-ok">
+                        Verified — the tag now reads {writeResult.readback?.id}.
+                      </p>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <p className="mt-4 text-xs text-text-muted">

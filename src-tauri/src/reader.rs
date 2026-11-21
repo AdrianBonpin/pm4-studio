@@ -34,6 +34,8 @@ pub const CMD_WAKE: u16 = 0x0051;
 pub const CMD_BEEP: u16 = 0x0055;
 pub const CMD_HF_POLL: u16 = 0x0069;
 pub const CMD_LF_READ: u16 = 0x0072;
+/// LF write. Discovered by probing; see docs/PROTOCOL.md.
+pub const CMD_LF_WRITE: u16 = 0x0073;
 /// Documented but not yet wrapped in the UI; reachable via the raw console.
 #[allow(dead_code)]
 pub const CMD_NTAG_INFO: u16 = 0x0083;
@@ -176,7 +178,7 @@ impl Reader {
         }
     }
 
-    fn read_frame(&self, timeout_ms: i32) -> Result<Option<Frame>, String> {
+    pub fn read_one(&self, timeout_ms: i32) -> Result<Option<Frame>, String> {
         let mut buf = [0u8; REPORT_LEN];
         let n = self
             .dev
@@ -204,7 +206,7 @@ impl Reader {
             if remaining.is_zero() {
                 return Ok(None);
             }
-            match self.read_frame(remaining.as_millis().min(500) as i32)? {
+            match self.read_one(remaining.as_millis().min(500) as i32)? {
                 Some(f) => match expect {
                     Some(e) if f.cmd != e => continue,
                     _ => return Ok(Some(f)),
@@ -257,6 +259,47 @@ impl Reader {
         }))
     }
 
+    /// Write an EM4100 identity onto a blank 125 kHz tag.
+    ///
+    /// Command 0x0073 with a 24-byte payload. The write layout is shifted +4
+    /// relative to the read layout (see docs/PROTOCOL.md):
+    ///   [1] = 0x01, [2] = 0x01   enable flags, required
+    ///   [8]  = customer byte
+    ///   [12] = customer byte
+    ///   [16..20] = data32, little endian
+    ///
+    /// A shorter payload wedges the firmware (stop responding to HID reports
+    /// until the reader is replugged), so the length must stay 24.
+    pub fn lf_write(&self, customer: u8, data32: u32) -> Result<(), String> {
+        let le = data32.to_le_bytes();
+        let mut p = [0u8; 24];
+        p[1] = 0x01;
+        p[2] = 0x01;
+        p[8] = customer;
+        p[12] = customer;
+        p[16..20].copy_from_slice(&le);
+
+        self.write_raw(&make_frame(CMD_LF_WRITE, &p))?;
+        // The firmware emits a burst of acknowledgement frames after a write.
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        self.drain();
+        Ok(())
+    }
+
+    /// Wake, write, then read the tag back so callers can verify the result.
+    pub fn lf_write_verified(&self, customer: u8, data32: u32) -> Result<Option<LfCard>, String> {
+        self.wake()?;
+        self.lf_write(customer, data32)?;
+        for _ in 0..8 {
+            self.wake().ok();
+            if let Some(c) = self.lf_read_once()? {
+                return Ok(Some(c));
+            }
+            std::thread::sleep(std::time::Duration::from_millis(250));
+        }
+        Ok(None)
+    }
+
     /// 13.56 MHz ISO14443-A poll.
     pub fn hf_poll_once(&self) -> Result<Option<HfCard>, String> {
         let f = match self.transact(CMD_HF_POLL, &[], Some(CMD_HF_POLL), 1500)? {
@@ -281,10 +324,29 @@ impl Reader {
         }))
     }
 
+    /// Discard any queued input frames. The LF read emits two responses per
+    /// poll, so a leftover frame otherwise gets misread as the reply to the
+    /// next command.
+    pub fn drain(&self) -> usize {
+        let mut n = 0;
+        while let Ok(Some(_)) = self.read_one(0) {
+            n += 1;
+            if n > 32 {
+                break;
+            }
+        }
+        n
+    }
+
+    /// Send one frame without reading a reply.
+    pub fn write_raw(&self, frame: &[u8; REPORT_LEN]) -> Result<(), String> {
+        self.write_frame(frame)
+    }
+
     /// Raw escape hatch: send arbitrary bytes as one frame, return the reply.
     pub fn raw_command(&self, frame: &[u8; REPORT_LEN]) -> Result<Option<Frame>, String> {
         self.write_frame(frame)?;
-        self.read_frame(1500)
+        self.read_one(1500)
     }
 }
 

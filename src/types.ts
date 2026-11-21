@@ -20,6 +20,13 @@ export type HfCard = {
   raw: string;
 };
 
+export type WriteResult = {
+  customer: number;
+  data32: number;
+  readback: LfCard | null;
+  verified: boolean;
+};
+
 export type RawResponse = {
   sent: string;
   cmd: number;

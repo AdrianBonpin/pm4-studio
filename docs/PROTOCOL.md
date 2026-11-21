@@ -150,6 +150,52 @@ facility         = (data32 >> 16) & 0xFF = 0x53 = 83
 card             = data32 & 0xFFFF       = 0xC7B3 = 51123
 ```
 
+### `0x0073` — 125 kHz write (EM4100) — CONFIRMED
+
+Discovered by probing and confirmed by writing a badge id to a blank T5577 and
+reading it back **byte-identically**. Not documented in any upstream project.
+
+Payload is **exactly 24 bytes**. The write layout is shifted **+4 bytes**
+relative to the read layout:
+
+| Offset | Meaning |
+|---|---|
+| 0 | `0x00` |
+| 1 | `0x01` — enable flag, required |
+| 2 | `0x01` — enable flag, required |
+| 8 | customer byte |
+| 12 | customer byte |
+| 16..20 | data32, **little-endian** |
+| 20..24 | `0x00` |
+
+Working example — cloning badge `55 00 84 82 12` (customer `0x55`, data32
+`0x00848212`):
+
+```
+OUT  55 00 73 00 18 00 01 01 00 00 00 00 00 55 00 00 00 55 00 00 00 12 82 84 00 00 00 00 00 <cksum>
+```
+
+Read-back after that frame:
+
+```
+IN   55 00 72 00 18 00 01 01 00 00 00 00 00 55 00 00 00 12 82 84 00 00 00 C8 42 01 00 00 00 <cksum>
+```
+
+which decodes to `55 00 84 82 12`, facility 132, card 33298 — identical to the
+source badge.
+
+#### Two failure modes worth knowing
+
+1. **A short payload wedges the firmware.** Sending `0x0073` with a 5-byte
+   payload was accepted by USB and then the device stopped answering HID reports
+   entirely (`IOHIDDeviceSetReport ... I/O Timeout`) until physically replugged.
+   Keep the payload at 24 bytes.
+2. **A bogus payload can lock the chip.** One test succeeded in writing a
+   nonsensical value (customer `0x12`, data32 `0x42C80000`) and that chip then
+   refused all further writes while still reading back fine — classic T5577 lock
+   behaviour. Treat each blank as single-use until proven otherwise, and never
+   experiment on a tag you care about.
+
 ### `0x0083` / `0x0081` / `0x0082` / `0x0084` — NTAG operations
 
 Documented upstream as NTAG info / read / write / format. **Not implemented
@@ -159,13 +205,15 @@ before the payload is meaningful.
 
 ## Open problems
 
-1. **125 kHz write / clone.** The command id is unknown. This is the one that
-   matters for duplicating a badge onto a T5577 blank. Do not brute-force write
-   commands on a blank you care about: a wrong frame can set lock bits and brick
-   the chip permanently.
-2. **ATQA/SAK offsets** for the HF poll tail.
-3. **Multi-report reassembly** for NTAG responses.
-4. **`C8 42`** meaning in the LF payload.
+1. **ATQA/SAK offsets** for the HF poll tail. Not yet captured from a real
+   13.56 MHz card, so this app reports only the UID plus the raw payload.
+2. **Multi-report reassembly** for NTAG responses.
+3. **`C8 42`** meaning in the LF read payload.
+4. **What sets the T5577 lock bit.** One write locked a chip; another did not.
+   Understanding which payloads are safe would remove the main hazard of the
+   `0x0073` path.
+
+Solved: **125 kHz write/clone** — command `0x0073`, see above.
 
 Contributions with real captures welcome.
 

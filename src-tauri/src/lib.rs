@@ -107,6 +107,37 @@ fn beep(state: State<'_, AppState>) -> Result<(), String> {
     with_reader(&state, |r| r.beep())
 }
 
+#[derive(Serialize)]
+pub struct WriteResult {
+    pub customer: u8,
+    pub data32: u32,
+    /// What the tag reads after the write, when it could be re-read.
+    pub readback: Option<LfCard>,
+    pub verified: bool,
+}
+
+/// Write an EM4100 identity onto the blank 125 kHz tag currently on the reader.
+#[tauri::command]
+fn lf_write(
+    state: State<'_, AppState>,
+    customer: u8,
+    data32: u32,
+) -> Result<WriteResult, String> {
+    with_reader(&state, |r| {
+        let readback = r.lf_write_verified(customer, data32)?;
+        let verified = readback
+            .as_ref()
+            .map(|c| c.customer == customer && c.data32 == data32)
+            .unwrap_or(false);
+        Ok(WriteResult {
+            customer,
+            data32,
+            readback,
+            verified,
+        })
+    })
+}
+
 /// Send an arbitrary frame. Input is a hex string; the frame is zero-padded to
 /// 64 bytes. Useful for probing commands that are not yet wrapped.
 #[tauri::command]
@@ -150,6 +181,7 @@ pub fn run() {
             lf_poll,
             hf_poll,
             beep,
+            lf_write,
             raw_send
         ])
         .run(tauri::generate_context!())

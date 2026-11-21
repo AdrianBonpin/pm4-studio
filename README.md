@@ -35,21 +35,23 @@ but the command set is vendor-specific.
 
 - **Device inspection** — VID/PID, product, manufacturer, serial
 - **125 kHz badge read** (EM4100) — decoded ID, `data32`, facility/card number
+- **125 kHz badge write / clone** — writes a scanned badge id onto a blank
+  T5577 and verifies by reading it back
 - **13.56 MHz poll** (ISO14443-A) — UID
+- **Optional beeper** — toggle that chirps the reader on every successful read
+  and write, persisted between launches
 - **Raw command console** — send any hex frame, see the reply and whether the
   checksum verifies
-- **Beeper** trigger
 
 ### Deliberately not implemented
 
-- **No tag writing / cloning.** The LF-write command id has not been identified,
-  and issuing blind write frames to a T5577 risks bricking it via lock bits.
-  Reads are safe; writes are not. If you need cloning today, use the vendor
-  Windows tool.
 - **No NTAG memory read/write.** `0x83`/`0x81`/`0x82` are documented upstream but
   their replies span multiple reports, which needs a reassembly layer.
-- **No ATQA/SAK decoding.** Offsets aren't confirmed against real HF hardware yet,
+- **No ATQA/SAK decoding.** Offsets aren't confirmed against a real HF card yet,
   so only the UID is reported and the raw payload is shown for inspection.
+- **No guard against locking a T5577.** A write with a bogus payload can
+  permanently lock a chip. The app warns before writing and never writes
+  automatically, but the chip-level risk is real — use blanks.
 
 ## Requirements
 
@@ -98,6 +100,7 @@ Verified commands:
 | `0x0055` | beep | `55 00 55 00 00 FF 00` |
 | `0x0069` | 13.56 MHz poll | `55 00 69 00 00 FF 00` |
 | `0x0072` | 125 kHz read | `55 00 72 00 02 00 01 FE 01` |
+| `0x0073` | **125 kHz write (EM4100)** | 24-byte payload, see `docs/PROTOCOL.md` |
 
 ## Credits
 
