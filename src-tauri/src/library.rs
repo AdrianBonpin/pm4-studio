@@ -26,17 +26,18 @@
 //! a memory dump, an export destination — shares no starting state with the
 //! library, so waiting for the library's lock would make a save somewhere else
 //! in the app delay it for no reason. Those writes still stage and rename
-//! atomically ([`write_file_atomically`]); they just do not queue.
+//! atomically, out of the same two steps in [`crate::atomic_file`], with no lock
+//! to queue behind.
 //!
 //! Nothing here touches the Reader, so every test runs against a real temp
 //! directory with no hardware attached.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::fs::{self, File};
-use std::io::Write;
+use std::fs;
 use std::path::{Path, PathBuf};
 
+use crate::atomic_file::{commit_staged, stage_bytes};
 use crate::identity::Identity;
 use crate::write_outcome::WriteOutcome;
 
@@ -46,12 +47,6 @@ use crate::write_outcome::WriteOutcome;
 /// change, and a schema change bumps the version (ADR 0005). Version 1 files are
 /// lifted to 2 on open rather than refused; see [`crate::library_schema`].
 pub const SCHEMA_VERSION: u32 = 2;
-
-/// Suffix of the staging file a write stages before renaming it into place.
-///
-/// One suffix for every write, because there is one writer at a time: the
-/// domain below is what stops two writes staging into the same path.
-const TEMP_SUFFIX: &str = ".tmp";
 
 /// The one serialisation domain that governs the library file.
 ///
@@ -73,9 +68,10 @@ static LIBRARY_DOMAIN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Proof that the caller holds the one serialisation domain.
 ///
-/// Only [`serialised`] mints one, and the functions that write the file demand
-/// it, so a write path that skips the lock does not compile. The guard is the
-/// token: the domain is held exactly as long as this value lives.
+/// Only [`serialised`] mints one, and every function that writes this file
+/// demands it, so a library write cannot be added to this crate without taking
+/// the lock first. The guard is the token: the domain is held exactly as long as
+/// this value lives.
 #[derive(Debug)]
 pub(crate) struct Domain {
     _guard: std::sync::MutexGuard<'static, ()>,
@@ -99,64 +95,25 @@ pub(crate) fn serialised<T>(f: impl FnOnce(&Domain) -> T) -> T {
 /// Replace a library file atomically, inside the domain: staged beside the
 /// target, flushed to disk, renamed over it, and the directory entry flushed.
 ///
-/// This is the only way a library file is replaced — a save, an import, a lift —
-/// and asking for the [`Domain`] is what makes that true, because a write path
-/// that skips the lock does not compile. A crash at any point leaves the old file
-/// or the new one, never a torn one.
-pub(crate) fn write_atomically(_domain: &Domain, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    write_file_atomically(path, bytes)
-}
-
-/// Write `bytes` to `path` atomically, outside the library's domain.
+/// This is how every write of *this* file is made — a save, an import, a lift —
+/// and the [`Domain`] it demands is what makes that so: every write function on
+/// the store takes the token, so none of them can be called without the lock, and
+/// [`serialised`] is the only thing that mints one. A library write cannot be
+/// added to this crate without an edit that takes the lock.
 ///
-/// The atomic replace is the same act for every file the app writes, so it is the
-/// same code: staged beside the target, flushed, renamed, directory entry
-/// flushed. What this does *not* take is the library's [`Domain`], because the
-/// file it writes is not the library — a memory dump, a copy of one — and a
-/// write with no starting state in common with the library has nothing to gain
-/// from waiting for a library save to finish.
-pub(crate) fn write_file_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+/// What the type checker cannot see, and what is therefore not claimed here, is
+/// the *path*. The two atomic steps this is built from live in
+/// [`crate::atomic_file`], which knows nothing about the library and exists for
+/// files the user chose; nothing type-checks that they are never composed on this
+/// file's path. What the crate does offer is the rest of that sentence: there is
+/// no crate-visible "write this path atomically" helper to reach for, so a bypass
+/// has to be written out by hand — two calls that say what they are doing — and
+/// caught by review, rather than imported by accident from a function that looks
+/// like it belongs to the library. A crash at any point leaves the old file or
+/// the new one, never a torn one.
+pub(crate) fn write_atomically(_domain: &Domain, path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let staged = stage_bytes(path, bytes)?;
     commit_staged(&staged, path)
-}
-
-/// Stage `bytes` beside `path` and flush them, creating the directory if the
-/// write is the first thing to happen there.
-fn stage_bytes(path: &Path, bytes: &[u8]) -> std::io::Result<PathBuf> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)?;
-        }
-    }
-    let staged = staging_path(path);
-    write_and_flush(&staged, bytes)?;
-    Ok(staged)
-}
-
-/// Commit a staged file: one rename, which is atomic on the same filesystem.
-fn commit_staged(staged: &Path, path: &Path) -> std::io::Result<()> {
-    fs::rename(staged, path)?;
-    if let Some(parent) = path.parent() {
-        // Flush the directory entry so the rename itself is durable.
-        if let Ok(dir) = File::open(parent) {
-            let _ = dir.sync_all();
-        }
-    }
-    Ok(())
-}
-
-fn staging_path(path: &Path) -> PathBuf {
-    let mut staged = path.to_path_buf().into_os_string();
-    staged.push(TEMP_SUFFIX);
-    PathBuf::from(staged)
-}
-
-fn write_and_flush(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut file = File::create(path)?;
-    file.write_all(bytes)?;
-    // The bytes must be on the platter before the rename, or a power cut can
-    // leave an empty library where a complete one was promised.
-    file.sync_all()
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -939,6 +896,7 @@ fn parse_library(bytes: &[u8]) -> Result<Read, LibraryProblem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::atomic_file;
 
     /// A minimal Snapshot: what the persistence tests need, nothing more.
     fn snapshot(id: &str) -> Snapshot {
@@ -1139,8 +1097,7 @@ mod tests {
             .save(&library_with(&["55 00 84 82 12"]))
             .expect("first save");
 
-        let mut stale = path.clone().into_os_string();
-        stale.push(TEMP_SUFFIX);
+        let stale = atomic_file::staging_path(&path);
         fs::write(&stale, b"{\"version\":1,\"snapshots\":[{\"id\":\"torn").expect("stale temp");
 
         assert_eq!(
@@ -1153,7 +1110,7 @@ mod tests {
         store
             .save(&library_with(&["56 00 53 C7 B3"]))
             .expect("second save");
-        assert!(!PathBuf::from(&stale).exists());
+        assert!(!stale.exists());
         assert_eq!(
             LibraryStore::new(&path).load().expect("reload").snapshots,
             vec![snapshot("56 00 53 C7 B3")]
@@ -2276,9 +2233,7 @@ mod tests {
 
         // The staging path is a directory, so the replacement cannot be staged.
         // The read is untouched: only the write fails.
-        let mut staged = path.clone().into_os_string();
-        staged.push(TEMP_SUFFIX);
-        let staged = PathBuf::from(staged);
+        let staged = atomic_file::staging_path(&path);
         fs::create_dir(&staged).expect("block the staging path");
 
         let (library, migration) = match LibraryStore::new(&path).open() {
