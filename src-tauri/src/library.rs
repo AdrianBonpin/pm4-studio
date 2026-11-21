@@ -68,10 +68,20 @@ static LIBRARY_DOMAIN: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Proof that the caller holds the one serialisation domain.
 ///
-/// Only [`serialised`] mints one, and every function that writes this file
-/// demands it, so a library write cannot be added to this crate without taking
-/// the lock first. The guard is the token: the domain is held exactly as long as
-/// this value lives.
+/// Only [`serialised`] mints one: the guard field is private to this module, so
+/// the token cannot be conjured anywhere else. Every crate function whose job is
+/// to write this file takes it — `save` and `update` open the domain themselves,
+/// and [`LibraryStore::replace`] and [`write_atomically`] demand one — so no code
+/// path the crate offers for writing the library can be called without the lock.
+///
+/// That is a statement about the crate's write API, not about paths. Types cannot
+/// see which file is being written, and [`write_atomically`] says what follows
+/// from that: [`crate::atomic_file`]'s two `pub(crate)` steps can be composed by
+/// hand on any path, this file's included, and so can `std::fs` — a module that
+/// did either would write the library with no lock held, and nothing would fail
+/// to compile. No composed writer is offered for that reason, so the step has to
+/// be written out and caught in review. The guard is the token: the domain is
+/// held exactly as long as this value lives.
 #[derive(Debug)]
 pub(crate) struct Domain {
     _guard: std::sync::MutexGuard<'static, ()>,
@@ -98,8 +108,7 @@ pub(crate) fn serialised<T>(f: impl FnOnce(&Domain) -> T) -> T {
 /// This is how every write of *this* file is made — a save, an import, a lift —
 /// and the [`Domain`] it demands is what makes that so: every write function on
 /// the store takes the token, so none of them can be called without the lock, and
-/// [`serialised`] is the only thing that mints one. A library write cannot be
-/// added to this crate without an edit that takes the lock.
+/// [`serialised`] is the only thing that mints one.
 ///
 /// What the type checker cannot see, and what is therefore not claimed here, is
 /// the *path*. The two atomic steps this is built from live in

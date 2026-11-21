@@ -12,16 +12,22 @@
 //! file behind one call, and it would have to be callable by every module that
 //! writes one. The library file is written by that same act, but it is *not* a
 //! file the user chose: a library write has to happen inside the serialisation
-//! domain, and ticket 03's guarantee is that a library write cannot be reached
-//! without the [`Domain`] token (`library::write_atomically`).
+//! domain, and ticket 03's guarantee is that every function the crate offers for
+//! writing that file takes the [`Domain`] token (`library::write_atomically`).
+//! The one whole-file writer in the crate that takes no token,
+//! `library_io::write_text`, is for a path the user picked in a save dialog, and
+//! nothing but review keeps it being handed that path rather than the library's.
 //!
-//! So the composition is deliberately absent from the crate's visible surface and
-//! the two steps are composed at the two places that write a whole file:
+//! So no composed writer is visible to the crate, and these two steps are
+//! composed at the three places that write a whole file:
 //!
 //! * `library::write_atomically` — the library file, which demands the token.
+//! * `LibraryStore::replace`, through its own private `stage` and `commit` — the
+//!   same file, under the same token, for the save path that has to read the keys
+//!   this build does not model out of the file before it writes it back.
 //! * `library_io::write_text` — one file the user picked, such as a memory dump,
 //!   which shares no starting state with the library and does not queue behind a
-//!   save.
+//!   save, so it takes no token and is the one composition outside the domain.
 //!
 //! A module that stages and commits a file is therefore saying, in code, that it
 //! is writing a whole file, and review can see which file it is. What that leaves
