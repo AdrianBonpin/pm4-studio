@@ -127,7 +127,7 @@ export function MemoryDumpPanel({ connected, read, onRead }: MemoryDumpPanelProp
       ) : (
         <div className="flex flex-col gap-4">
           <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
-            <Field label="Tag" value={dump.tag.tagLabel} />
+            <Field label="Tag type" value={String(dump.tag.tagType)} />
             <Field label="UID" value={dump.tag.uid} />
             <Field label="Read at" value={dump.tag.capturedAt} />
             <Field label="Pages" value={describeDump(dump)} />

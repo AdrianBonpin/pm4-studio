@@ -64,7 +64,7 @@ function dumpRow(firstPage: number, states: number[]): DumpRow {
 function dump(rows: DumpRow[] = [dumpRow(0, [1, 1, 1, 1])]): MemoryDump {
   return {
     status: 0,
-    tag: { uid: UID, tagType: 5, tagLabel: "NTAG215", capturedAt: CAPTURED_AT },
+    tag: { uid: UID, tagType: 5, capturedAt: CAPTURED_AT },
     pageCount: 256,
     readablePages: rows.filter((row) => row.readable).length * 4,
     rows,

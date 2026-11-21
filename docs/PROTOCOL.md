@@ -158,53 +158,63 @@ OUT  55 00 55 00 00 FF 00
 
 No LED-on-only command has been found; `0x0053` lights it but always beeps too.
 
-### `0x0069` — 13.56 MHz poll (ISO14443-A)
+### `0x0069` — 13.56 MHz poll (ISO14443-A) — VERIFIED, two families
 
 ```
 OUT  55 00 69 00 00 FF 00
-IN   55 00 69 00 13 ST 01 [UID(4)] …tail…
+IN   55 00 69 00 13 ST 01 [UID buffer (10)] LEN ATQA(2) SAK CASCADE ??
 ```
 
-- payload length `0x13` (19)
-- `ST` = validity flag: `0x01` card latched, `0x00` nothing (UID field is then
-  garbage and must be ignored)
-- UID at payload offset 2..6
+- payload length `0x13` (19), in one USB report, so nothing needs reassembling
+- `ST` = validity flag: `0x01` card latched, `0x00` nothing (everything after it
+  is then garbage and must be ignored)
 
-**Not verified — the tail offsets are a hypothesis.** Upstream reports `ATQA
-0x0004, SAK 0x08` (MIFARE Classic 1K) for one card, but we have not reproduced
-this on real HF hardware. Nothing below is backed by a capture from this
-Reader; it comes from third-party client source:
+Two captures from this Reader, one MIFARE Classic 1K and one NTAG215, establish
+the layout below. Their ATQA and SAK values agree with the published NXP
+assignments for those families, which is what makes this a measurement rather
+than a fit:
 
-| Payload offset | Meaning (hypothesis) |
-|---|---|
-| 0 | validity flag (`0x01` latched) — the byte right after the header |
-| 1 | constant `0x01`, carries nothing |
-| 2..6 | UID, 4 bytes |
-| 6..14 | unconfirmed |
-| 14..16 | ATQA, byte-swapped relative to how NXP quotes it |
-| 16 | unconfirmed |
-| 17 | SAK of the last cascade level |
-| 18 | unconfirmed |
+```
+MIFARE Classic 1K  UID 31 F3 0E 0A
+  01 01 31 F3 0E 0A 00 00 00 00 00 00 |04| 04 00 |08| 01 10 00
+NTAG215            UID 04 43 8A 01 22 09 03
+  01 01 04 43 8A 01 22 09 03 1D 00 20 |07| 44 00 |00| 02 00 00
+```
 
-> **Counter-evidence from a real capture.** A latched NTAG215 was captured — see
-> "`0x0069` payloads, for the record" below. Its payload carries a **7-byte UID
-> at offsets 2..9**, and the tail after that UID does not resemble ATQA/SAK. For
-> that Tag the hypothesis above yields no resolvable ATQA/SAK pair, so the
-> readout correctly falls back to raw bytes with the reason shown instead of
-> naming a family. This is one more reason the decoded values below stay
-> provisional until ticket 12.
+| Payload offset | Meaning | Status |
+|---|---|---|
+| 0 | validity flag (`0x01` latched) — the byte right after the header | verified, two families |
+| 1 | constant `0x01`, carries nothing | verified, two families |
+| 2..12 | UID buffer, ten bytes; only the first `LEN` are the UID | verified, two families |
+| 12 | UID length in bytes: `04`, `07` or `10` | verified, two families |
+| 13..15 | ATQA in **transmission order** (LSByte first): `04 00` = 0x0004, `44 00` = 0x0044 | verified, two families |
+| 15 | SAK of the last cascade level: `08` = MIFARE Classic 1K, `00` = NTAG21x | verified, two families |
+| 16 | cascade level count: `01` for a 4-byte UID, `02` for a 7-byte UID | consistent with both captures, **not established** |
+| 17..19 | **unexplained** | documented as unknown |
 
-The whole reply is 19 bytes in one USB report, so nothing needs reassembling.
-The app decodes this layout in `src/lib/hfDecoder.ts` and **labels every decoded
-value provisional** until a real capture confirms or corrects it. A reply of a
-different length, an ATQA/SAK pair no published table assigns, or a UID field
-that cannot hold the announced UID all fall back to raw bytes with the reason
-shown — no card type, no capacity, no UID split.
+**The UID length byte is what makes the layout self-describing.** The UID is the
+first `LEN` bytes of the ten-byte buffer, so 4-, 7- and 10-byte UIDs all decode
+and no width is ever inferred from ATQA bits. Bytes between the UID and `LEN` are
+**stale buffer residue**, not Tag data: the same Reader returned different values
+for them across captures of one Tag, and zeros when the buffer was clean. The
+NTAG215 capture's `1D 00 20` are such residue and must never be presented as part
+of the UID or as content.
 
-Earlier app code read the validity flag from payload byte 1 instead of byte 0,
-which is why it reported no tag for a latched reply. `hf_card_from_payload` in
-`src-tauri/src/reader.rs` now reads byte 0 and hands the raw payload to the
-frontend undecoded.
+Nothing else is decoded. Byte 16 is recorded because it agrees with both
+captures, but nothing is read out of it; bytes 17..18 have no meaning assigned,
+and none is invented for them.
+
+The app decodes this layout in `src/lib/hfDecoder.ts`. A reply of a different
+length, a UID length byte other than 4, 7 or 10, an ATQA/SAK pair no published
+table assigns, and an all-zero UID each fall back to raw bytes with their own
+reason shown — no card type, no capacity, no UID split.
+
+Earlier app code read a 4-byte UID at 2..6 with ATQA at 14..16 and SAK at 17.
+That table was one byte off, which is why a real MIFARE Classic 1K capture
+matched no published pair. Earlier app code also read the validity flag from
+payload byte 1 instead of byte 0, which is why it reported no tag for a latched
+reply. `hf_card_from_payload` in `src-tauri/src/reader.rs` reads byte 0 and hands
+the raw payload to the frontend undecoded.
 
 ### `0x0072` — 125 kHz read (EM4100)
 
@@ -831,24 +841,41 @@ IN   55 00 69 00 13 00 01 00 00 DB 96 00 08 90 1D 00 20 00 27 00 20 00 00 00 <ck
 That is the strongest available confirmation that `ST = 0x00` means "ignore the
 rest": the values drift between polls while no tag is present.
 
-**Tag latched.** `ST = 0x01` at payload offset 0, and the payload carries the
-**full 7-byte UID** at offsets 2..9, not just four bytes:
+**Tag latched.** `ST = 0x01` at payload offset 0, and the reply is
+self-describing: the ten-byte UID buffer at offsets 2..11 holds the UID, and
+offset 12 says how many of those bytes are real.
+
+NTAG215, 7-byte UID:
 
 ```
 IN   55 00 69 00 13 01 01 04 43 8A 01 22 09 03 1D 00 20 07 44 00 00 02 00 00 67 98
-     [0]=01 ST  [2..9]=04 43 8A 01 22 09 03  UID (7 bytes, NTAG215)
+     [0]=01 ST  [2..9]=04 43 8A 01 22 09 03 UID  [9..12]=1D 00 20 residue
+     [12]=07 UID length  [13..14]=44 00 ATQA 0x0044  [15]=00 SAK
+     [16]=02 cascade count  [17..18]=00 00 unexplained
 ```
 
-The tail after the UID (`1D 00 20 07 44 00 00 02 00 00`) does not look like ATQA
-and SAK: it contains values shaped like firmware pointers, the same shape the
-no-tag payloads contain. ATQA/SAK offsets therefore remain **unconfirmed** for
-13.56 MHz, and the app must keep treating that tail as raw bytes.
+MIFARE Classic 1K, 4-byte UID:
+
+```
+IN   55 00 69 00 13 01 01 31 F3 0E 0A 00 00 00 00 00 00 04 04 00 08 01 10 00 ..
+     [0]=01 ST  [2..6]=31 F3 0E 0A UID  [6..12]=00 00 00 00 00 00 residue
+     [12]=04 UID length  [13..14]=04 00 ATQA 0x0004  [15]=08 SAK
+     [16]=01 cascade count  [17..18]=10 00 unexplained
+```
+
+The `1D 00 20` after the NTAG215's UID and the zeros after the Classic's are
+buffer residue, not Tag data — the Classic capture shows the buffer clean, and
+repeat captures of one Tag returned different residue. `0x0044` / `0x00` is the
+NTAG21x pair and `0x0004` / `0x08` the MIFARE Classic 1K pair, both per NXP
+AN10833 Tables 3-4 and the NTAG213/215/216 data sheet Tables 24-25.
 
 ## Open problems
 
-1. **ATQA/SAK offsets** for the HF poll tail. A latched NTAG215 poll was captured
-   (above) and its tail does not resemble ATQA/SAK, so ticket 12's capture still
-   has to settle where those fields are — or that they are not transmitted.
+1. **HF poll bytes 16..18.** The offsets are now measured (see `0x0069` above),
+   but byte 16 tracks the cascade level count only by agreement with a 4-byte and
+   a 7-byte capture, and bytes 17..18 still have no assigned meaning. A capture
+   from a 10-byte-UID Tag would settle byte 16; nothing should be decoded from it
+   until one exists.
 2. **Multi-page writes — CONFIRMED 2026-11-22.** Ticket 18 marked up to 13 consecutive
    pages in one request and a separate process read every byte back, but the
    request and reply frames were not recorded, so the observation cannot be

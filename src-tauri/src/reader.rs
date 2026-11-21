@@ -812,22 +812,23 @@ mod tests {
 
     // ---- 13.56 MHz poll -------------------------------------------------
     //
-    // There are no HF captures: every one of these payloads is synthetic, built
-    // to the layout hypothesis in src/lib/hfDecoder.ts. They pin the transport
-    // boundary only — which byte is the validity flag, and that nothing else is
-    // decoded here. Whether the hypothesis matches a real Tag is ticket 12.
+    // The frontend decoder owns the reply layout; these payloads pin the
+    // transport boundary only — that payload byte 0 is the validity flag, and
+    // that nothing else is decoded here. The shape is the measured 19-byte one
+    // recorded in docs/PROTOCOL.md.
 
-    /// 19-byte poll reply: flag 0x01, constant 0x01, UID `DE AD BE EF`,
-    /// ATQA 0x0004 at 14..16, SAK 0x08 at 17.
+    /// 19-byte poll reply in the measured layout: flag 0x01, constant 0x01,
+    /// UID `DE AD BE EF` in the ten-byte buffer with a stated length of 4, ATQA
+    /// 0x0004 at 13..15, SAK 0x08 at 15, cascade count 0x01 at 16.
     #[rustfmt::skip]
     const HF_REPLY_LATCHED: [u8; 19] = [
         0x01, 0x01,
-        0xDE, 0xAD, 0xBE, 0xEF,
-        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04,
         0x04, 0x00,
-        0x00,
         0x08,
-        0x00,
+        0x01,
+        0x00, 0x00,
     ];
 
     #[test]

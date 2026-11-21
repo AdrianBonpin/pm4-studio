@@ -2529,10 +2529,11 @@ mod tests {
         assert_eq!(info.tag_type, 5);
         assert_eq!(info.uid, RECORDED_UID);
         assert_eq!(info.token, [0xFF; 8]);
-        assert_eq!(
-            info.identity("2026-11-21T09:30:00.000Z").tag_label,
-            "NTAG215"
-        );
+        // The identity a dump carries keeps the reported type as a number. A
+        // dump has no ATQA/SAK pair, so it names no family.
+        let identity = info.identity("2026-11-21T09:30:00.000Z");
+        assert_eq!(identity.tag_type, 5);
+        assert_eq!(identity.uid, RECORDED_UID);
     }
 
     #[test]

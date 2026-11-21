@@ -7,7 +7,6 @@ import { Button } from "../components/ui/Button";
 import { Field, Readout, Section } from "../components/Section";
 import { variantsNote } from "../lib/cardType";
 import {
-  HF_POLL_LAYOUT,
   decodeHfPayload,
   hexBytes,
   capacityForReading,
@@ -32,19 +31,13 @@ const REASON_LABEL: Record<HfRawOnlyReason, string> = {
   "unexpected-length": "unexpected length",
   "not-latched": "nothing latched",
   "empty-uid": "no UID in reply",
-  "unsupported-uid-width": "UID too wide",
+  "unsupported-uid-width": "unexpected UID length",
   "unknown-card-type": "unknown card type",
 };
 
-/** Half-open byte range as it reads in prose: `[2, 6]` → "2–5". */
-function span(range: readonly [number, number]): string {
-  return `${range[0]}–${range[1] - 1}`;
-}
-
 /**
  * The raw payload. Shown for every reading — decoded, raw-only or empty — because
- * the decode is provisional and the bytes are the only certain record of what the
- * Reader said.
+ * the bytes are the record of what the Reader actually said.
  */
 function RawPayload({ raw }: { raw: string }) {
   const bytes = raw === "" ? 0 : raw.split(" ").length;
@@ -65,7 +58,7 @@ function RawPayload({ raw }: { raw: string }) {
   );
 }
 
-/** One resolved reading: provisional, and labelled as such. */
+/** One resolved reading: the card type its ATQA/SAK pair identifies. */
 function DecodedReadout({
   reading,
   memory,
@@ -90,7 +83,6 @@ function DecodedReadout({
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-center gap-3">
         <Readout value={reading.uid} />
-        {reading.provisional && <Badge label="provisional" tone="warn" />}
       </div>
 
       <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
@@ -191,36 +183,6 @@ export function HfPage({ connected, onPoll, onChirp }: HfPageProps) {
       <PasswordProtection connected={connected} />
 
       <EraseNdef connected={connected} />
-
-      <Section
-        title="Why the decode is provisional"
-        hint="The reply layout has no capture behind it yet."
-      >
-        <div className="flex flex-col gap-3">
-          <div className="border-l-2 border-warn bg-warn/5 px-3 py-2">
-            <p className="text-sm text-warn">Offsets unconfirmed</p>
-            <p className="mt-0.5 max-w-prose text-xs leading-relaxed text-text-muted">
-              The poll reply layout — validity at byte {HF_POLL_LAYOUT.validity}, UID at bytes{" "}
-              {span(HF_POLL_LAYOUT.uid)}, ATQA at bytes {span(HF_POLL_LAYOUT.atqa)}, SAK at byte{" "}
-              {HF_POLL_LAYOUT.sak} — comes from third-party client source. It has never been
-              checked against a capture from this Reader. Card type, capacity and technologies
-              are therefore labelled provisional, and the raw bytes are the only certain part of
-              a reading.
-            </p>
-          </div>
-          <p className="max-w-prose text-sm leading-relaxed text-text-muted">
-            Nothing is filled in to make a reading look complete. A reply of the wrong length, an
-            ATQA/SAK pair that no published table assigns, or a UID field that cannot hold the
-            announced UID all fall back to raw bytes with the reason shown — no family, no
-            capacity, no UID split.
-          </p>
-          <p className="max-w-prose text-sm leading-relaxed text-text-muted">
-            To verify by hand, poll a tag and send{" "}
-            <span className="font-mono text-accent-muted">0x0069</span> from{" "}
-            <span className="text-text">Tools</span>: the payload there is what this page decodes.
-          </p>
-        </div>
-      </Section>
     </div>
   );
 }

@@ -15,7 +15,6 @@ function recordedDump(): MemoryDump {
     tag: {
       uid: "04 43 8A 01 22 09 03",
       tagType: 5,
-      tagLabel: "NTAG215",
       capturedAt: "2026-11-21T09:30:00.000Z",
     },
     pageCount: 256,

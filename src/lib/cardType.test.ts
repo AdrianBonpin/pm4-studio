@@ -131,6 +131,36 @@ describe("resolveCardType", () => {
     expect(resolveCardType([0xff, 0xff], 0xff)).toBeNull();
   });
 
+  describe("the pairs the two hardware captures presented", () => {
+    it("names the MIFARE Classic 1K the 0x0069 capture came from", () => {
+      // The capture carries ATQA 04 00 (transmission order) and SAK 08 at the
+      // measured offsets. AN10833 Table 3 gives 00 04 for the 4-byte-UID part
+      // and Table 4 gives SAK 08 with 1 KiB of memory.
+      const card = resolveCardType([0x04, 0x00], 0x08);
+      expect(card?.family).toBe("MIFARE Classic 1K");
+      expect(card?.capacityBytes).toBe(1024);
+    });
+
+    it("names the NTAG21x family the other capture came from, without a size", () => {
+      // ATQA 44 00 and SAK 00: AN10833 section 2.2 and the NTAG213/215/216 data
+      // sheet Tables 24-25. The pair does not say which NTAG it is.
+      const card = resolveCardType([0x44, 0x00], 0x00);
+      expect(card?.family).toBe("MIFARE Ultralight / NTAG21x");
+      expect(card?.capacityBytes).toBeNull();
+    });
+
+    it("reports no UID width, because a pair does not determine one", () => {
+      // The resolver is handed a pair, never a UID, and its answer carries no
+      // width field for a caller to read. The poll reply's own length byte is
+      // the only source of UID width in this codebase.
+      const card = resolveCardType([0x04, 0x00], 0x08);
+      expect(card).not.toBeNull();
+      for (const key of ["uid", "uidLength", "uidWidth", "serial"]) {
+        expect(key in (card as object)).toBe(false);
+      }
+    });
+  });
+
   it("returns nothing for a plausible-looking pair rather than a nearest guess", () => {
     // Classic 1K's ATQA with an ISO/IEC 14443-4 SAK: a MIFARE Plus in SL3 can
     // look like this, but the pair alone does not name a chip.
