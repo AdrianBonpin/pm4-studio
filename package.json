@@ -8,6 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "test:watch": "vitest",
+    "design:check": "bun scripts/design-check.ts",
     "preview": "vite preview",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
