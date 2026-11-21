@@ -7,6 +7,7 @@ import {
   Check,
   PencilLine,
   RotateCcw,
+  ScanLine,
   WifiOff,
   X,
 } from "lucide-react";
@@ -14,6 +15,7 @@ import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Toggle } from "./ui/Toggle";
 import { Field, Readout, Section } from "./Section";
+import { beginDeviceOperation } from "../lib/deviceLock";
 import {
   EMPTY_ENTRY,
   PART_FIELDS,
@@ -31,11 +33,15 @@ import {
   type AuthorMode,
 } from "../lib/authorIdentity";
 import { classifyDeviceFailure, describeDeviceFailure } from "../lib/readerIdentity";
+import {
+  replacementConfirmation,
+  type WritePosition,
+} from "../lib/replacement";
 import { NOTICE_TONE_CLASS, type WriteNotice } from "../lib/writeOutcome";
 import type { LibraryState } from "../hooks/useLibrary";
-import type { IdentityPreview, WriteResult } from "../types";
+import type { IdentityPreview, LfCard, WriteResult } from "../types";
 
-type Phase = "entry" | "confirm" | "writing" | "done";
+type Phase = "entry" | "confirm" | "reading" | "replacing" | "writing" | "done";
 
 /** What a Snapshot save did. A repeat is neither a fault nor a success. */
 type LibraryNote = { tone: "ok" | "muted" | "warn" | "err"; text: string };
@@ -65,6 +71,14 @@ interface AuthorIdentityProps {
  * came from, and the 24 bytes that will be sent, and it is produced before
  * anything goes to the device.
  *
+ * Between the preview and the write there is one more step, and it exists because
+ * the guard permits writing over a Tag carrying a **different** Identity: the Tag
+ * in the write position is read, and the confirmation names *that* Identity as
+ * well as the new one. A Tag that reads no Identity is said to read no Identity —
+ * a Blank and an empty field look the same — and a Tag already carrying the
+ * target is reported as refused rather than offered. `lib/replacement.ts` owns
+ * that copy, and the Clone flow uses the same module, so the two cannot drift.
+ *
  * Nothing here converts values into an Identity. That is the Rust codec's job
  * (`author_identity.rs` over `identity.rs`), reached through `lf_identity_preview`
  * and `lf_identity_preview_hex`, so the form and the decoder cannot disagree
@@ -80,8 +94,12 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
   const [mode, setMode] = useState<AuthorMode>("parts");
   const [entry, setEntry] = useState<AuthorEntry>(EMPTY_ENTRY);
   const [preview, setPreview] = useState<IdentityPreview | null>(null);
+  /** What the Tag in the write position read as, taken before the write is offered. */
+  const [position, setPosition] = useState<WritePosition | null>(null);
   /** The codec's refusal, which names the field and the range it will hold. */
   const [entryError, setEntryError] = useState<string | null>(null);
+  /** A Reader that could not be read at the confirmation step. */
+  const [readError, setReadError] = useState<string | null>(null);
   const [keepSnapshot, setKeepSnapshot] = useState(false);
   const [result, setResult] = useState<WriteResult | null>(null);
   const [notice, setNotice] = useState<WriteNotice | null>(null);
@@ -97,8 +115,10 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
   const reset = useCallback(() => {
     setPhase("entry");
     setPreview(null);
+    setPosition(null);
     setEntry(EMPTY_ENTRY);
     setEntryError(null);
+    setReadError(null);
     setKeepSnapshot(false);
     setResult(null);
     setNotice(null);
@@ -109,6 +129,7 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
   const askPreview = useCallback(async () => {
     setBusy(true);
     setEntryError(null);
+    setReadError(null);
     try {
       const next =
         mode === "hex"
@@ -121,6 +142,7 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
               card: entry.card.trim(),
             });
       setPreview(next);
+      setPosition(null);
       setPhase("confirm");
     } catch (e) {
       // The codec's refusal already names the field, what was entered and the
@@ -130,6 +152,35 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
       setBusy(false);
     }
   }, [entry, mode]);
+
+  /**
+   * Read the Tag in the write position, so the confirmation can name what the
+   * write will replace.
+   *
+   * Read-only: `lf_poll` sends the 125 kHz read command and nothing else, and the
+   * device lock is held for it so the page's poller cannot interleave. Anything
+   * other than a clean read is reported and the write is not offered — a Reader
+   * that cannot answer is not a Blank.
+   */
+  const checkPosition = useCallback(async () => {
+    setBusy(true);
+    setReadError(null);
+    setPhase("reading");
+    const release = beginDeviceOperation();
+    try {
+      const card = await invoke<LfCard | null>("lf_poll");
+      setPosition(card ? { kind: "identified", card } : { kind: "no-identity" });
+      setPhase("replacing");
+    } catch (e) {
+      const text = describeDeviceFailure(e);
+      setReadError(text);
+      if (classifyDeviceFailure(String(e)) !== "unknown") onDeviceError?.(text);
+      setPhase("confirm");
+    } finally {
+      release();
+      setBusy(false);
+    }
+  }, [onDeviceError]);
 
   /** Save the Identity the read-back proved, in the same step as the write. */
   const keepInLibrary = useCallback(
@@ -196,6 +247,8 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
   );
 
   const confirmation = preview ? authorConfirmation(preview, keepSnapshot) : null;
+  const replacement =
+    preview && position ? replacementConfirmation(preview, position) : null;
   const ready = canPreview(mode, entry);
 
   return (
@@ -319,13 +372,23 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
           </label>
 
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="primary" disabled={!connected || busy} onClick={() => void write(preview)}>
-              <PencilLine size={13} /> {confirmation.action}
+            <Button
+              variant="primary"
+              disabled={!connected || busy}
+              onClick={() => void checkPosition()}
+            >
+              <ScanLine size={13} /> {confirmation.action}
             </Button>
             <Button variant="ghost" disabled={busy} onClick={() => setPhase("entry")}>
               <X size={13} /> Change the values
             </Button>
           </div>
+          {readError && (
+            <p className="flex items-start gap-1.5 text-sm text-err">
+              <AlertTriangle size={14} className="mt-0.5 shrink-0" />
+              <span className="select-text">{readError}</span>
+            </p>
+          )}
           {!connected && (
             <p className="flex items-center gap-1.5 text-xs text-text-muted">
               <WifiOff size={12} /> Connect the Reader to write this Identity.
@@ -334,10 +397,65 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
         </div>
       )}
 
+      {phase === "reading" && (
+        <p className="text-sm text-text-muted">
+          Reading the tag on the reader, so the confirmation can name what this write would
+          replace…
+        </p>
+      )}
+
+      {phase === "replacing" && preview && replacement && (
+        <div className="flex flex-col gap-4">
+          <Readout value={replacement.identity} />
+          <div
+            className={`border-l-2 px-3 py-2 ${
+              replacement.destructive ? "border-warn bg-warn/5" : "border-border bg-surface/40"
+            }`}
+          >
+            <p
+              className={`flex items-center gap-1.5 text-sm ${
+                replacement.destructive ? "text-warn" : "text-text"
+              }`}
+            >
+              {replacement.destructive && <AlertTriangle size={14} />} {replacement.title}
+            </p>
+            <ul className="mt-2 flex flex-col gap-2">
+              {replacement.facts.map((fact) => (
+                <li key={fact.title} className="text-xs leading-relaxed text-text-muted">
+                  <span className="text-text">{fact.title}.</span> {fact.detail}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant={replacement.destructive ? "danger" : "primary"}
+              disabled={!connected || busy || replacement.alreadyCarries}
+              onClick={() => void write(preview)}
+            >
+              <PencilLine size={13} /> {replacement.action}
+            </Button>
+            <Button variant="secondary" disabled={busy} onClick={() => void checkPosition()}>
+              <ScanLine size={13} /> Read the tag again
+            </Button>
+            <Button variant="ghost" disabled={busy} onClick={() => setPhase("confirm")}>
+              <X size={13} /> Back
+            </Button>
+          </div>
+          <p className="max-w-prose text-xs leading-relaxed text-text-muted">
+            Nothing has been written yet. The Reader reads the tag again immediately before
+            writing and refuses one it cannot read, so a tag taken off the reader is refused
+            rather than written blind. That re-read does not know which Identity you consented
+            to: check that the tag described above is the one you mean to overwrite.
+          </p>
+        </div>
+      )}
+
       {phase === "writing" && (
         <p className="text-sm text-text-muted">
-          Reading the tag on the reader, then writing{" "}
-          <span className="font-mono text-text">{confirmation?.identity}</span>…
+          Writing <span className="font-mono text-text">{confirmation?.identity}</span> to the tag
+          on the reader…
         </p>
       )}
 
@@ -365,7 +483,17 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
 
           <div className="flex flex-wrap items-center gap-2">
             {preview && result?.outcome !== "verified" && (
-              <Button variant="secondary" disabled={busy} onClick={() => setPhase("confirm")}>
+              <Button
+                variant="secondary"
+                disabled={busy}
+                onClick={() => {
+                  // Another attempt means another reading: the Tag on the reader
+                  // may not be the one the last confirmation named.
+                  setPosition(null);
+                  setReadError(null);
+                  setPhase("confirm");
+                }}
+              >
                 <PencilLine size={13} /> Try this Identity again
               </Button>
             )}

@@ -9,9 +9,13 @@ import {
   HF_POLL_LAYOUT,
   decodeHfPayload,
   hexBytes,
+  ndefField,
+  ndefStatusFor,
+  uidMatchesMemory,
   type HfRawOnlyReason,
   type HfReading,
 } from "../lib/hfDecoder";
+import type { TagRecordsRead } from "../lib/tagRecords";
 import type { HfCard } from "../types";
 
 interface HfPageProps {
@@ -19,10 +23,6 @@ interface HfPageProps {
   onPoll: () => Promise<HfCard | null>;
   onChirp: () => void;
 }
-
-/** Amber is the "not confirmed" tone, the same one the shell uses for a Reader
- *  that answered but did not behave. */
-const PROVISIONAL_COLOR = "#FBBF24";
 
 /** Short label per fallback reason. The sentence under it says what happened. */
 const REASON_LABEL: Record<HfRawOnlyReason, string> = {
@@ -64,18 +64,27 @@ function RawPayload({ raw }: { raw: string }) {
 }
 
 /** One resolved reading: provisional, and labelled as such. */
-function DecodedReadout({ reading }: { reading: Extract<HfReading, { state: "decoded" }> }) {
-  const { cardType, ndef } = reading;
+function DecodedReadout({
+  reading,
+  memory,
+}: {
+  reading: Extract<HfReading, { state: "decoded" }>;
+  /** The last memory read on this page, when it describes this Tag. */
+  memory: TagRecordsRead | null;
+}) {
+  const { cardType } = reading;
   const capacity =
     cardType.capacityBytes === null ? "not determined" : `${cardType.capacityBytes} bytes`;
+  // The poll cannot say whether the Tag is NDEF formatted; a memory read of the
+  // same Tag can. Without one the row is omitted rather than greyed out.
+  const ndef = ndefStatusFor(memory?.ndef.outcome ?? null);
+  const ndefRow = ndefField(ndef);
 
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-wrap items-center gap-3">
         <Readout value={reading.uid} />
-        {reading.provisional && (
-          <Badge label="provisional" color={PROVISIONAL_COLOR} />
-        )}
+        {reading.provisional && <Badge label="provisional" tone="warn" />}
       </div>
 
       <div className="grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
@@ -95,7 +104,7 @@ function DecodedReadout({ reading }: { reading: Extract<HfReading, { state: "dec
           value={cardType.nfcForumTagType === null ? "none" : `Type ${cardType.nfcForumTagType}`}
           tone={cardType.nfcForumTagType === null ? "muted" : "default"}
         />
-        <Field label="NDEF formatted" value="not determinable" tone="muted" />
+        {ndefRow && <Field label={ndefRow.label} value={ndefRow.value} />}
       </div>
 
       {cardType.variants.length > 1 && (
@@ -117,7 +126,7 @@ function RawOnlyReadout({ reading }: { reading: Extract<HfReading, { state: "raw
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-mono text-sm text-text-muted">Not decoded</span>
-        <Badge label={REASON_LABEL[reading.reason]} color={PROVISIONAL_COLOR} />
+        <Badge label={REASON_LABEL[reading.reason]} tone="warn" />
       </div>
       <p className="max-w-prose text-sm leading-relaxed text-text-muted">{reading.detail}</p>
       <RawPayload raw={reading.raw} />
@@ -129,6 +138,9 @@ export function HfPage({ connected, onPoll, onChirp }: HfPageProps) {
   const [busy, setBusy] = useState(false);
   const [reading, setReading] = useState<HfReading | null>(null);
   const [polled, setPolled] = useState(false);
+  /** The last memory read on this page. Owned here because the reading above
+   *  uses it: a memory read of the same Tag is what settles its NDEF status. */
+  const [memory, setMemory] = useState<TagRecordsRead | null>(null);
 
   const poll = async () => {
     setBusy(true);
@@ -140,6 +152,13 @@ export function HfPage({ connected, onPoll, onChirp }: HfPageProps) {
     if (card) onChirp();
     setBusy(false);
   };
+
+  // A memory read describes one Tag. Applying it to a reading of a different Tag
+  // would put one tag's formatting on another tag's row, so it is matched by UID
+  // and dropped when it does not describe the reading above it.
+  const readingUid = reading?.state === "decoded" ? reading.uid : "";
+  const memoryForReading =
+    memory && uidMatchesMemory(readingUid, memory.dump.tag.uid) ? memory : null;
 
   return (
     <div className="flex flex-col gap-8">
@@ -155,13 +174,13 @@ export function HfPage({ connected, onPoll, onChirp }: HfPageProps) {
         {reading === null ? (
           <Readout placeholder={polled ? "No tag in the field." : "No tag polled yet."} />
         ) : reading.state === "decoded" ? (
-          <DecodedReadout reading={reading} />
+          <DecodedReadout reading={reading} memory={memoryForReading} />
         ) : (
           <RawOnlyReadout reading={reading} />
         )}
       </Section>
 
-      <MemoryDumpPanel connected={connected} />
+      <MemoryDumpPanel connected={connected} read={memory} onRead={setMemory} />
 
       <PasswordProtection connected={connected} />
 

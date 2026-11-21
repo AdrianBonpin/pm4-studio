@@ -9,9 +9,23 @@ import {
   pageRange,
   type MemoryDump,
 } from "../lib/memoryDump";
+import type { TagRecordsRead } from "../lib/tagRecords";
 
 interface MemoryDumpPanelProps {
   connected: boolean;
+  /**
+   * The last completed read on this page, or null. Owned by the page rather than
+   * by this panel because the reading above it uses what the read settled about
+   * NDEF formatting — one read, one set of facts, two views.
+   */
+  read: TagRecordsRead | null;
+  /**
+   * A completed read, or `null` when a read failed. `null` deliberately throws
+   * the previous read away: a stale dump under this tag's heading, and a stale
+   * NDEF status on the reading above, would both be claims about a tag nobody
+   * just read.
+   */
+  onRead: (read: TagRecordsRead | null) => void;
 }
 
 /**
@@ -24,26 +38,33 @@ interface MemoryDumpPanelProps {
  *
  * Read-only: the Reader is asked for info and memory only. A tag that does not
  * answer leaves an error in place of a dump and the buttons usable again.
+ *
+ * The command it sends is `ntag_records_read`, which returns the same dump plus
+ * what the Tag's Type 2 structure turned out to be. One exchange therefore
+ * answers two questions — "what are these bytes" and "is this Tag NDEF
+ * formatted" — and the reading above this panel can show the second without a
+ * second read.
  */
-export function MemoryDumpPanel({ connected }: MemoryDumpPanelProps) {
+export function MemoryDumpPanel({ connected, read, onRead }: MemoryDumpPanelProps) {
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [dump, setDump] = useState<MemoryDump | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [savedTo, setSavedTo] = useState<string | null>(null);
+  const dump: MemoryDump | null = read?.dump ?? null;
 
-  const read = async () => {
+  const readMemory = async () => {
     setBusy(true);
     setError(null);
     setSavedTo(null);
     try {
-      const readDump = await invoke<MemoryDump>("ntag_memory_read", {
-        capturedAt: new Date().toISOString(),
-      });
-      setDump(readDump);
+      onRead(
+        await invoke<TagRecordsRead>("ntag_records_read", {
+          capturedAt: new Date().toISOString(),
+        }),
+      );
     } catch (e) {
       // No dump is better than the last tag's dump under this tag's heading.
-      setDump(null);
+      onRead(null);
       setError(String(e));
     } finally {
       setBusy(false);
@@ -74,7 +95,7 @@ export function MemoryDumpPanel({ connected }: MemoryDumpPanelProps) {
           <Button
             variant="secondary"
             disabled={!connected || busy}
-            onClick={() => void read()}
+            onClick={() => void readMemory()}
           >
             {busy ? "Reading…" : "Read memory"}
           </Button>

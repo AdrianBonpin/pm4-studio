@@ -11,6 +11,7 @@ import {
   type NdefErasePreview,
 } from "./eraseTag";
 import { draftMessageHex, type ExistingNdef, type NdefTagView } from "./tagWrite";
+import { PAGES } from "./pageCopy";
 import type { EraseResult } from "../types";
 
 /**
@@ -186,6 +187,23 @@ describe("the confirmation", () => {
     expect(confirmation.notPasswordRemoval).toBe(ERASE_IS_NOT_PASSWORD_REMOVAL);
     expect(confirmation.notPasswordRemoval).toContain("does not remove password protection");
     expect(confirmation.notPasswordRemoval).toContain("unrecoverable");
+  });
+
+  it("names the tag as a tag, never with a word the glossary retired", () => {
+    const confirmation = eraseConfirmation(preview());
+    const copy = [
+      confirmation.title,
+      confirmation.sentence,
+      confirmation.where,
+      ...confirmation.facts.map((fact) => `${fact.title} ${fact.detail}`),
+      confirmation.notReadOnly,
+      confirmation.notPasswordRemoval,
+    ].join(" ");
+    expect(copy).not.toMatch(/badge|fob/i);
+    // The shell's page copy is held to the same words, in one place with this.
+    for (const page of PAGES) {
+      expect(`${page.label} ${page.title} ${page.subtitle}`).not.toMatch(/badge|fob/i);
+    }
   });
 
   it("is built from what was read, so it cannot describe an unread tag", () => {
