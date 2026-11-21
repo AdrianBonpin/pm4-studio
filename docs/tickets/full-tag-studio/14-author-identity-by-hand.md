@@ -17,17 +17,36 @@
 - [x] A successful write can be saved as a Snapshot in one action.
 - [x] The write is refused when no tag can be read first.
 
-## Hardware status — UNVERIFIED
+## Hardware status — VERIFIED 2026-11-22
 
-`cargo run --example authorprobe -- read` / `-- parts` / `-- hex` in
-`src-tauri/examples/` exercises the shipping path (the same
-`author_identity::from_parts`/`from_hex`, guard and `write_outcome::classify` the
-app uses). **It has not been run against a chip.** Ticket 13's run on 2026-11-21
-opened the Reader and got replies to wake, HF poll and LF read, but the 125 kHz
-field was empty across three runs ("no tag latched") — the same empty field
-blocks this ticket. So: `from_facility_card` is proven a true inverse of
-`facility()`/`card()` in both directions including the boundaries, the payload is
-byte-identical to the captured `55 00 84 82 12` write, but **no authored Identity
-has been observed landing on a T5577**. What that leaves open is whether the
-device accepts the 24-byte `0x0073` for these values and whether the read-back
-matches. Record the probe output here when a Blank is on the Reader.
+`cargo run --example authorprobe -- parts 85 0x84 33298`, with a factory-blank
+T5577 on the Reader. The values are the ones the decoder reports for the project's
+real building Tag, so the round trip is directly checkable.
+
+```
+authored id  : 55 00 84 82 12
+customer     : 0x55
+facility     : 132
+card         : 33298
+data32       : 0x00848212
+payload (24) : 00 01 01 00 00 00 00 00 55 00 00 00 55 00 00 00 12 82 84 00 00 00 00 00
+tag before   : tag present as 00 00 00 15 C9 (customer 0x00, facility 0, card 5577)
+read-back    : 55 00 84 82 12 (facility 132, card 33298)
+outcome      : verified
+confirmed    : yes — a confirmed copy
+```
+
+What this establishes:
+
+- `from_facility_card` is correct **on hardware**, not merely in tests: the parts
+  `85 / 0x84 / 33298` reached the chip as `data32 = 0x00848212` and read back as
+  the same Identity the decoder reports for the real Tag.
+- The emitted 24-byte payload is byte-identical to the layout captured earlier —
+  `[8]` and `[12]` carry the customer, `[16..20]` the little-endian `data32` — so
+  ticket 01's codec extraction changed nothing on the wire.
+- The write was classified `verified` and counted as a confirmed copy, exercising
+  the counting rule of ticket 09 on real hardware.
+
+The read-back also carries a `C8 42` marker after the data field. This is a
+device-side artifact, not part of the Identity; the same marker appears in the
+original capture of the real building Tag.

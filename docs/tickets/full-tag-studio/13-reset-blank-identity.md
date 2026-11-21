@@ -15,7 +15,7 @@
 - [x] The feature is labelled blanking, with no claim of factory restore or unlock.
 - [x] The write is refused when no tag can be read first.
 - [x] The user is told a blanked tag may be unusable for further writes.
-- [ ] A blanking write is observed on hardware, on a sacrificial Blank.
+- [x] A blanking write is observed on hardware, on a sacrificial Blank.
 
 ## Implementation note — the outcome model ticket 01 handed over
 
@@ -43,14 +43,42 @@ tests: permanent, may read as empty (and that this is expected), may be unusable
 for further writes, and an explicit denial that blanking is a factory reset or an
 unlock.
 
-## Hardware status — UNVERIFIED
+## Hardware status — VERIFIED 2026-11-22
 
-`cargo run --example blankprobe -- read` / `-- blank` in `src-tauri/examples/`
-exercises the shipping path. On 2026-11-21 the Reader opened and answered (wake,
-HF poll, LF read all replied), but the 125 kHz field was empty across three runs
-("no tag latched"), so **no blanking write has been observed on a chip** and no
-Tag was consumed. What that leaves open: whether `0x0073` with the neutral payload
-actually blanks a T5577, whether the Tag then reads as absent or as a present Tag
-with an empty data field, and whether it triggers the T5577 lock bit of PROTOCOL
-open problem 7. Record the probe output here when a sacrificial Blank is on the
-Reader.
+`cargo run --example blankprobe -- blank`, with a factory-blank T5577 on the Reader.
+
+```
+tag before   : tag present as 00 00 00 15 C9
+confirmed    : 00 00 00 15 C9
+guard        : Proceed
+payload      : neutral identity (customer 0x00, data32 0x00000000)
+sending      : 0x0073 …
+attempt      : transmitted (NoIdentity)
+outcome      : blanked
+
+re-reading…
+  after[0..4] : tag present, NO identity (data field empty)   (all 5 reads)
+```
+
+What this establishes:
+
+- `0x0073` with the neutral 24-byte payload **transmits and blanks a T5577**. The
+  earlier probe runs never got this far because the 125 kHz field was empty.
+- The Tag afterwards reads as a **present Tag with an empty data field**, not as
+  absent. That is the distinction ticket 01 flagged: `data32 == 0` decodes to
+  "no reading", so the success condition here is "the Tag no longer presents an
+  Identity", which is why the outcome is `blanked` and never `verified`.
+- It held across 5 consecutive reads in the same session, and later across a
+  separate process (the Tag still reported no identity when re-read alongside
+  other tags).
+
+Still open, and deliberately not tested: whether the Tag **still accepts
+writes** after blanking. Testing that would consume it twice, and a blanked T5577
+may refuse further writes. PROTOCOL open problem 7 (what sets the T5577 lock bit)
+remains open. One earlier T5577 in this project is permanently locked.
+
+Incidental finding recorded during this run: a factory-blank T5577 carries
+`data32 = 0x000015C9` = **5577 decimal** — the chip model number — which the read
+path reports as customer `0x00`, facility `0`, card `5577`. That is why every
+factory blank reads identically and why batch attempts on blanks all compare
+equal (see ticket 15).

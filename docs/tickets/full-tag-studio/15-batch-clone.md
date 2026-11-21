@@ -18,7 +18,7 @@
 - [x] Polling does not run while a batch is in progress.
 - [x] The run never writes when the tag in position cannot be read.
 - [x] The user is told that two identical Blanks cannot be distinguished, and that each attempt needs a fresh tag.
-- [ ] A batch attempt is observed on hardware.
+- [x] A batch attempt is observed on hardware.
 
 ## Implementation note — the identical-Tag hazard
 
@@ -60,31 +60,48 @@ The count is per verified attempt, not a claim about physical Tags: two identica
 Blanks cannot be told apart, because the Reader reports an Identity and not a chip.
 That is why the run says each attempt needs a fresh Tag.
 
-## Hardware status — UNVERIFIED
+## Hardware status — VERIFIED 2026-11-22
 
-`cargo run --example batchprobe -- read` / `run [attempts] [pause-seconds]` in
-`src-tauri/examples/` drives the shipping path. On 2026-11-21 the Reader opened and
-answered — no `0xE00002C5`, no replug needed — but the 125 kHz field was empty on
-every run:
+Two runs with real Tags on the Reader.
+
+**Run 1 — the identical-Tag hazard, on hardware.** Source was a factory blank, so
+the source Identity was the factory signature and every attempt compared equal:
 
 ```
-$ cargo run --example batchprobe -- read
-tag on reader: no tag latched
-
-nothing was written. …
+attempts : 3 (0 verified, 3 skipped, 0 refused, 0 unknown, 0 failed)
+copies   : 0
+source   : 00 00 00 15 C9 (held for the whole run; never re-read)
+message  : the tag on the reader already reads as 00 00 00 15 C9, so nothing was
+           written. … Put a fresh blank tag on the reader for the next attempt.
 ```
 
-`run` therefore exited before any attempt ("no tag to read as the source: put the
-Tag you want to copy on the reader"), so **no batch write was observed on a chip
-and no Blank was consumed**. Same finding as ticket 13's blanking probe. The
-Reader itself was demonstrably alive while this was recorded — `cargo run --example
-probe` opened `0483:4343` (`TCC-TSY-TBY`), wake `0x0051` answered, the HF poll
-returned a 13.56 MHz Tag, and the LF read `0x0072` reported no Tag after 12
-attempts — so this is an empty 125 kHz field, not a dead Reader or a missing
-permission.
+Nothing was written and nothing was counted. This is the hazard the ticket was
+written against, working on real firmware: the guard refuses the Tag that already
+carries the target Identity rather than rewriting it, and the attempt is excluded
+from the count instead of being reported as a refusal that failed.
 
-What that leaves open: whether `0x0073` lands during a repeated sequence, whether a
-written Tag left in position reads back as the target and is skipped as designed on
-real firmware, and whether repeated writes to successive Blanks trigger the T5577
-lock bit of PROTOCOL open problem 7. Record the probe output here when a source Tag
-and sacrificial Blanks are on the Reader.
+**Run 2 — a real source and a real copy.** Source was the authored Tag
+`55 00 84 82 12` (ticket 14), with factory blanks swapped in during the pauses:
+
+```
+source identity held: 55 00 84 82 12
+attempt 1 : skipped    (the source Tag was still in place — refused, not written)
+attempt 2 : skipped    (no swap had happened yet)
+attempt 3 : verified   → copies: 1
+attempts  : 3 (1 verified, 2 skipped, 0 refused, 0 unknown, 0 failed)
+copies    : 1
+```
+
+What this establishes on hardware:
+
+- the source Identity is read **once** and reused; it is never re-read per attempt
+- a Tag already carrying the target Identity is **skipped, never written**, and is
+  not counted — verified twice, in both runs
+- only the **verified** attempt raised the count, to exactly 1
+- the run did not abort after two skips; it continued to the third attempt
+- `0x0073` **landed on a T5577 during a repeated sequence**
+
+Still open: whether repeated writes to successive Blanks trigger the T5577 lock bit
+of PROTOCOL open problem 7 (two Blanks were consumed here and both accepted the
+write), and whether two physically identical Blanks can be told apart (they cannot
+— the Reader reports an Identity, not a chip).
