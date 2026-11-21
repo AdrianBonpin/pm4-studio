@@ -64,16 +64,24 @@ That is why the run says each attempt needs a fresh Tag.
 
 `cargo run --example batchprobe -- read` / `run [attempts] [pause-seconds]` in
 `src-tauri/examples/` drives the shipping path. On 2026-11-21 the Reader opened and
-answered — no `0xE00002C5`, no replug needed — but the 125 kHz field was empty
-across three runs:
+answered — no `0xE00002C5`, no replug needed — but the 125 kHz field was empty on
+every run:
 
 ```
+$ cargo run --example batchprobe -- read
 tag on reader: no tag latched
+
+nothing was written. …
 ```
 
 `run` therefore exited before any attempt ("no tag to read as the source: put the
 Tag you want to copy on the reader"), so **no batch write was observed on a chip
-and no Blank was consumed**. Same finding as ticket 13's blanking probe.
+and no Blank was consumed**. Same finding as ticket 13's blanking probe. The
+Reader itself was demonstrably alive while this was recorded — `cargo run --example
+probe` opened `0483:4343` (`TCC-TSY-TBY`), wake `0x0051` answered, the HF poll
+returned a 13.56 MHz Tag, and the LF read `0x0072` reported no Tag after 12
+attempts — so this is an empty 125 kHz field, not a dead Reader or a missing
+permission.
 
 What that leaves open: whether `0x0073` lands during a repeated sequence, whether a
 written Tag left in position reads back as the target and is skipped as designed on
