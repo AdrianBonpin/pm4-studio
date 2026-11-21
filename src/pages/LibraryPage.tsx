@@ -4,6 +4,7 @@ import { AlertTriangle, Check, Copy, Pencil, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Section } from "../components/Section";
+import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
 import { describeDeviceFailure } from "../lib/readerIdentity";
 import {
   EMPTY_LIBRARY_DETAIL,
@@ -308,27 +309,14 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
                 >
                   <div className="min-w-0 flex-1">
                     {confirming ? (
-                      <div className="flex flex-col gap-2">
-                        <p className="text-sm text-text">
-                          Delete <span className="text-text">{name}</span> permanently?
-                        </p>
-                        <p className="max-w-prose text-xs leading-relaxed text-text-muted">
-                          The Snapshot is removed from the library file and no copy is kept. The
-                          Tag itself is not touched.
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Button
-                            autoFocus
-                            variant="danger"
-                            onClick={() => deleteSnapshot(snapshot)}
-                          >
-                            Delete permanently
-                          </Button>
-                          <Button variant="ghost" onClick={() => setConfirmingId(null)}>
-                            Keep
-                          </Button>
-                        </div>
-                      </div>
+                      <RowDeleteConfirmation
+                        name={name}
+                        onConfirm={() => deleteSnapshot(snapshot)}
+                        onDismiss={() => setConfirmingId(null)}
+                      >
+                        The Snapshot is removed from the library file and no copy is kept. The Tag
+                        itself is not touched.
+                      </RowDeleteConfirmation>
                     ) : rowEditing && editing ? (
                       <div className="flex flex-col gap-2">
                         <input

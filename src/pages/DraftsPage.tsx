@@ -4,6 +4,7 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Section } from "../components/Section";
 import { LoadTagIntoDraft } from "../components/LoadTagIntoDraft";
+import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
 import { WriteDraftToTag } from "../components/WriteDraftToTag";
 import { DraftClosePrompt } from "../components/DraftClosePrompt";
 import { useCloseGuard } from "../hooks/useCloseGuard";
@@ -184,24 +185,14 @@ export function DraftsPage({ connected }: { connected: boolean }) {
                 >
                   <div className="min-w-0 flex-1">
                     {confirming ? (
-                      <div className="flex flex-col gap-2">
-                        <p className="text-sm text-text">
-                          Delete <span className="text-text">{name}</span> permanently?
-                        </p>
-                        <p className="max-w-prose text-xs leading-relaxed text-text-muted">
-                          A Draft was written here and never lived on a Tag, so there is no copy
-                          to read back. This removes it from the library file and no copy is
-                          kept.
-                        </p>
-                        <div className="flex items-center gap-2">
-                          <Button autoFocus variant="danger" onClick={() => deleteDraft(draft)}>
-                            Delete permanently
-                          </Button>
-                          <Button variant="ghost" onClick={() => setConfirmingId(null)}>
-                            Keep
-                          </Button>
-                        </div>
-                      </div>
+                      <RowDeleteConfirmation
+                        name={name}
+                        onConfirm={() => deleteDraft(draft)}
+                        onDismiss={() => setConfirmingId(null)}
+                      >
+                        A Draft was written here and never lived on a Tag, so there is no copy to
+                        read back. This removes it from the library file and no copy is kept.
+                      </RowDeleteConfirmation>
                     ) : renaming ? (
                       <input
                         autoFocus
