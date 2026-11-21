@@ -58,6 +58,9 @@ export function DraftsPage({ connected }: { connected: boolean }) {
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState("");
   const [newKind, setNewKind] = useState<RecordKind>("text");
+  // A Draft was authored here and never lived on a Tag, so nothing can read it
+  // back: deleting one is permanent, and it takes a second, deliberate click.
+  const [confirmingId, setConfirmingId] = useState<string | null>(null);
 
   const list = drafts.drafts;
   const selected = list.find((draft) => draft.id === selectedId) ?? null;
@@ -75,6 +78,12 @@ export function DraftsPage({ connected }: { connected: boolean }) {
     setRenamingId(null);
     if (name.trim() === draft.name.trim()) return;
     drafts.rename(draft.id, name);
+  };
+
+  const deleteDraft = (draft: Draft) => {
+    setConfirmingId(null);
+    if (selectedId === draft.id) setSelectedId(null);
+    void drafts.remove(draft.id);
   };
 
   return (
@@ -149,7 +158,9 @@ export function DraftsPage({ connected }: { connected: boolean }) {
           <ul className="mt-4 flex flex-col divide-y divide-border">
             {list.map((draft) => {
               const renaming = renamingId === draft.id;
+              const confirming = confirmingId === draft.id;
               const active = selected?.id === draft.id;
+              const name = draftTitle(draft);
               return (
                 <li
                   key={draft.id}
@@ -158,7 +169,26 @@ export function DraftsPage({ connected }: { connected: boolean }) {
                   }`}
                 >
                   <div className="min-w-0 flex-1">
-                    {renaming ? (
+                    {confirming ? (
+                      <div className="flex flex-col gap-2">
+                        <p className="text-sm text-text">
+                          Delete <span className="text-text">{name}</span> permanently?
+                        </p>
+                        <p className="max-w-prose text-xs leading-relaxed text-text-muted">
+                          A Draft was written here and never lived on a Tag, so there is no copy
+                          to read back. This removes it from the library file and no copy is
+                          kept.
+                        </p>
+                        <div className="flex items-center gap-2">
+                          <Button autoFocus variant="danger" onClick={() => deleteDraft(draft)}>
+                            Delete permanently
+                          </Button>
+                          <Button variant="ghost" onClick={() => setConfirmingId(null)}>
+                            Keep
+                          </Button>
+                        </div>
+                      </div>
+                    ) : renaming ? (
                       <input
                         autoFocus
                         value={nameDraft}
@@ -177,6 +207,7 @@ export function DraftsPage({ connected }: { connected: boolean }) {
                       <button
                         onClick={() => {
                           if (locked) return;
+                          setConfirmingId(null);
                           setRenamingId(draft.id);
                           setNameDraft(draft.name);
                         }}
@@ -190,29 +221,31 @@ export function DraftsPage({ connected }: { connected: boolean }) {
                     <p className="mt-0.5 text-[11px] text-text-muted">{draftDetail(draft)}</p>
                   </div>
 
-                  <div className="flex shrink-0 items-center gap-1">
-                    <Button
-                      variant={active ? "primary" : "secondary"}
-                      onClick={() => {
-                        setRenamingId(null);
-                        setSelectedId(active ? null : draft.id);
-                      }}
-                    >
-                      {active ? "Editing" : "Edit"}
-                    </Button>
-                    <button
-                      aria-label={`Delete ${draftTitle(draft)}`}
-                      title={locked ? "The library file cannot be written to" : "Delete"}
-                      disabled={locked}
-                      onClick={() => {
-                        if (active) setSelectedId(null);
-                        void drafts.remove(draft.id);
-                      }}
-                      className="cursor-pointer rounded-md p-1.5 text-text-muted transition-colors hover:bg-surface-raised hover:text-err disabled:cursor-not-allowed disabled:opacity-40"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  </div>
+                  {!confirming && (
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Button
+                        variant={active ? "primary" : "secondary"}
+                        onClick={() => {
+                          setRenamingId(null);
+                          setSelectedId(active ? null : draft.id);
+                        }}
+                      >
+                        {active ? "Editing" : "Edit"}
+                      </Button>
+                      <button
+                        aria-label={`Delete ${name}`}
+                        title={locked ? "The library file cannot be written to" : "Delete"}
+                        disabled={locked}
+                        onClick={() => {
+                          setRenamingId(null);
+                          setConfirmingId(draft.id);
+                        }}
+                        className="cursor-pointer rounded-md p-1.5 text-text-muted transition-colors hover:bg-surface-raised hover:text-err disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  )}
                 </li>
               );
             })}

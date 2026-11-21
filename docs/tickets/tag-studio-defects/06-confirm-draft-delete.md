@@ -15,12 +15,26 @@ that exists but can be bypassed. Misses whether the store actually persisted the
 removal — the library store seams own that.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/9
-**Status:** ready
+**Status:** done
 
-- [ ] Clicking the trash control on a Draft does not remove it.
-- [ ] The confirmation names the Draft being removed.
-- [ ] Dismissing leaves the Draft present and unchanged.
-- [ ] Confirming removes that Draft and leaves every other Draft untouched.
-- [ ] Removing the confirmation from the control fails a test.
-- [ ] The confirming control reads as destructive, the same way every other
+- [x] Clicking the trash control on a Draft does not remove it.
+- [x] The confirmation names the Draft being removed.
+- [x] Dismissing leaves the Draft present and unchanged.
+- [x] Confirming removes that Draft and leaves every other Draft untouched.
+- [x] Removing the confirmation from the control fails a test.
+- [x] The confirming control reads as destructive, the same way every other
       irreversible action in the app does.
+
+## Outcome
+
+The Drafts row's trash control now opens an in-row confirmation, the shape the
+Snapshot delete in `LibraryPage.tsx` already had: the Draft is named, the sentence
+says why nothing can read it back, the dismissing control is `Keep`, and the
+confirming control is the `danger` variant reading `Delete permanently`. The removal
+happens from that button and from nowhere else.
+
+`src/pages/DraftsPage.test.tsx` is now the pair of proofs D5 asks for, plus the
+narrowness this ticket adds: dismissing removes nothing and leaves both Drafts
+listed, confirming asks the store for that Draft's id, and confirming one Draft from
+a list of three leaves the other two in place. Gate 2 now carries both halves, which
+is what makes D5's count of eight true — the other seven were proven by ticket 01.
