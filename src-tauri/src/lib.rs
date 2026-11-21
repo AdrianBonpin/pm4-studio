@@ -3,6 +3,7 @@
 pub mod identity;
 pub mod library;
 pub mod reader;
+pub mod stream;
 pub mod write_guard;
 #[cfg(test)]
 mod test_frames;

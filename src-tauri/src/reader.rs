@@ -16,15 +16,23 @@
 //!   [5..]    payload
 //!   [..+2]   checksum        (x ^ 0xFF, x) where x = XOR of payload bytes
 //!
+//! 64 bytes is the *report* size, not the frame size. A frame longer than 64
+//! bytes is a continuous byte stream split across reports, with no header or
+//! padding per report; `stream::ReportStream` reassembles it. See
+//! docs/PROTOCOL.md, "Multi-report frames".
+//!
 //! The checksum quirk: the vendor firmware truncates the XOR loop to the low
 //! byte of the payload length, so for payloads >= 256 bytes not every byte is
-//! covered. For every command this app sends the payload is far below that, so
-//! a plain XOR is exact.
+//! covered. That truncation is the protocol, not a bug: a 1328-byte NTAG write
+//! checksummed over its whole payload is ignored, while the `len & 0xFF`
+//! checksum is accepted. `xor_checksum` and `stream::encode_frame` reproduce it.
 
 use crate::identity::Identity;
+use crate::stream::{split_reports, ReportStream};
 use crate::write_guard;
 use hidapi::{HidApi, HidDevice};
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 
 pub const VID: u16 = 0x0483;
 pub const PID: u16 = 0x4343;
@@ -88,8 +96,13 @@ pub struct Frame {
     pub checksum_ok: bool,
 }
 
-/// Parse one frame out of a raw report. Returns `None` if the report is not a
-/// frame we understand.
+/// Parse one frame out of a single report's bytes.
+///
+/// This is the single-report shape parser; it returns `None` if the report is
+/// not a frame we understand. A frame that spans reports must go through
+/// [`crate::stream::ReportStream`], which is the only thing that knows a length
+/// may exceed one report. The `len` clamp here is best-effort and cannot be
+/// reported as a truncation, so it is never the right tool for a live stream.
 pub fn parse_frame(raw: &[u8]) -> Option<Frame> {
     if raw.len() < 7 || raw[0] != MAGIC {
         return None;
@@ -223,6 +236,9 @@ pub fn hf_card_from_payload(payload: &[u8]) -> Option<HfCard> {
 pub struct Reader {
     dev: HidDevice,
     pub info: DeviceInfo,
+    /// Reports accumulate here across reads, because a frame can span several
+    /// of them. See `stream::ReportStream`.
+    rx: RefCell<ReportStream>,
 }
 
 impl Reader {
@@ -248,30 +264,71 @@ impl Reader {
                 .flatten()
                 .unwrap_or_default(),
         };
-        Ok(Reader { dev, info })
+        Ok(Reader {
+            dev,
+            info,
+            rx: RefCell::new(ReportStream::new()),
+        })
     }
 
     /// Write one 64-byte frame. hidapi on macOS expects the report id as the
     /// first byte, which is 0 for this unnumbered report device.
     fn write_frame(&self, frame: &[u8; REPORT_LEN]) -> Result<(), String> {
-        let mut buf = [0u8; REPORT_LEN + 1];
-        buf[1..].copy_from_slice(frame);
-        match self.dev.write(&buf) {
-            Ok(_) => Ok(()),
-            Err(e) => Err(format!("USB write failed: {e}")),
-        }
+        self.write_frame_bytes(frame)
     }
 
+    /// Write a frame of any length as consecutive 64-byte reports, zero-padding
+    /// only the last one.
+    ///
+    /// A frame is a continuous byte stream in both directions: the 1328-byte
+    /// NTAG write is one 1335-byte frame sent as 21 reports, and the firmware
+    /// gives up if they are more than ~64 ms apart, so they go back to back.
+    /// Build the bytes with [`crate::stream::encode_frame`].
+    fn write_frame_bytes(&self, frame: &[u8]) -> Result<(), String> {
+        for report in split_reports(frame) {
+            // hidapi on macOS wants the report id as byte 0, which is 0 for
+            // this unnumbered report device.
+            let mut buf = [0u8; REPORT_LEN + 1];
+            buf[1..].copy_from_slice(&report);
+            self.dev
+                .write(&buf)
+                .map_err(|e| format!("USB write failed: {e}"))?;
+        }
+        Ok(())
+    }
+
+    /// Read one whole frame. Reports are accumulated until a frame is complete,
+    /// so a response that spans several reports arrives as one frame instead of
+    /// being truncated to its first 64 bytes.
+    ///
+    /// A timeout with a frame still incomplete is an error: a declared length
+    /// longer than the bytes that arrived must be reported, never handed on as a
+    /// short payload.
     pub fn read_one(&self, timeout_ms: i32) -> Result<Option<Frame>, String> {
+        let mut rx = self.rx.borrow_mut();
+        if let Some(frame) = rx.next_frame() {
+            return Ok(Some(frame));
+        }
+
         let mut buf = [0u8; REPORT_LEN];
         let n = self
             .dev
             .read_timeout(&mut buf, timeout_ms)
             .map_err(|e| format!("USB read failed: {e}"))?;
         if n == 0 {
-            return Ok(None);
+            // A poll (`timeout_ms == 0`) asks what is here now; an incomplete
+            // frame is not a failure, it is just not finished.
+            return if timeout_ms == 0 {
+                Ok(None)
+            } else {
+                match rx.take_error() {
+                    Some(e) => Err(e.to_string()),
+                    None => Ok(None),
+                }
+            };
         }
-        Ok(parse_frame(&buf[..n]))
+        rx.push(&buf[..n]);
+        Ok(rx.next_frame())
     }
 
     /// Send a command and wait for the first reply matching `expect` (or any
@@ -422,11 +479,19 @@ impl Reader {
     /// Discard any queued input frames. The LF read emits two responses per
     /// poll, so a leftover frame otherwise gets misread as the reply to the
     /// next command.
+    ///
+    /// Partial frames go too: a half frame left behind would otherwise be
+    /// spliced onto the next reply, and it was abandoned by its sender anyway.
     pub fn drain(&self) -> usize {
+        self.rx.borrow_mut().clear();
         let mut n = 0;
-        while let Ok(Some(_)) = self.read_one(0) {
+        let mut buf = [0u8; REPORT_LEN];
+        while let Ok(k) = self.dev.read_timeout(&mut buf, 0) {
+            if k == 0 {
+                break;
+            }
             n += 1;
-            if n > 32 {
+            if n >= 32 {
                 break;
             }
         }
@@ -441,7 +506,16 @@ impl Reader {
     /// Raw escape hatch: send arbitrary bytes as one frame, return the reply.
     pub fn raw_command(&self, frame: &[u8; REPORT_LEN]) -> Result<Option<Frame>, String> {
         self.write_frame(frame)?;
-        self.read_one(1500)
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
+        loop {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            if let Some(f) = self.read_one(remaining.as_millis().min(500) as i32)? {
+                return Ok(Some(f));
+            }
+        }
     }
 }
 
