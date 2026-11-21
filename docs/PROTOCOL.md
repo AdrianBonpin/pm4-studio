@@ -219,24 +219,201 @@ source badge.
    behaviour. Treat each blank as single-use until proven otherwise, and never
    experiment on a tag you care about.
 
-### `0x0083` / `0x0081` / `0x0082` / `0x0084` — NTAG operations
+## Multi-report frames — VERIFIED (spike 16, 2026-11-21)
 
-Documented upstream as NTAG info / read / write / format. **Not implemented
-here.** Their replies can report a payload length larger than a single 64-byte
-report (`LEN 0x40` observed on `0x0083`), so multiple reports must be reassembled
-before the payload is meaningful.
+Everything above fits in one 64-byte report. Frames that do not are real, in
+both directions, and this is how they behave.
+
+**A frame is a continuous byte stream across reports.** A report carries the next
+64 bytes of that stream. Frames are not framed or padded per report — the only
+guide to a frame boundary is the declared length. Zero padding exists, but it is
+frame-level padding on short frames, not per-report padding.
+
+Observed on the info reply, whose body is 64 bytes and therefore does not fit:
+
+```
+OUT  55 00 83 00 06 01 01 00 00 00 00 FF 00
+IN   55 00 83 00 40 01 00 00 00 00 00 00 … FF FF FF      (report 1, 64 bytes)
+IN   FF FF FF FF FF FE 01 00 00 00 … 00 00               (report 2, 64 bytes)
+```
+
+Declared `LEN 0x40` (64) → the frame is 5 + 64 + 2 = **71 bytes**: 64 in the first
+report, then the remaining 5 payload bytes and the `FE 01` checksum at the start
+of the second, followed by zeros. Note the second report opens with payload bytes
+59..63, not with a header — a parser that expects `0x55` at the start of every
+report will never see this frame. The checksum over `payload[..64 & 0xFF]`
+recomputes to `FE 01` **only after the two reports are concatenated**.
+
+Outbound works the same way. A `0x0082` frame with a 1328-byte payload is 1335
+bytes and goes out as **21 reports of 64 bytes**, and the firmware accepts it:
+
+```
+OUT  report 1 starts 55 00 82 05 30 FF FF FF FF FF FF FF FF 00 00 00 …
+     … 20 further reports, the last zero-padded …
+```
+
+The reply to that frame is also multi-report: `LEN 0x104` (260) → 267 bytes →
+**5 reports**, reassembling with a valid checksum.
+
+Practical rule for a reassembler: accumulate every report into one buffer and
+parse frames out of the buffer by `5 + LEN + 2` from the `0x55` magic, keeping any
+incomplete tail for the next read. Never parse a single report as a frame.
+
+## NTAG command family — firmware side VERIFIED, tag side UNVERIFIED
+
+Documented upstream as NTAG info / read / write / format. Spike 16 established
+that **this firmware implements them**: it parses their payloads, answers them,
+and assigns meaningful status codes. What remains unverified is anything that
+needs an NTAG in the field, because no 13.56 MHz tag was available.
+
+Status is a little-endian `u32` at payload offset 0 of the reply.
+
+| Status | Meaning |
+|---|---|
+| `1` | nothing to operate on — no NTAG latched (every reply observed here) |
+| `4` | NTAG ready; the value upstream waits for |
+
+### `0x0083` — NTAG info — VERIFIED (no-tag case)
+
+```
+OUT  55 00 83 00 06 01 01 00 00 00 00 FF 00
+IN   55 00 83 00 40 01 00 00 00 00 …            report 1 of 2
+IN   FF FF FF FF FF FE 01 …                     report 2 of 2
+```
+
+Request payload is 6 bytes: `01` count, `01` short flag, then a `u32` little
+endian page index (`00 00 00 00`).
+
+Reply fields, per upstream and consistent with what came back:
+
+| Payload offset | Meaning |
+|---|---|
+| 0..4 | status `u32` LE — `01 00 00 00` = no NTAG |
+| 4..8 | tag type `u32` LE — `0` when no tag; upstream expects `3`/`4`/`5`/`6` |
+| 0x38..0x40 | 8-byte session token — `FF FF FF FF FF FF FF FF` when no tag |
+
+**`LEN 0x40` does not mean data arrived.** The no-tag reply is already a full
+64-byte body, so length alone distinguishes nothing; only the status dword does.
+
+### `0x0082` — NTAG write — VERIFIED (transport), untested against a tag
+
+Request payload is exactly **1328 bytes** (`0x530`):
+
+| Offset | Meaning |
+|---|---|
+| 0..8 | session token from `0x0083` |
+| 8..12 | tag type `u32` LE |
+| 12..16 | `01 00 00 00` — flag, required |
+| 0x30..0x430 | page data, 256 pages × 4 bytes |
+| 0x430..0x530 | page states, 256 bytes — `2` = write this page, `1` = ok, `4` = failed |
+
+Sent with an all-zero state table (a request to write **no** page), the firmware
+accepts the 21-report frame and answers:
+
+```
+IN   55 00 82 01 04 01 00 00 00 80 CD F0 FF FB 03 …      report 1 of 5
+IN   …                                                    3 more reports
+IN   … 00 F9 07 00 00 FE 01 00 …                          report 5 of 5
+```
+
+`LEN 0x104` = 260 bytes: status `u32` (`01 00 00 00` = no NTAG) then the 0x100-byte
+page-state table. Checksum verified after reassembly.
+
+Two things worth keeping. The frame was accepted with no tag present and the
+device stayed responsive afterwards, so a 21-report command does **not** wedge the
+firmware by itself. And everything past the status dword in that reply looked
+like uninitialised firmware memory (pointer-shaped values such as `78 0D 00 20`,
+`E8 2E 00 20`), so **nothing beyond the status dword should be trusted unless the
+status is a success code.**
+
+### `0x0081` — NTAG read — NOT VERIFIED
+
+Upstream shape: request `token(8) | tag_type(1) | 7 zero bytes`. The reply is a
+stream of `0x0085` page frames (`page`, `state`, 4 data bytes) followed by a final
+`0x0081` frame whose body is status `u32` plus 0x400 bytes of page data (and 0x100
+bytes of page states). Body length ≥ `0x404`, so ~17 reports.
+
+Never sent here: it needs status `4` from `0x0083`, which needs a tag. The payload
+layouts in this section are **transcription from the upstream client, not a
+capture** — a hypothesis until a read is observed.
+
+### `0x0084` — format — NOT ATTEMPTED
+
+Destructive and out of scope for this app. Request is the 8-byte session token.
+
+### `0x0085` — per-page stream — NOT OBSERVED
+
+Appears only in the upstream client, as the streaming reply to reads and writes.
+Never seen on this Reader, because every operation stopped at status `1`.
+
+## The `0x0069` no-tag payload, for the record
+
+With nothing in the field the poll still returns `LEN 0x13`, and every byte after
+the validity flag is unstable garbage — two different payloads within one second:
+
+```
+IN   55 00 69 00 13 00 01 00 08 DB 96 00 08 90 1D 00 20 00 26 00 20 00 00 00 <cksum>
+IN   55 00 69 00 13 00 01 00 00 DB 96 00 08 90 1D 00 20 00 27 00 20 00 00 00 <cksum>
+```
+
+54 polls over 40 seconds, every one `st=0x00`, nothing latched. This is the
+strongest available confirmation that `ST = 0x00` means "ignore the rest": the
+values drift between polls while no tag is present.
 
 ## Open problems
 
 1. **ATQA/SAK offsets** for the HF poll tail. Not yet captured from a real
    13.56 MHz card, so this app reports only the UID plus the raw payload.
-2. **Multi-report reassembly** for NTAG responses.
+2. **NTAG read and write against a real tag.** Transport, framing, and status
+   semantics are verified; whether a tag ever reports status `4`, whether its
+   pages read back correctly, and whether a write lands are all unobserved. See
+   the spike 16 finding below.
 3. **`C8 42`** meaning in the LF read payload.
 4. **What sets the T5577 lock bit.** One write locked a chip; another did not.
    Understanding which payloads are safe would remove the main hazard of the
    `0x0073` path.
 
 Solved: **125 kHz write/clone** — command `0x0073`, see above.
+Solved: **multi-report reassembly** — the wire rule is verified in both
+directions, see "Multi-report frames".
+
+## Spike 16 finding — NTAG viability
+
+Probe: `src-tauri/examples/ntagspike.rs` (`check`, `wait`, `info`, `read`,
+`write`, `transport`). Throwaway, per ADR 0002 — not part of the shipping path.
+
+**Established on hardware.** The NTAG command family is real on this firmware.
+`0x0083` parses a 6-byte request and answers with a status dword and a 64-byte
+body split across two USB reports; `0x0082` accepts a 1328-byte, 21-report request
+and answers with a 260-byte, 5-report reply. Checksums verify after reassembly in
+both cases. With nothing in the field both report status `1` (no NTAG),
+reproducibly, and the Reader stays responsive. So the third-party client that
+documents these commands is describing this hardware, and the transport is not the
+obstacle it was assumed to be.
+
+**Not established.** No 13.56 MHz tag was available. Over 54 polls in 40 seconds
+`0x0069` never latched (`ST = 0x00`), so `0x0083` never returned the ready status,
+so `0x0081` was never sent and no tag page was ever read or written. **No positive
+read and no positive write exists.**
+
+**Therefore the ADR 0002 gate stays closed.** 13.56 MHz remains read-only by
+design, not by omission, and tickets 17 to 22 do not begin. The blocker is missing
+hardware rather than a hardware refusal: the negative half of this spike has not
+been demonstrated either, and must not be recorded as if it had been.
+
+**To finish it** — place a 13.56 MHz NTAG or MIFARE tag on the Reader and run,
+from `src-tauri/`:
+
+```
+cargo run --example ntagspike -- check    # expect validity 0x01 and a UID
+cargo run --example ntagspike -- info     # expect status 4 and a tag_type
+cargo run --example ntagspike -- read     # memory read plus the cross-checks
+cargo run --example ntagspike -- write 4 deadbeef --yes-disposable
+```
+
+The `write` step overwrites four bytes (one page) of the tag on the Reader and
+must only be run on a tag its owner is willing to lose. Quit PM4 Studio first: it
+holds the exclusive HID handle and the probe will fail with `0xE00002C5`.
 
 Contributions with real captures welcome.
 
