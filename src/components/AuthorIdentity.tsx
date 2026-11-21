@@ -15,6 +15,10 @@ import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Toggle } from "./ui/Toggle";
 import { Field, Readout, Section } from "./Section";
+import {
+  ReplacementConfirmation,
+  replacementActionVariant,
+} from "./ReplacementConfirmation";
 import { beginDeviceOperation } from "../lib/deviceLock";
 import {
   EMPTY_ENTRY,
@@ -406,31 +410,11 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
 
       {phase === "replacing" && preview && replacement && (
         <div className="flex flex-col gap-4">
-          <Readout value={replacement.identity} />
-          <div
-            className={`border-l-2 px-3 py-2 ${
-              replacement.destructive ? "border-warn bg-warn/5" : "border-border bg-surface/40"
-            }`}
-          >
-            <p
-              className={`flex items-center gap-1.5 text-sm ${
-                replacement.destructive ? "text-warn" : "text-text"
-              }`}
-            >
-              {replacement.destructive && <AlertTriangle size={14} />} {replacement.title}
-            </p>
-            <ul className="mt-2 flex flex-col gap-2">
-              {replacement.facts.map((fact) => (
-                <li key={fact.title} className="text-xs leading-relaxed text-text-muted">
-                  <span className="text-text">{fact.title}.</span> {fact.detail}
-                </li>
-              ))}
-            </ul>
-          </div>
+          <ReplacementConfirmation confirmation={replacement} />
 
           <div className="flex flex-wrap items-center gap-2">
             <Button
-              variant={replacement.destructive ? "danger" : "primary"}
+              variant={replacementActionVariant(replacement.destructive)}
               disabled={!connected || busy || replacement.alreadyCarries}
               onClick={() => void write(preview)}
             >

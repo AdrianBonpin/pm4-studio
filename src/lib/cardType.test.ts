@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { resolveCardType } from "./cardType";
+import { resolveCardType, variantsNote } from "./cardType";
+import { unapprovedWords } from "./copyGuard";
 
 // Expectations here are written from the published ATQA/SAK assignments, not
 // from the resolver's table. Sources for every row are recorded in
@@ -168,5 +169,24 @@ describe("resolveCardType", () => {
     expect(resolveCardType([0xffff, 0x00], 0x08)).toBeNull();
     expect(resolveCardType([0x04, 0x00], 0x100)).toBeNull();
     expect(resolveCardType([0.5, 0x00], 0x08)).toBeNull();
+  });
+
+  describe("the note under a readout whose pair covers more than one family member", () => {
+    const note = variantsNote(["MIFARE Ultralight (MF0ICU1)", "MIFARE Ultralight C (MF0ICU2)"]);
+
+    it("names them as card types, in approved vocabulary", () => {
+      // The sentence used to read "This pair covers several chips", and "chip"
+      // is retired as a name for a Tag. What the pair actually covers is several
+      // *card types* — the derived family labels — not several pieces of silicon
+      // the user is holding, so the approved term is the accurate one rather than
+      // a compromise.
+      expect(unapprovedWords(note)).toEqual([]);
+      expect(note).toContain("card types");
+    });
+
+    it("lists every member it was given, so the note cannot undercount", () => {
+      expect(note).toContain("MIFARE Ultralight (MF0ICU1)");
+      expect(note).toContain("MIFARE Ultralight C (MF0ICU2)");
+    });
   });
 });

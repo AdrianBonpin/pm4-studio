@@ -181,3 +181,18 @@ export function resolveCardType(
   const atqaValue = atqa[0] | (atqa[1] << 8);
   return TABLE.get(key(atqaValue, sak)) ?? null;
 }
+
+/**
+ * The note under a 13.56 MHz readout whose ATQA/SAK pair identifies a family
+ * rather than one member of it, e.g. "MIFARE Ultralight (MF0ICU1), MIFARE
+ * Ultralight C (MF0ICU2)".
+ *
+ * The sentence lives here, not inline in the page, for the same reason the
+ * shell's page copy does: user-facing words belong where the glossary guard can
+ * reach them. It used to read "This pair covers several chips", which was both
+ * retired vocabulary and a claim the pair does not make — the receiver is a Tag,
+ * and what the pair fails to pin down is which *card type* it is.
+ */
+export function variantsNote(variants: readonly string[]): string {
+  return `This pair covers several card types: ${variants.join(", ")}.`;
+}
