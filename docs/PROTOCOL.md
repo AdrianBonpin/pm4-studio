@@ -10,6 +10,15 @@ and [journeyman846/nfcx-tool](https://github.com/journeyman846/nfcx-tool)
 (endpoints + 125 kHz response layout). Their findings are reproduced and
 cross-checked here, not claimed as original.
 
+> **Reproducing these frames — a development build.** Every frame below was
+> found by typing it into the app's raw console and reading the reply, and that
+> is still the instrument. In a **release** build the console sends only the
+> commands that cannot change a Tag — the wake and select, the version query,
+> the poll, the two reads, the NTAG info and the Reader's beep and LED — so
+> every write documented here is refused there, deliberately. Writes are
+> reproducible from a **development** build (`cargo run` from the repository),
+> which sends anything. See ADR 0006.
+
 ## Device
 
 ```

@@ -3,6 +3,7 @@
 pub mod author_identity;
 pub mod batch;
 pub mod blank;
+pub mod console;
 pub mod identity;
 pub mod library;
 pub mod library_io;
@@ -877,14 +878,25 @@ fn hf_ndef_erase(state: State<'_, AppState>) -> Result<NdefEraseView, String> {
 
 /// Send an arbitrary frame. Input is a hex string; the frame is zero-padded to
 /// 64 bytes. Useful for probing commands that are not yet wrapped.
+///
+/// A release build sends only the commands on `console::RELEASE_ALLOWED`; the
+/// rest are refused before the Reader is opened, so a refused frame reaches no
+/// device and does not even claim the USB handle (ADR 0006).
 #[tauri::command]
-fn raw_send(state: State<'_, AppState>, hex: String) -> Result<Option<RawResponse>, String> {
-    let mut bytes = reader::parse_hex(&hex)?;
+fn raw_send(
+    state: State<'_, AppState>,
+    hex: String,
+) -> Result<Option<RawResponse>, console::ConsoleError> {
+    let mut bytes = reader::parse_hex(&hex).map_err(console::ConsoleError::failed)?;
+    if let Some(refusal) = console::decide(console::CAPABILITY, console::command_in(&bytes)).refusal()
+    {
+        return Err(refusal);
+    }
     if bytes.len() > REPORT_LEN {
-        return Err(format!(
+        return Err(console::ConsoleError::failed(format!(
             "frame is {} bytes, maximum is {REPORT_LEN}",
             bytes.len()
-        ));
+        )));
     }
     bytes.resize(REPORT_LEN, 0);
     let mut frame = [0u8; REPORT_LEN];
@@ -900,6 +912,7 @@ fn raw_send(state: State<'_, AppState>, hex: String) -> Result<Option<RawRespons
             raw: frame_with_meta(&f),
         }))
     })
+    .map_err(console::ConsoleError::failed)
 }
 
 fn frame_with_meta(f: &Frame) -> String {
@@ -910,15 +923,25 @@ fn frame_with_meta(f: &Frame) -> String {
 
 /// Send a command by id with a hex payload, building a correctly checksummed
 /// frame. Used by the diagnostics page so probe frames are never malformed.
+///
+/// Held to the same allow-list as `raw_send`: two commands that reach the same
+/// wire must not disagree about what this build may send.
 #[tauri::command]
 fn send_cmd(
     state: State<'_, AppState>,
     cmd: u16,
     payload: String,
-) -> Result<Option<RawResponse>, String> {
-    let bytes = reader::parse_hex(&payload)?;
+) -> Result<Option<RawResponse>, console::ConsoleError> {
+    if let Some(refusal) = console::decide(console::CAPABILITY, cmd).refusal() {
+        return Err(refusal);
+    }
+    let bytes = reader::parse_hex(&payload).map_err(console::ConsoleError::failed)?;
     if bytes.len() > reader::REPORT_LEN - 7 {
-        return Err(format!("payload is {} bytes, maximum is {}", bytes.len(), reader::REPORT_LEN - 7));
+        return Err(console::ConsoleError::failed(format!(
+            "payload is {} bytes, maximum is {}",
+            bytes.len(),
+            reader::REPORT_LEN - 7
+        )));
     }
     with_reader(&state, |r| {
         let frame = reader::make_frame(cmd, &bytes);
@@ -931,6 +954,17 @@ fn send_cmd(
             raw: frame_with_meta(&f),
         }))
     })
+    .map_err(console::ConsoleError::failed)
+}
+
+/// Which commands this build's raw console sends, asked before the console is
+/// used so it can say it is read-only up front (ADR 0006).
+///
+/// No Reader is touched: the answer is a property of the binary, not of the
+/// hardware.
+#[tauri::command]
+fn console_capability() -> console::CapabilityView {
+    console::capability_view(console::CAPABILITY)
 }
 
 /// Where the library lives: the app data directory Tauri resolves from the
@@ -1486,6 +1520,7 @@ pub fn run() {
             hf_password_remove,
             hf_ndef_erase_preview,
             hf_ndef_erase,
+            console_capability,
             raw_send,
             send_cmd,
             library_load,
