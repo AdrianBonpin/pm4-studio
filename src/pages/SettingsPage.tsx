@@ -2,12 +2,18 @@ import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Button } from "../components/ui/Button";
 import { Segmented, type SegmentedOption } from "../components/ui/Segmented";
-import { Toggle } from "../components/ui/Toggle";
 import { ReaderLimits } from "../components/ReaderLimits";
 import { Field, Section } from "../components/Section";
 import { useToastCorner } from "../hooks/useToastCorner";
 import { APP_VERSION, CREDITS, CREDITS_NOTE, LICENCE, REPOSITORY_URL } from "../lib/appInfo";
 import { outcomes, report } from "../lib/outcome";
+import {
+  QUIET_LEVELS,
+  QUIET_LEVEL_LABEL,
+  QUIET_LEVEL_NOTE,
+  audibleAt,
+  type QuietLevel,
+} from "../lib/quietLevel";
 import { formatFirmwareRevision } from "../lib/readerIdentity";
 import { TOAST_CORNER_LABEL, type ToastCorner } from "../lib/toastCorner";
 import type { DeviceInfo } from "../types";
@@ -23,10 +29,10 @@ import type { DeviceInfo } from "../types";
  * switcher is a single row of pills, the panels are siblings, and nothing about
  * the layout assumes three.
  *
- * The page is a leaf and owns none of the shell's state. The beep preference and
- * the Reader's identity arrive as props, because they belong to the shell: a
- * second `useBeep` here would be a second signal subscriber, and every outcome
- * would sound twice (ADR 0008).
+ * The page is a leaf and owns none of the shell's state. The quiet level and the
+ * Reader's identity arrive as props, because they belong to the shell: a second
+ * `useBeep` here would be a second signal subscriber, and every outcome would
+ * sound twice (ADR 0008).
  */
 
 /** One of Settings' groups. */
@@ -59,6 +65,15 @@ const CORNER_OPTIONS: readonly SegmentedOption<ToastCorner>[] = CORNER_ROW.map((
   label: TOAST_CORNER_LABEL[corner],
 }));
 
+/**
+ * The quiet level's three buttons, in the spec's order: silence first, then the
+ * errors-and-warnings setting, then everything. A row that reads as a scale is
+ * easier to choose from than three unrelated names.
+ */
+const QUIET_LEVEL_OPTIONS: readonly SegmentedOption<QuietLevel>[] = QUIET_LEVELS.map(
+  (level) => ({ value: level, label: QUIET_LEVEL_LABEL[level] }),
+);
+
 /** What the About group says about the Reader when there is not one. */
 const NO_READER = "no reader";
 
@@ -70,11 +85,16 @@ export interface ReaderSummary {
 
 interface SettingsPageProps {
   readonly reader: ReaderSummary;
-  readonly beepOn: boolean;
-  readonly onBeepOnChange: (on: boolean) => void;
+  /** The three-way audible preference, owned by the shell and stored locally. */
+  readonly quietLevel: QuietLevel;
+  readonly onQuietLevelChange: (level: QuietLevel) => void;
 }
 
-export function SettingsPage({ reader, beepOn, onBeepOnChange }: SettingsPageProps) {
+export function SettingsPage({
+  reader,
+  quietLevel,
+  onQuietLevelChange,
+}: SettingsPageProps) {
   const [group, setGroup] = useState<SettingsGroup>("feedback");
 
   return (
@@ -88,58 +108,90 @@ export function SettingsPage({ reader, beepOn, onBeepOnChange }: SettingsPagePro
 
       {group === "feedback" && (
         <FeedbackGroup
-          beepOn={beepOn}
-          onBeepOnChange={onBeepOnChange}
+          connected={reader.connected}
+          quietLevel={quietLevel}
+          onQuietLevelChange={onQuietLevelChange}
         />
       )}
       {group === "about" && <AboutGroup reader={reader} />}
-      {group === "diagnostics" && <DiagnosticsGroup connected={reader.connected} />}
+      {group === "diagnostics" && (
+        <DiagnosticsGroup connected={reader.connected} quietLevel={quietLevel} />
+      )}
     </div>
   );
 }
 
 /**
- * The one sound the app makes on request, with no operation behind it.
+ * One press of the beeper test, from either surface that offers one.
  *
- * It is reported as an outcome rather than sent as a bare frame, because the
- * audible channel is reached only through the seam (ADR 0008) and because what a
- * user is testing here is the whole path — the preference included — not the
- * wire. The frame-level probe lives in Diagnostics, where it names its frames.
+ * Three states, and each says only what is true. Connected and audible sends the
+ * signal a completed operation makes. Connected but silenced by the quiet level
+ * says so, rather than claiming a chirp that the preference had just declined to
+ * play. No Reader says nothing was sent. In every case the app states what it
+ * sent, never what was heard — the firmware never acknowledges the frame.
+ */
+function reportBeepTest(connected: boolean, quietLevel: QuietLevel): void {
+  if (!connected) {
+    report(outcomes.beepTestNoReader());
+    return;
+  }
+  if (!audibleAt(quietLevel, "done")) {
+    report(outcomes.beepTestMuted(quietLevel));
+    return;
+  }
+  report(outcomes.beepTest());
+}
+
+/**
+ * The sound, and the corner messages appear in.
+ *
+ * The quiet level replaces an on/off switch, because "silent except failures" is
+ * a real daily setting and a switch forces a choice between hearing everything
+ * and hearing nothing. It is stored on this machine, so it is changeable with no
+ * Reader attached — the control is never disabled by hardware that is absent.
+ *
+ * The beep test is reported as an outcome rather than sent as a bare frame,
+ * because the audible channel is reached only through the seam (ADR 0008) and
+ * because what a user is testing here is the whole path — the preference
+ * included. The frame-level probe lives in Diagnostics, where it names its frames.
  */
 function FeedbackGroup({
-  beepOn,
-  onBeepOnChange,
+  connected,
+  quietLevel,
+  onQuietLevelChange,
 }: {
-  beepOn: boolean;
-  onBeepOnChange: (on: boolean) => void;
+  connected: boolean;
+  quietLevel: QuietLevel;
+  onQuietLevelChange: (level: QuietLevel) => void;
 }) {
   const { corner, setCorner } = useToastCorner();
 
   return (
     <div className="flex flex-col gap-6 border-t border-border pt-6">
-      {/* The quiet level (ticket 04) replaces this row with a three-way control;
-          the group is a column of rows, so it changes one row and moves nothing. */}
-      <div className="flex items-start justify-between gap-6">
-        <div className="min-w-0">
-          <p className="text-sm text-text">Beep</p>
-          <p className="mt-0.5 max-w-prose text-xs leading-relaxed text-text-muted">
-            The beeper sounds when an operation reports. With it off every report is on
-            screen only — nothing is lost but the sound.
-          </p>
-        </div>
-        <div className="shrink-0 pt-0.5">
-          <Toggle checked={beepOn} onChange={onBeepOnChange} label="Beep" />
-        </div>
+      <div className="flex flex-col gap-2">
+        <p className="text-sm text-text">Quiet level</p>
+        <Segmented
+          label="Quiet level"
+          value={quietLevel}
+          options={QUIET_LEVEL_OPTIONS}
+          onChange={onQuietLevelChange}
+        />
+        <p className="max-w-prose text-xs leading-relaxed text-text-muted">
+          {QUIET_LEVEL_NOTE[quietLevel]}
+        </p>
+        <p className="max-w-prose text-xs leading-relaxed text-text-muted">
+          Remembered between sessions, and settable with nothing plugged in.
+        </p>
       </div>
 
       <div className="flex flex-col items-start gap-2">
-        <Button variant="secondary" onClick={() => report(outcomes.beepTest())}>
+        <Button variant="secondary" onClick={() => reportBeepTest(connected, quietLevel)}>
           Beep test
         </Button>
         {/* Said before it is pressed, because the firmware never answers the frame. */}
         <p className="max-w-prose text-xs leading-relaxed text-text-muted">
-          The firmware never confirms that the buzzer sounded, so this proves the frame was
-          sent, not heard.
+          The firmware never confirms that the buzzer sounded, so a sent frame is not proof
+          that it was heard.
         </p>
       </div>
 
@@ -234,14 +286,21 @@ function AboutGroup({ reader }: { reader: ReaderSummary }) {
  *
  * The indicator test drives the two actuators the firmware exposes. The beep goes
  * through the seam like every other sound, because a component that reaches the
- * beeper directly is the defect ADR 0008 exists to prevent; the LED-off frame is
- * not a beeper call, so it is sent directly and the page says which frame it sent
- * rather than claiming what was seen.
+ * beeper directly is the defect ADR 0008 exists to prevent; so the press reports
+ * what actually happened — including when the quiet level declined to play it.
+ * The LED-off frame is not a beeper call, so it is sent directly and the page says
+ * which frame it sent rather than claiming what was seen.
  *
  * The capability limits are rendered here and nowhere else — `ReaderLimits` — so a
  * limitation is stated once instead of against every Tag that trips over it.
  */
-function DiagnosticsGroup({ connected }: { connected: boolean }) {
+function DiagnosticsGroup({
+  connected,
+  quietLevel,
+}: {
+  connected: boolean;
+  quietLevel: QuietLevel;
+}) {
   const [note, setNote] = useState<string | null>(null);
 
   const ledOff = async () => {
@@ -268,7 +327,7 @@ function DiagnosticsGroup({ connected }: { connected: boolean }) {
           <Button
             variant="primary"
             disabled={!connected}
-            onClick={() => report(outcomes.beepTest())}
+            onClick={() => reportBeepTest(connected, quietLevel)}
           >
             Beep <span className="font-mono text-[11px] opacity-70">0x53</span>
           </Button>

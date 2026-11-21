@@ -16,8 +16,15 @@
  * and never gates the operation that produced it.
  */
 
-/** The alphabet. Silence is a member so "nothing happened" is sayable. */
-export type SignalSymbol = "done" | "needs-you" | "attention" | "silent";
+/**
+ * The alphabet. Silence is a member so "nothing happened" is sayable.
+ *
+ * The list is exported as values as well as a type, so a test can walk every
+ * symbol and fail when one is added without a chirp count (`lib/chirpSequence`).
+ */
+export const SIGNAL_SYMBOLS = ["done", "needs-you", "attention", "silent"] as const;
+
+export type SignalSymbol = (typeof SIGNAL_SYMBOLS)[number];
 
 /** Called once per emitted symbol, in the order the outcomes were reported. */
 export type SignalListener = (symbol: SignalSymbol) => void;

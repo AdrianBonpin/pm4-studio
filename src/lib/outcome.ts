@@ -33,6 +33,7 @@ import type { BlankResult, BuildRefusal, EraseResult, WriteResult } from "../typ
 import { blankNotice } from "./blankTag";
 import { BUILD_REFUSAL_DETAIL, BUILD_REFUSAL_LABEL } from "./consoleRefusal";
 import { eraseNotice } from "./eraseTag";
+import { QUIET_LEVEL_LABEL, type QuietLevel } from "./quietLevel";
 import { classifyDeviceFailure, deviceFailureNotice } from "./readerIdentity";
 import { emitSignal } from "./signal";
 import { pushToast } from "./toastStore";
@@ -440,8 +441,10 @@ export const outcomes = {
    *
    * It is an outcome rather than a bare `beep` command because the audible
    * channel is reachable only through this seam (ADR 0008), and because the test
-   * a user wants is of the whole path — the preference included — not of the
-   * wire. Diagnostics keeps the frame-level probe.
+   * a user wants is of the whole path — the quiet level included — not of the
+   * wire. That is why the two outcomes below it exist: the same press reports
+   * differently with no Reader attached, and at a level that plays no completed
+   * chirp. Diagnostics keeps the frame-level probe.
    *
    * The message states what was **sent**, never what was heard: the beep frame is
    * fire-and-forget, so the app must not claim the buzzer sounded.
@@ -451,6 +454,42 @@ export const outcomes = {
       detail:
         "The same signal a completed operation makes. The firmware never confirms that " +
         "the buzzer sounded.",
+    });
+  },
+
+  /**
+   * The beeper test with no Reader attached.
+   *
+   * Its own outcome rather than the success above, because the two are not the
+   * same event: one sent a frame, the other sent nothing. It says that nothing
+   * was sent and stops there — the app never claims a chirp was heard, and it
+   * cannot claim to have tried when there is nothing to try on.
+   */
+  beepTestNoReader(): Outcome {
+    return make(
+      "reader-absent",
+      "preferences",
+      "No signal was sent.",
+      {
+        detail:
+          "The beeper test needs the Reader attached, and none is. Connect the Reader and " +
+          "press it again; nothing was sent to anything.",
+      },
+    );
+  },
+
+  /**
+   * The beeper test at a quiet level that plays no completed-operation chirp.
+   *
+   * Visible and silent: the level did what it was told, so there is a message to
+   * read and no sound to hear. Reporting it as `beep-test` instead would say a
+   * signal was sent when the preference had just declined to send one.
+   */
+  beepTestMuted(level: QuietLevel): Outcome {
+    return make("announcement", "preferences", "No signal was sent.", {
+      detail:
+        `The quiet level is ${QUIET_LEVEL_LABEL[level]}, which does not play a completed ` +
+        "operation's chirp. Set it to All and press the test again to hear it.",
     });
   },
 };

@@ -378,6 +378,31 @@ describe("the beeper test", () => {
     expect(toast?.detail ?? "").toMatch(/never confirms/i);
     stop();
   });
+
+  it("says nothing was sent when there is no Reader, and does not pretend otherwise", () => {
+    const outcome = outcomes.beepTestNoReader();
+
+    expect(outcome.kind).toBe("reader-absent");
+    expect(outcome.operation).toBe("preferences");
+    expect(outcome.message).toBe("No signal was sent.");
+    expect(outcome.severity).toBe("warning");
+    expect(`${outcome.message} ${outcome.detail}`).not.toMatch(/heard|sounded/i);
+  });
+
+  it("says the quiet level muted it, visibly and silently", () => {
+    // The level did what it was told, so there is a message to read and no sound
+    // to hear — which is why this is an announcement rather than a success.
+    const { symbols, stop } = hearSignals();
+
+    report(outcomes.beepTestMuted("off"));
+
+    const [toast] = toastStore.getState().toasts;
+    expect(toast?.message).toBe("No signal was sent.");
+    expect(toast?.severity).toBe("info");
+    expect(toast?.detail ?? "").toContain("Off");
+    expect(symbols).toEqual([]);
+    stop();
+  });
 });
 
 describe("every outcome the vocabulary can build", () => {
@@ -394,6 +419,8 @@ describe("every outcome the vocabulary can build", () => {
     outcomes.readerFailure("no such device"),
     outcomes.announcement("Saved."),
     outcomes.beepTest(),
+    outcomes.beepTestNoReader(),
+    outcomes.beepTestMuted("errors-and-warnings"),
   ];
 
   it("has a non-empty message, a discriminator in the set, and a known severity", () => {

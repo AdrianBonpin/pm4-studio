@@ -1,61 +1,89 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+/**
+ * The shell's beeper: the quiet level, and the one subscriber that plays signals.
+ *
+ * `report(outcome)` hands one symbol to the audible half of the seam (ADR 0008).
+ * This hook is the only thing in the app that listens for those symbols, and the
+ * only thing that reaches the beeper. What it adds to the seam is everything the
+ * signal needs to become a sound:
+ *
+ *   * **The quiet level gates it.** Off plays nothing, errors and warnings only
+ *     plays the failure and needs-checking symbols, and All plays everything the
+ *     alphabet defines. The level is read from storage when a symbol arrives, so
+ *     changing it in Settings takes effect on the next signal without a reload.
+ *   * **The alphabet decides the count.** The symbol is handed to
+ *     `lib/signalQueue`, which asks `lib/chirpSequence` how many chirps, how far
+ *     apart, and whether the LED is held — one chirp for done, two for needs-you,
+ *     three for attention with the LED held for two seconds, and nothing at all
+ *     for silence.
+ *   * **A beeper failure is never an operation's failure.** The chirp frame is
+ *     fire-and-forget and the firmware never acknowledges it, so every send is
+ *     swallowed here. The signal is never the only report of an outcome.
+ *
+ * Two deliberate leftovers. `chirp()` is the pre-seam helper that pages which
+ * have not been rewired still pass around as a prop: it raises a `done` symbol
+ * through the same seam, and ticket 17 deletes it. And the level's own migration
+ * lives in `lib/quietLevel`, which reads the boolean preference this replaced
+ * rather than reinterpreting it.
+ */
+
+import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { legacyChirp } from "../lib/outcome";
+import { audibleAt, loadQuietLevel, saveQuietLevel, type QuietLevel } from "../lib/quietLevel";
+import { createSignalQueue, type SignalTimers } from "../lib/signalQueue";
 import { subscribeSignals } from "../lib/signal";
 
-const KEY = "pm4studio.beep";
+/** Test seam: the clock the queue schedules chirps with. Production omits it. */
+export interface UseBeepOptions {
+  readonly timers?: SignalTimers;
+}
 
-/**
- * Beeper preference, plus the pre-seam `chirp()` helper the unwired pages still
- * carry.
- *
- * The beep frame is fire-and-forget: the firmware never acknowledges it, but the
- * buzzer does sound. A failed chirp must never break the operation it accompanies,
- * so errors are swallowed here.
- *
- * This hook no longer decides what to sound in response to an operation — the
- * outcome seam does. It installs the one subscriber that plays signals on this
- * Reader, and `chirp()` emits a `done` symbol through the seam rather than sending
- * the frame itself. The preference still gates the frame, and is still stored under
- * `pm4studio.beep`; the three-way quiet level that replaces it, and the counted
- * alphabet that replaces one chirp per symbol, are ticket 04's work — they change
- * what this subscriber does, not how a signal reaches it.
- *
- * Components must not reach the beeper any other way (ADR 0008). `chirp` is the
- * last exception, it is marked as such in `lib/outcome.ts`, and ticket 17 deletes
- * it.
- */
-export function useBeep() {
-  const [beepOn, setBeepOn] = useState<boolean>(() => {
-    if (typeof localStorage === "undefined") return true;
-    const v = localStorage.getItem(KEY);
-    return v === null ? true : v === "1";
-  });
-  const beepOnRef = useRef(beepOn);
+export function useBeep(options: UseBeepOptions = {}) {
+  const [quietLevel, setQuietLevelState] = useState<QuietLevel>(() => loadQuietLevel());
 
+  // Installed once, as the shell's single subscriber. A second one would play
+  // every signal twice, which is why Settings receives the level as a prop
+  // instead of calling this hook itself.
   useEffect(() => {
-    beepOnRef.current = beepOn;
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(KEY, beepOn ? "1" : "0");
-    }
-  }, [beepOn]);
+    const player = createSignalQueue({
+      timers: options.timers,
+      effects: {
+        // Both frames are fire-and-forget: the firmware acknowledges neither, so
+        // there is nothing to report but the fact that the frame was sent, and a
+        // failure here stops here. Never let a beep failure surface as an
+        // operation failure.
+        chirp: () => {
+          void invoke("beep").catch(() => {});
+        },
+        releaseLed: () => {
+          void invoke("led_off").catch(() => {});
+        },
+      },
+    });
 
-  // The audible half of the seam, played. One frame per symbol today; ticket 04
-  // turns a symbol into its count of chirps and holds the LED after attention.
-  useEffect(
-    () =>
-      subscribeSignals(() => {
-        if (!beepOnRef.current) return;
-        void invoke("beep").catch(() => {
-          // Never let a beep failure surface as an operation failure.
-        });
-      }),
-    [],
-  );
+    const stop = subscribeSignals((symbol) => {
+      // Read on arrival rather than mirrored in a ref, so the level in force is
+      // always the one stored — a preference changed seconds ago is honoured.
+      if (!audibleAt(loadQuietLevel(), symbol)) return;
+      player.enqueue(symbol);
+    });
+
+    return () => {
+      stop();
+      player.clear();
+    };
+    // The timers are a test seam and do not change over a component's life, so the
+    // subscriber is installed once and removed with the shell.
+  }, []);
+
+  const setQuietLevel = useCallback((level: QuietLevel) => {
+    setQuietLevelState(level);
+    saveQuietLevel(level);
+  }, []);
 
   const chirp = useCallback(async () => {
     legacyChirp();
   }, []);
 
-  return { beepOn, setBeepOn, chirp };
+  return { quietLevel, setQuietLevel, chirp };
 }

@@ -61,7 +61,7 @@ export default function App() {
   const [page, setPage] = useState<PageId>("lf");
   const reader = useReader();
   const library = useLibrary();
-  const { beepOn, setBeepOn, chirp } = useBeep();
+  const { quietLevel, setQuietLevel, chirp } = useBeep();
 
   const current = PAGES.find((p) => p.id === page) ?? PAGES[0];
   const connected = reader.connected;
@@ -183,8 +183,8 @@ export default function App() {
               {page === "settings" && (
                 <SettingsPage
                   reader={{ connected, info: reader.info, firmware: reader.firmware }}
-                  beepOn={beepOn}
-                  onBeepOnChange={setBeepOn}
+                  quietLevel={quietLevel}
+                  onQuietLevelChange={setQuietLevel}
                 />
               )}
             </div>

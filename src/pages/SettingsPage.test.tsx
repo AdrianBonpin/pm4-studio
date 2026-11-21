@@ -5,6 +5,7 @@ import { SettingsPage } from "./SettingsPage";
 import { fakeBackend, renderUi, type Backend } from "../test/dom";
 import { APP_VERSION, CREDITS, LICENCE, REPOSITORY_URL } from "../lib/appInfo";
 import { READER_CAPABILITY_LIMITS } from "../lib/readerIdentity";
+import { QUIET_LEVEL_LABEL, type QuietLevel } from "../lib/quietLevel";
 import { TOAST_CORNER_KEY } from "../lib/toastCorner";
 import { toastStore } from "../lib/toastStore";
 import type { DeviceInfo } from "../types";
@@ -13,15 +14,17 @@ import type { DeviceInfo } from "../types";
  * Settings: three groups, one click apart, and the facts that used to be
  * scattered across the sidebar and every page's footer.
  *
- * The page is a leaf. It receives the Reader summary and the beep preference as
+ * The page is a leaf. It receives the Reader summary and the quiet level as
  * props, because both are the shell's state: a Settings page that reached for the
  * beeper itself would be a second subscriber and would double every signal
  * (ADR 0008).
  *
  * What these tests hold:
  *   - Feedback opens first, and About and Diagnostics are one click from it;
- *   - the beep control works with no Reader attached, because the preference is
- *     stored locally and has nothing to do with the hardware;
+ *   - the quiet level is three-way and works with no Reader attached, because the
+ *     preference is stored locally and has nothing to do with the hardware;
+ *   - the beep test reports what it actually did: a signal was sent, or nothing
+ *     was, and never that a chirp was heard;
  *   - the message corner is chosen here and is remembered;
  *   - About states the version, the credits, the repository, the licence and the
  *     Reader's own identity, including when there is no Reader;
@@ -38,8 +41,8 @@ const READER_INFO: DeviceInfo = {
 };
 
 interface MountOptions {
-  beepOn?: boolean;
-  onBeepOnChange?: (on: boolean) => void;
+  quietLevel?: QuietLevel;
+  onQuietLevelChange?: (level: QuietLevel) => void;
   connected?: boolean;
   info?: DeviceInfo | null;
   firmware?: string | null;
@@ -48,8 +51,8 @@ interface MountOptions {
 
 function mount(options: MountOptions = {}) {
   const {
-    beepOn = true,
-    onBeepOnChange = () => {},
+    quietLevel = "all",
+    onQuietLevelChange = () => {},
     connected = true,
     info = READER_INFO,
     firmware = "H00S07",
@@ -59,8 +62,8 @@ function mount(options: MountOptions = {}) {
   const ui = renderUi(
     <SettingsPage
       reader={{ connected, info, firmware }}
-      beepOn={beepOn}
-      onBeepOnChange={onBeepOnChange}
+      quietLevel={quietLevel}
+      onQuietLevelChange={onQuietLevelChange}
     />,
   );
   return { backend, ui };
@@ -86,7 +89,7 @@ describe("the Settings page's shape", () => {
     expect(within(switchGroup).getByRole("button", { name: "Feedback" }).getAttribute("aria-pressed")).toBe(
       "true",
     );
-    expect(screen.getByRole("switch", { name: "Beep" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Quiet level" })).toBeTruthy();
 
     // Each of the other groups is one click, not a scroll: the switcher shows
     // one group at a time and every group is on it.
@@ -98,7 +101,7 @@ describe("the Settings page's shape", () => {
 
     await ui.user.click(within(switchGroup).getByRole("button", { name: "About" }));
     expect(screen.getByText(APP_VERSION)).toBeTruthy();
-    expect(screen.queryByRole("switch", { name: "Beep" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Quiet level" })).toBeNull();
 
     await ui.user.click(within(switchGroup).getByRole("button", { name: "Diagnostics" }));
     expect(screen.getByText("Capability limits")).toBeTruthy();
@@ -107,22 +110,43 @@ describe("the Settings page's shape", () => {
 });
 
 describe("Feedback", () => {
-  it("switches the beep with no Reader attached", async () => {
-    const onBeepOnChange = vi.fn();
+  it("offers three quiet levels and changes them with no Reader attached", async () => {
+    const onQuietLevelChange = vi.fn();
     const { ui } = mount({
       connected: false,
       info: null,
       firmware: null,
-      onBeepOnChange,
+      onQuietLevelChange,
     });
 
-    const beep = screen.getByRole("switch", { name: "Beep" });
+    const levels = screen.getByRole("group", { name: "Quiet level" });
     // The preference is this machine's, not the hardware's: an unplugged Reader
-    // must not take the control away.
-    expect((beep as HTMLButtonElement).disabled).toBe(false);
+    // must not take the control away, and it is the same three choices either way.
+    expect(within(levels).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      QUIET_LEVEL_LABEL.off,
+      QUIET_LEVEL_LABEL["errors-and-warnings"],
+      QUIET_LEVEL_LABEL.all,
+    ]);
+    expect(
+      (within(levels).getByRole("button", { name: QUIET_LEVEL_LABEL.all }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
 
-    await ui.user.click(beep);
-    expect(onBeepOnChange).toHaveBeenCalledWith(false);
+    await ui.user.click(within(levels).getByRole("button", { name: QUIET_LEVEL_LABEL.off }));
+    expect(onQuietLevelChange).toHaveBeenCalledWith("off");
+  });
+
+  it("marks the current level, and says what it will do", () => {
+    mount({ quietLevel: "errors-and-warnings" });
+
+    const levels = screen.getByRole("group", { name: "Quiet level" });
+    expect(
+      within(levels)
+        .getByRole("button", { name: QUIET_LEVEL_LABEL["errors-and-warnings"] })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    // A level is chosen by what it will do, not by its name.
+    expect(screen.getByText(/Two chirps when a result needs checking/)).toBeTruthy();
   });
 
   it("remembers which corner the messages appear in", async () => {
@@ -156,7 +180,39 @@ describe("Feedback", () => {
     await waitFor(() => {
       expect(toastStore.getState().toasts).toHaveLength(1);
     });
-    expect(toastStore.getState().toasts[0]?.message).toBe("Signal sent.");
+    const [toast] = toastStore.getState().toasts;
+    expect(toast?.message).toBe("Signal sent.");
+    // What was sent, not what was heard: the firmware never confirms the frame.
+    expect(toast?.message ?? "").not.toMatch(/heard|sounded/i);
+    expect(toast?.detail ?? "").toMatch(/never confirms/i);
+  });
+
+  it("reports honestly when there is no Reader to send a signal to", async () => {
+    const { ui } = mount({ connected: false, info: null, firmware: null });
+
+    await ui.user.click(screen.getByRole("button", { name: "Beep test" }));
+
+    const [toast] = toastStore.getState().toasts;
+    // Nothing was sent, so nothing may be claimed: not a chirp, and not even the
+    // frame that the connected case sends.
+    expect(toast?.message).toBe("No signal was sent.");
+    expect(toast?.severity).toBe("warning");
+    expect(toast?.detail ?? "").toMatch(/Reader attached/);
+    expect(`${toast?.message} ${toast?.detail}`).not.toMatch(/heard|sounded/i);
+  });
+
+  it("says the quiet level muted the test rather than claiming a chirp", async () => {
+    const { ui } = mount({ quietLevel: "off" });
+
+    await ui.user.click(screen.getByRole("button", { name: "Beep test" }));
+
+    const [toast] = toastStore.getState().toasts;
+    expect(toast?.message).toBe("No signal was sent.");
+    // Silence is what the preference asked for, so the report is a statement of
+    // fact rather than a failure — and it is not a signal either.
+    expect(toast?.severity).toBe("info");
+    expect(toast?.detail ?? "").toContain(QUIET_LEVEL_LABEL.off);
+    expect(`${toast?.message} ${toast?.detail}`).not.toMatch(/heard|sounded/i);
   });
 });
 
@@ -226,5 +282,16 @@ describe("Diagnostics", () => {
 
     expect(screen.getByText(/Plug in the Reader to run the indicator test/)).toBeTruthy();
     expect((screen.getByRole("button", { name: /LED off/ }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("does not claim a chirp when the quiet level declined to play the indicator's beep", async () => {
+    const { ui } = mount({ quietLevel: "off" });
+    await ui.user.click(within(groupSwitch()).getByRole("button", { name: "Diagnostics" }));
+
+    await ui.user.click(screen.getByRole("button", { name: /Beep/ }));
+
+    const [toast] = toastStore.getState().toasts;
+    expect(toast?.message).toBe("No signal was sent.");
+    expect(toast?.detail ?? "").toContain(QUIET_LEVEL_LABEL.off);
   });
 });
