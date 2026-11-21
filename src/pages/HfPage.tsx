@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { CopyMessage } from "../components/CopyMessage";
 import { EraseNdef } from "../components/EraseNdef";
 import { MemoryDumpPanel } from "../components/MemoryDumpPanel";
 import { WriteDraftMode } from "../components/WriteDraftMode";
@@ -10,20 +11,17 @@ import { Field, Readout, Section } from "../components/Section";
 import { variantsNote } from "../lib/cardType";
 import { HF_MODES, type HfMode } from "../lib/hfWorkspace";
 import {
-  decodeHfPayload,
   hexBytes,
   ndefField,
   type HfRawOnlyReason,
   type HfReading,
 } from "../lib/hfDecoder";
 import {
-  assembleHfRead,
   hfReadOutcome,
-  readsMessage,
+  readHfOnce,
   type HfMessage,
   type HfMessageState,
   type HfRead,
-  type HfRecordsAttempt,
 } from "../lib/hfRead";
 import { report, outcomes } from "../lib/outcome";
 import type { TagRecordsRead } from "../lib/tagRecords";
@@ -297,9 +295,12 @@ export function HfPage({ connected, onPoll, mode, onModeChange }: HfPageProps) {
   const readTag = async () => {
     setBusy(true);
     try {
-      let card: HfCard | null;
+      let result: HfRead;
       try {
-        card = await onPoll();
+        // One read, in the order the work happens: poll, then the message read
+        // the poll makes possible (`readHfOnce` owns that sequence so Copy's two
+        // reads cannot drift from this one).
+        result = await readHfOnce({ poll: onPoll, records: recordsRead });
       } catch (error) {
         // The Reader itself failed; that is the whole outcome and there is no
         // reading to show beside it.
@@ -308,27 +309,6 @@ export function HfPage({ connected, onPoll, mode, onModeChange }: HfPageProps) {
         return;
       }
       setPolled(true);
-
-      const reading = card === null ? null : decodeHfPayload(card.payload);
-      let attempt: HfRecordsAttempt = { state: "not-attempted" };
-
-      // A message read only happens for a Tag it can describe: a decoded reply
-      // and a family with an NFC Forum tag type. Offering it otherwise would be
-      // offering a transaction that cannot work.
-      if (reading !== null && readsMessage(reading)) {
-        try {
-          attempt = {
-            state: "read",
-            read: await invoke<TagRecordsRead>("ntag_records_read", {
-              capturedAt: new Date().toISOString(),
-            }),
-          };
-        } catch (error) {
-          attempt = { state: "failed", reason: reasonOf(error) };
-        }
-      }
-
-      const result = assembleHfRead(reading, attempt);
       setRead(result);
       // Keep the dump panel on the same read, so the bytes and the readout are
       // one transaction's evidence rather than two that might disagree.
@@ -368,8 +348,7 @@ export function HfPage({ connected, onPoll, mode, onModeChange }: HfPageProps) {
 
       {mode === "write" && <WriteDraftMode connected={connected} />}
 
-      {/* Copy's panel arrives here in ticket 15, between Write and Erase: the
-          switch already holds the slot, so nothing else about the page moves. */}
+      {mode === "copy" && <CopyMessage connected={connected} onPoll={onPoll} />}
 
       {mode === "erase" && <EraseNdef connected={connected} />}
 
@@ -380,7 +359,9 @@ export function HfPage({ connected, onPoll, mode, onModeChange }: HfPageProps) {
   );
 }
 
-/** A failure's own words, so the readout quotes it rather than summarising it. */
-function reasonOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+/** The message read that follows a poll: the one `0x0081` transaction, once. */
+function recordsRead(): Promise<TagRecordsRead> {
+  return invoke<TagRecordsRead>("ntag_records_read", {
+    capturedAt: new Date().toISOString(),
+  });
 }

@@ -46,7 +46,7 @@ export const PAGES: readonly PageCopy[] = [
     label: "13.56 MHz",
     title: "13.56 MHz",
     subtitle:
-      "ISO14443-A tags. Read a UID and its Records, write a Draft, erase a message, or dump the raw memory.",
+      "ISO14443-A tags. Read a UID and its Records, write a Draft, copy a message onto another tag, erase one, or dump the raw memory.",
   },
   {
     id: "library",
