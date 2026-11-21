@@ -6,6 +6,8 @@
  * in Rust against a real temp directory.
  */
 
+import type { DraftRecord } from "./drafts";
+
 export type SnapshotKind = "LF" | "HF";
 
 /** What a 125 kHz Tag was when it was read. */
@@ -21,7 +23,30 @@ export interface SnapshotIdentity {
 /** What a 13.56 MHz Tag was when it was read. */
 export interface SnapshotHf {
   uid: string;
+  /** The poll reply as the Reader reported it, kept for an honest raw display. */
   raw: string;
+  /**
+   * The poll's ATQA, hex, in transmission order. Absent when the Snapshot was
+   * written before schema 3, or by a shape that never carried it — the readout
+   * then says it was not recorded rather than showing a plausible pair.
+   */
+  atqa?: string | null;
+  /** The SAK of the last cascade level, hex. Absent when never recorded. */
+  sak?: string | null;
+  /** The family the ATQA/SAK pair resolved to, e.g. `NTAG215`. */
+  cardType?: string | null;
+  /** Capacity in bytes, from the published table or the Tag's own container. */
+  capacityBytes?: number | null;
+  /** Whether the Tag is NDEF formatted, as the memory read settled it. */
+  ndefFormatted?: boolean | null;
+  /**
+   * The message's Records, in the order the Tag holds them.
+   *
+   * `null` or absent means the message was **not read** — never that the Tag
+   * holds none. A Tag that was read and held nothing keeps `[]`, so "no
+   * Records" and "not fetched" are different values and are shown differently.
+   */
+  records?: DraftRecord[] | null;
 }
 
 export interface Snapshot {
@@ -112,6 +137,7 @@ export function snapshotDetail(snapshot: Snapshot, now: number = Date.now()): st
     parts.push(`facility ${snapshot.identity.facility}`, `card ${snapshot.identity.card}`);
   } else {
     parts.push(BAND_LABEL[snapshot.kind]);
+    if (snapshot.hf?.cardType) parts.push(snapshot.hf.cardType);
     if (!snapshot.hf) parts.push("raw only");
   }
   if (when) parts.push(when);

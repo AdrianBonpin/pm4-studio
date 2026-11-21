@@ -30,6 +30,7 @@
  */
 
 import type { BlankResult, BuildRefusal, EraseResult, WriteResult } from "../types";
+import type { SaveResult } from "./library";
 import { blankNotice } from "./blankTag";
 import { describeClearReport, type ClearReport } from "./clearData";
 import { BUILD_REFUSAL_DETAIL, BUILD_REFUSAL_LABEL } from "./consoleRefusal";
@@ -48,6 +49,7 @@ export type Severity = "info" | "success" | "warning" | "error";
 export type OutcomeOperation =
   | "read"
   | "hf-read"
+  | "library"
   | "write"
   | "reset"
   | "clone"
@@ -74,6 +76,15 @@ export type OutcomeKind =
   | "read-incomplete"
   /** There was no Tag in the field. Nothing happened, and that is not an error. */
   | "nothing-latched"
+  /** A read was kept in the library: the Snapshot is on disk. */
+  | "saved"
+  /**
+   * The read was already in the library, so nothing was added. Informational
+   * and silent: a repeat read is not a fault, and it did not change anything.
+   * It is still said, because a save that vanishes without a word looks like a
+   * save that failed.
+   */
+  | "already-saved"
   /** A write whose read-back proved it. */
   | "verified"
   /** A Reset that left no Identity on the Tag. */
@@ -114,6 +125,8 @@ export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
   "read",
   "read-incomplete",
   "nothing-latched",
+  "saved",
+  "already-saved",
   "verified",
   "blanked",
   "erased",
@@ -139,6 +152,8 @@ const SEVERITY_OF: Record<OutcomeKind, Severity> = {
   read: "success",
   "read-incomplete": "warning",
   "nothing-latched": "info",
+  saved: "success",
+  "already-saved": "info",
   verified: "success",
   blanked: "success",
   erased: "success",
@@ -318,6 +333,45 @@ export const outcomes = {
       erased: "failed",
     };
     return make(kind[result.outcome], operation, writeNotice(result).text);
+  },
+
+  /**
+   * What keeping a read in the library came to, in the words both the readout
+   * and the Library show. The store answered with what it did — added, already
+   * there, or refused with the file's own problem — so a repeat read and an
+   * unwritable file cannot look like the same silence.
+   *
+   * A duplicate is informational rather than a fault: nothing failed, and
+   * nothing was added twice.
+   */
+  librarySaved(result: SaveResult): Outcome {
+    if (result.outcome === "refused") {
+      return make(
+        "refused",
+        "library",
+        result.library.problem?.message ?? "The library could not be saved.",
+      );
+    }
+    const name = result.snapshot?.name ?? "the read";
+    if (result.outcome === "duplicate") {
+      return make("already-saved", "library", `Already in the library as ${name}.`);
+    }
+    return make("saved", "library", `Saved to the library as ${name}.`);
+  },
+
+  /**
+   * A save that never reached the store — the call itself failed, so nothing is
+   * known about the file. Its own words are kept as the detail rather than
+   * summarised into a cause nobody established.
+   */
+  librarySaveFailed(detail: string): Outcome {
+    const trimmed = detail.trim();
+    return make(
+      "failed",
+      "library",
+      "The read could not be saved to the library.",
+      trimmed === "" ? {} : { detail: trimmed },
+    );
   },
 
   /** What became of one Reset, in the blanking copy's own words. */

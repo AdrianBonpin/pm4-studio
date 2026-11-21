@@ -331,7 +331,7 @@ export function DraftsPage({ connected }: { connected: boolean }) {
         </Section>
       )}
 
-      {selected && <WriteDraftToTag draft={selected} connected={connected} />}
+      {selected && <WriteDraftToTag records={selected.records} connected={connected} />}
     </div>
   );
 }

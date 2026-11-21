@@ -174,7 +174,7 @@ export default function App() {
                 />
               )}
               {page === "hf" && (
-                <HfPage connected={connected} onPoll={reader.pollHfOnce} />
+                <HfPage connected={connected} onPoll={reader.pollHfOnce} library={library} />
               )}
               {page === "library" && (
                 <LibraryPage connected={connected} library={library} onChirp={chirp} />

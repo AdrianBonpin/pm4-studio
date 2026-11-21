@@ -55,10 +55,12 @@ use crate::write_outcome::WriteOutcome;
 
 /// The schema version this build writes and understands.
 ///
-/// 2 since Drafts were added to the file: a new persisted key is a schema
-/// change, and a schema change bumps the version (ADR 0005). Version 1 files are
-/// lifted to 2 on open rather than refused; see [`crate::library_schema`].
-pub const SCHEMA_VERSION: u32 = 2;
+/// 2 since Drafts were added to the file, 3 since a 13.56 MHz Snapshot began to
+/// keep the whole read — its ATQA, SAK, card type, capacity, NDEF status and the
+/// message's Records. A new persisted key is a schema change, and a schema
+/// change bumps the version (ADR 0005). Older files are lifted on open rather
+/// than refused, one version at a time; see [`crate::library_schema`].
+pub const SCHEMA_VERSION: u32 = 3;
 
 /// The library file's name, inside the app data directory.
 ///
@@ -198,11 +200,46 @@ pub struct IdentityFields {
 }
 
 /// What a 13.56 MHz Tag was when it was read.
+///
+/// `uid` and `raw` are what schema 2 kept. Schema 3 added the rest, so that a
+/// 13.56 MHz Snapshot is as reviewable as a 125 kHz one with no Reader attached:
+/// the poll's ATQA and SAK, the family they resolve to, the capacity, the NDEF
+/// status, and the message's Records in the order the Tag holds them.
+///
+/// Every added field is an `Option` with no default value, deliberately. A file
+/// written before schema 3 — or hand-edited to look as if it were — keeps these
+/// absent, and the readout says *not recorded*. Absent is a fact about that
+/// file; a default would be a plausible number this build never read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HfFields {
     pub uid: String,
+    /// The poll reply as the Reader reported it, kept for an honest raw display.
     pub raw: String,
+    /// The ATQA the UID was resolved with, hex, in transmission order.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub atqa: Option<String>,
+    /// The SAK of the last cascade level, hex.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sak: Option<String>,
+    /// The family the ATQA/SAK pair resolved to, e.g. `NTAG215`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub card_type: Option<String>,
+    /// Capacity in bytes, from the published table or the Tag's own container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capacity_bytes: Option<u32>,
+    /// Whether the Tag is NDEF formatted, as the memory read settled it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ndef_formatted: Option<bool>,
+    /// The message's Records, in the order the Tag holds them.
+    ///
+    /// `None` means the message was **not read** — never that the Tag holds
+    /// none. A Tag that was read and holds no Records keeps an empty list, so
+    /// "no Records" and "not fetched" are not the same value. It is the same
+    /// rule a Draft's Records follow, and the same `DraftRecord` shape, so a
+    /// Record read here can be written back from here without a conversion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub records: Option<Vec<DraftRecord>>,
 }
 
 /// An editable NDEF message that is not bound to any Tag. It is named, it holds
@@ -263,6 +300,26 @@ impl Snapshot {
 /// so the two can never disagree about what "the same Identity" means.
 fn identity_key(customer: u8, data32: u32) -> String {
     format!("LF:{customer:02X}:{data32:08X}")
+}
+
+/// Apply one write outcome to one Snapshot's confirmed-copy count.
+///
+/// The one place the counting rule is applied to a Snapshot, whichever band the
+/// write was on: both the 125 kHz path and the 13.56 MHz one arrive here, so
+/// neither can drift into counting an attempt.
+fn bump_confirmed_copies(snapshot: &mut Snapshot, outcome: WriteOutcome) -> WriteCountOutcome {
+    if outcome.counts_as_confirmed_copy() {
+        snapshot.write_count = snapshot.write_count.saturating_add(1);
+        WriteCountOutcome::Incremented {
+            id: snapshot.id.clone(),
+            write_count: snapshot.write_count,
+        }
+    } else {
+        WriteCountOutcome::Unchanged {
+            id: snapshot.id.clone(),
+            write_count: snapshot.write_count,
+        }
+    }
 }
 
 /// What recording a write outcome did to a Snapshot's confirmed-copy count.
@@ -686,20 +743,21 @@ impl Library {
         })
     }
 
-    /// Add a 13.56 MHz read.
-    pub fn add_hf(&mut self, uid: &str, raw: &str, captured_at: &str) -> InsertOutcome {
+    /// Add a 13.56 MHz read, keeping everything the read found.
+    ///
+    /// The Snapshot's id is the UID, so the same Tag read twice is the same
+    /// read of the same Tag and is reported as a duplicate by [`add`] rather
+    /// than stored a second time (`Snapshot::tag_key`).
+    pub fn add_hf(&mut self, hf: HfFields, captured_at: &str) -> InsertOutcome {
         self.add(Snapshot {
-            id: uid.to_string(),
+            id: hf.uid.clone(),
             name: self.next_name(),
             note: String::new(),
             kind: Kind::HF,
             captured_at: captured_at.to_string(),
             write_count: 0,
             identity: None,
-            hf: Some(HfFields {
-                uid: uid.to_string(),
-                raw: raw.to_string(),
-            }),
+            hf: Some(hf),
         })
     }
 
@@ -828,19 +886,26 @@ impl Library {
             // to be honest about.
             return WriteCountOutcome::NoSnapshot;
         };
+        bump_confirmed_copies(snapshot, outcome)
+    }
 
-        if outcome.counts_as_confirmed_copy() {
-            snapshot.write_count = snapshot.write_count.saturating_add(1);
-            WriteCountOutcome::Incremented {
-                id: snapshot.id.clone(),
-                write_count: snapshot.write_count,
-            }
-        } else {
-            WriteCountOutcome::Unchanged {
-                id: snapshot.id.clone(),
-                write_count: snapshot.write_count,
-            }
-        }
+    /// Record what one attempted write of one Snapshot's Records turned out to
+    /// be, named by the Snapshot's own id.
+    ///
+    /// A 13.56 MHz write puts a message on **another** Tag, so the Tag it lands
+    /// on carries a different UID and matching by identity would find nothing.
+    /// The count therefore belongs to the Snapshot the Records came from, which
+    /// the caller names.
+    ///
+    /// The counting rule is the same one, and literally the same function, as
+    /// the 125 kHz path's: only a verified write is a copy. A refusal, a
+    /// transmission failure, an erase and a write whose read-back could not
+    /// confirm it leave the count exactly as it was.
+    pub fn record_snapshot_write(&mut self, id: &str, outcome: WriteOutcome) -> WriteCountOutcome {
+        let Some(snapshot) = self.snapshots.iter_mut().find(|s| s.id == id) else {
+            return WriteCountOutcome::NoSnapshot;
+        };
+        bump_confirmed_copies(snapshot, outcome)
     }
 
     /// Rename one Draft. The name is user copy, so it is only trimmed.
@@ -936,6 +1001,20 @@ mod tests {
             write_count: 0,
             identity: None,
             hf: None,
+        }
+    }
+
+    /// A 13.56 MHz read as ticket 09 saves one: every field the read produced.
+    fn hf_read(uid: &str, records: Option<Vec<DraftRecord>>) -> HfFields {
+        HfFields {
+            uid: uid.to_string(),
+            raw: "01 01 04 43 8A 01 22 09 03 1D 00 20 07 44 00 00 02 00 00".to_string(),
+            atqa: Some("44 00".to_string()),
+            sak: Some("00".to_string()),
+            card_type: Some("NTAG215".to_string()),
+            capacity_bytes: Some(504),
+            ndef_formatted: Some(true),
+            records,
         }
     }
 
@@ -1473,7 +1552,19 @@ mod tests {
     fn a_snapshot_written_by_this_build_reads_back_identically() {
         let mut library = Library::empty();
         library.add_lf(0x55, 0x0084_8212, "00 01 01", CAPTURED_AT);
-        library.add_hf("04 A2 2B 3A 5C 6D 80", "00 01 02", CAPTURED_AT);
+        library.add_hf(
+            HfFields {
+                uid: "04 A2 2B 3A 5C 6D 80".to_string(),
+                raw: "00 01 02".to_string(),
+                atqa: None,
+                sak: None,
+                card_type: None,
+                capacity_bytes: None,
+                ndef_formatted: None,
+                records: None,
+            },
+            CAPTURED_AT,
+        );
 
         let bytes = serde_json::to_vec(&library).expect("encode");
         assert_eq!(parse_library(&bytes).map(|read| read.library), Ok(library));
@@ -1798,7 +1889,7 @@ mod tests {
     #[test]
     fn an_hf_read_records_its_uid() {
         let mut library = Library::empty();
-        let snapshot = library.add_hf("04 A2 2B 3A 5C 6D 80", "00 01 02", CAPTURED_AT);
+        let snapshot = library.add_hf(hf_read("04 A2 2B 3A 5C 6D 80", None), CAPTURED_AT);
         let InsertOutcome::Added(snapshot) = snapshot else {
             panic!("a uid not yet in the library is added");
         };
@@ -1806,10 +1897,7 @@ mod tests {
         assert_eq!(snapshot.identity, None);
         assert_eq!(
             snapshot.hf,
-            Some(HfFields {
-                uid: "04 A2 2B 3A 5C 6D 80".to_string(),
-                raw: "00 01 02".to_string(),
-            })
+            Some(hf_read("04 A2 2B 3A 5C 6D 80", None)),
         );
     }
 
@@ -2182,7 +2270,10 @@ mod tests {
         let reopened = LibraryStore::new(&path).open();
         match reopened {
             Open::Opened { library, migration } => {
-                assert_eq!(migration, None, "a v2 file is not migrated again");
+                assert_eq!(
+                    migration, None,
+                    "a file at this build's version is never migrated again"
+                );
                 assert_eq!(library.drafts.len(), 2);
                 assert_eq!(library.snapshots.len(), 2);
             }
@@ -2210,7 +2301,7 @@ mod tests {
 
         let bytes = fs::read(&path).expect("read the file");
         let value: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
-        assert_eq!(value["version"], 2);
+        assert_eq!(value["version"], u64::from(SCHEMA_VERSION));
         assert_eq!(
             value["futureCollection"],
             serde_json::json!([{"kept": true}]),
@@ -2239,7 +2330,7 @@ mod tests {
 
         let bytes = fs::read(&path).expect("read the file");
         let value: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
-        assert_eq!(value["version"], 2);
+        assert_eq!(value["version"], u64::from(SCHEMA_VERSION));
         assert_eq!(
             value["drafts"],
             serde_json::json!([]),
@@ -2345,21 +2436,21 @@ mod tests {
 
     #[test]
     fn a_file_above_this_builds_schema_is_refused_by_open_and_never_rewritten() {
-        // The durable form of this test is "a v1-era build refuses a v2 file",
-        // which cannot be written here: the v1-era build no longer exists. The
+        // The durable form of this test is "a v2-era build refuses a v3 file",
+        // which cannot be written here: the v2-era build no longer exists. The
         // mechanism is the same one either way, so it is proven with a file
         // claiming one version above what this build understands — the exact
-        // position a v1-era build is in when it meets a v2 file.
+        // position a v2-era build is in when it meets a v3 file.
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dir.path().join("library.json");
-        let above = br#"{"version": 3, "snapshots": [], "drafts": [{"id": "from-the-future"}]}"#;
+        let above = br#"{"version": 4, "snapshots": [], "drafts": [{"id": "from-the-future"}]}"#;
         fs::write(&path, above).expect("write a file one version above this build");
 
         let refused = LibraryStore::new(&path).open();
         assert_eq!(
             refused,
             Open::Refused(LibraryProblem::NewerVersion {
-                found: 3,
+                found: 4,
                 supported: SCHEMA_VERSION
             }),
             "a version this build does not understand is refused, not guessed at"
@@ -2533,6 +2624,519 @@ mod tests {
         assert_eq!(
             LibraryStore::new(&path).load().expect("reload again").drafts.len(),
             2
+        );
+    }
+
+    // Ticket 09: a 13.56 MHz read is as durable as a 125 kHz one.
+    //
+    // Saving one keeps the identity, the family, the capacity, the raw bytes and
+    // the message, so a Tag read once can be reviewed months later with no
+    // Reader attached and written from again. The Snapshot is still never
+    // edited except for its name and note: everything below is what the read
+    // produced, and a write recorded here is a count of copies, not a change to
+    // what the Tag held.
+
+    /// One 13.56 MHz read of an NTAG215 holding a Text and a URL Record.
+    fn hf_read_with_two_records() -> (HfFields, Vec<DraftRecord>) {
+        let records = vec![
+            text_record("en", "Hello"),
+            url_record("https://example.com/x"),
+        ];
+        (hf_read("04 A2 2B 3A 5C 6D 80", Some(records.clone())), records)
+    }
+
+    #[test]
+    fn a_saved_hf_read_keeps_every_field_and_its_records_in_order() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        let store = LibraryStore::new(&path);
+        let mut library = store.load().expect("empty library");
+
+        let (hf, records) = hf_read_with_two_records();
+        let InsertOutcome::Added(snapshot) = library.add_hf(hf, CAPTURED_AT) else {
+            panic!("a uid not yet in the library is added");
+        };
+        assert_eq!(snapshot.kind, Kind::HF);
+        assert_eq!(snapshot.id, "04 A2 2B 3A 5C 6D 80");
+        assert_eq!(snapshot.name, "Snapshot 1");
+        assert_eq!(snapshot.identity, None, "a 13.56 MHz read carries no Identity");
+        let held = snapshot.hf.as_ref().expect("hf fields");
+        assert_eq!(held.atqa.as_deref(), Some("44 00"));
+        assert_eq!(held.sak.as_deref(), Some("00"));
+        assert_eq!(held.card_type.as_deref(), Some("NTAG215"));
+        assert_eq!(held.capacity_bytes, Some(504));
+        assert_eq!(held.ndef_formatted, Some(true));
+        assert_eq!(held.records.as_ref(), Some(&records));
+
+        store.save(&library).expect("save");
+
+        // A fresh handle, as the next launch of the app would use.
+        let reopened = LibraryStore::new(&path).load().expect("reload");
+        assert_eq!(
+            reopened.snapshots,
+            vec![snapshot],
+            "every field of a 13.56 MHz Snapshot survives a restart"
+        );
+        let after = reopened.snapshots[0].hf.as_ref().expect("hf fields");
+        let kept = after.records.as_ref().expect("the Records were recorded");
+        assert_eq!(
+            kept.iter().map(|r| r.kind.as_str()).collect::<Vec<_>>(),
+            vec!["text", "url"],
+            "the Records keep the order the Tag holds them in"
+        );
+        assert_eq!(kept[0].fields["text"], "Hello");
+        assert_eq!(kept[1].fields["url"], "https://example.com/x");
+    }
+
+    #[test]
+    fn saving_an_hf_read_already_in_the_library_does_not_duplicate_it() {
+        let mut library = Library::empty();
+        let (hf, _) = hf_read_with_two_records();
+        let InsertOutcome::Added(first) = library.add_hf(hf, CAPTURED_AT) else {
+            panic!("a new read is added");
+        };
+
+        // The same Tag read again, later, with a different message on it. The
+        // key is the UID, so this is the same read of the same Tag and the
+        // first Snapshot is kept as it was.
+        let (mut again, _) = hf_read_with_two_records();
+        again.records = Some(vec![url_record("https://example.com/y")]);
+        let outcome = library.add_hf(again, "2026-11-22T10:00:00.000Z");
+
+        assert_eq!(outcome, InsertOutcome::Duplicate(first.clone()));
+        assert_eq!(library.snapshots.len(), 1, "no second copy of the same Tag");
+        assert_eq!(
+            library.snapshots[0].captured_at, CAPTURED_AT,
+            "the first read is kept"
+        );
+    }
+
+    #[test]
+    fn saving_a_different_hf_tag_is_a_different_snapshot() {
+        let mut library = Library::empty();
+        let (first, _) = hf_read_with_two_records();
+        saved_hf(&mut library, first);
+        saved_hf(&mut library, hf_read("04 A2 2B 3A 5C 6D 81", Some(vec![])));
+
+        assert_eq!(library.snapshots.len(), 2);
+        assert_eq!(library.snapshots[1].name, "Snapshot 2");
+    }
+
+    fn saved_hf(library: &mut Library, hf: HfFields) -> Snapshot {
+        match library.add_hf(hf, CAPTURED_AT) {
+            InsertOutcome::Added(snapshot) => snapshot,
+            InsertOutcome::Duplicate(existing) => panic!("unexpected duplicate: {existing:?}"),
+        }
+    }
+
+    #[test]
+    fn an_hf_snapshot_writes_what_was_read_in_camel_case() {
+        let mut library = Library::empty();
+        let (hf, _) = hf_read_with_two_records();
+        saved_hf(&mut library, hf);
+
+        let json = serde_json::to_value(&library).expect("serialises");
+        assert_eq!(json["version"], SCHEMA_VERSION);
+        let hf = &json["snapshots"][0]["hf"];
+        assert_eq!(hf["uid"], "04 A2 2B 3A 5C 6D 80");
+        assert_eq!(hf["atqa"], "44 00");
+        assert_eq!(hf["sak"], "00");
+        assert_eq!(hf["cardType"], "NTAG215");
+        assert_eq!(hf["capacityBytes"], 504);
+        assert_eq!(hf["ndefFormatted"], true);
+        assert_eq!(hf["records"][0]["kind"], "text");
+        assert_eq!(hf["records"][1]["fields"]["url"], "https://example.com/x");
+    }
+
+    #[test]
+    fn an_hf_read_that_holds_no_records_keeps_an_empty_list_not_an_absent_field() {
+        // "No Records" and "not fetched" are different answers to different
+        // questions, and the file says which one it is: a Tag that was read and
+        // holds nothing keeps `[]`.
+        let mut library = Library::empty();
+        saved_hf(&mut library, hf_read("04 A2 2B 3A 5C 6D 80", Some(vec![])));
+
+        let json = serde_json::to_value(&library).expect("serialises");
+        assert_eq!(json["snapshots"][0]["hf"]["records"], serde_json::json!([]));
+    }
+
+    #[test]
+    fn an_hf_read_whose_message_was_never_read_omits_the_records_key() {
+        // Not `[]`: this build has no list, and writing one would claim the Tag
+        // carries no Records when nobody read it.
+        let mut library = Library::empty();
+        saved_hf(&mut library, hf_read("04 A2 2B 3A 5C 6D 80", None));
+
+        let json = serde_json::to_value(&library).expect("serialises");
+        assert!(
+            json["snapshots"][0]["hf"].get("records").is_none(),
+            "an unread message is absent, not an empty list: {}",
+            json["snapshots"][0]["hf"]
+        );
+    }
+
+    // Confirmed copies of a Saved 13.56 MHz message. The destination of a write
+    // is another Tag, so the copy is counted against the Snapshot the Records
+    // came from, named by its own id.
+
+    #[test]
+    fn a_verified_write_of_an_hf_snapshots_records_counts_one_confirmed_copy() {
+        let mut library = Library::empty();
+        let (hf, _) = hf_read_with_two_records();
+        let snapshot = saved_hf(&mut library, hf);
+
+        let outcome = library.record_snapshot_write(&snapshot.id, WriteOutcome::Verified);
+        assert_eq!(
+            outcome,
+            WriteCountOutcome::Incremented {
+                id: snapshot.id.clone(),
+                write_count: 1
+            }
+        );
+        assert_eq!(library.snapshots[0].write_count, 1);
+
+        library.record_snapshot_write(&snapshot.id, WriteOutcome::Verified);
+        assert_eq!(library.snapshots[0].write_count, 2);
+        assert_eq!(
+            library.snapshots[0].hf, snapshot.hf,
+            "writing the Records to another Tag leaves the Snapshot's own reading alone"
+        );
+    }
+
+    #[test]
+    fn a_write_of_an_hf_snapshot_that_could_not_be_verified_never_counts_a_copy() {
+        // The one rule, applied to this band too: a refusal, a write that never
+        // reached the device, a write the read-back could not confirm, and the
+        // two destructive outcomes all leave the count exactly where it was.
+        for outcome in [
+            WriteOutcome::Refused,
+            WriteOutcome::Failed,
+            WriteOutcome::Unverified,
+            WriteOutcome::Erased,
+            WriteOutcome::Blanked,
+        ] {
+            let mut library = Library::empty();
+            let (hf, _) = hf_read_with_two_records();
+            let snapshot = saved_hf(&mut library, hf);
+            let before = library.snapshots[0].clone();
+
+            let recorded = library.record_snapshot_write(&snapshot.id, outcome);
+            assert_eq!(
+                recorded,
+                WriteCountOutcome::Unchanged {
+                    id: snapshot.id.clone(),
+                    write_count: 0
+                },
+                "{outcome:?} counted a copy"
+            );
+            assert!(!recorded.incremented());
+            assert_eq!(
+                library.snapshots[0], before,
+                "{outcome:?} changed the Snapshot"
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_verified_readback_raises_an_hf_snapshots_count_whichever_evidence_arrives() {
+        // The joined rule, as ticket 09's seam states it: evidence -> outcome ->
+        // count. Every outcome except a matching read-back leaves the count
+        // exactly where it was, so a failed verification cannot count a copy of
+        // a message nobody proved is on another Tag.
+        use crate::write_outcome::{classify, Evidence};
+
+        let target = |customer: u8, data32: u32| Identity { customer, data32 };
+        let cases = [
+            (Evidence::Refused, 0),
+            (Evidence::NotTransmitted, 0),
+            (Evidence::Declined, 0),
+            (Evidence::ReadbackUnreadable, 0),
+            (Evidence::Readback(None), 0),
+            (Evidence::Readback(Some(target(0x77, 0x0053_C7B3))), 0),
+            (Evidence::Readback(Some(target(0x55, 0x0084_8212))), 1),
+        ];
+
+        for (evidence, expected) in cases {
+            let mut library = Library::empty();
+            let (hf, _) = hf_read_with_two_records();
+            let snapshot = saved_hf(&mut library, hf);
+            let outcome = classify(evidence, target(0x55, 0x0084_8212));
+            library.record_snapshot_write(&snapshot.id, outcome);
+            assert_eq!(
+                library.snapshots[0].write_count, expected,
+                "evidence {evidence:?} produced {outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_write_naming_an_unknown_snapshot_counts_nothing() {
+        let mut library = Library::empty();
+        let (hf, _) = hf_read_with_two_records();
+        saved_hf(&mut library, hf);
+
+        assert_eq!(
+            library.record_snapshot_write("no such snapshot", WriteOutcome::Verified),
+            WriteCountOutcome::NoSnapshot
+        );
+        assert_eq!(library.snapshots[0].write_count, 0);
+    }
+
+    #[test]
+    fn the_confirmed_copy_count_of_an_hf_snapshot_survives_reopening() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        let store = LibraryStore::new(&path);
+        let (library, saved) = store
+            .update(|library| {
+                let (hf, _) = hf_read_with_two_records();
+                let snapshot = saved_hf(library, hf);
+                library.record_snapshot_write(&snapshot.id, WriteOutcome::Verified);
+                snapshot
+            })
+            .expect("save the read and its copy");
+
+        let after = store.load().expect("reload");
+        assert_eq!(after.snapshots[0].write_count, 1);
+        assert_eq!(after.snapshots[0].id, saved.id);
+        assert_eq!(
+            serde_json::to_value(&after).expect("serialises")["snapshots"][0]["writeCount"],
+            1
+        );
+        assert_eq!(library.version, SCHEMA_VERSION);
+    }
+
+    // Ticket 09 / ADR 0005: the schema version is 3. A v2 file is lifted on the
+    // first successful open, and a v1 file walks 1 → 2 → 3 in that same open,
+    // so the file's stated version agrees with its contents before anything can
+    // edit it. Every key is preserved and every entry keeps its place.
+
+    /// A library file exactly as the version 2 build wrote it: Drafts in the
+    /// file, the version claim at 2, and a 13.56 MHz Snapshot in the only shape
+    /// that build knew — a UID and the raw reply.
+    ///
+    /// The v2 build could not create such a Snapshot through the app (the store
+    /// exposed only the 125 kHz save path), so this is the hand-edited case the
+    /// spec names. It is written out rather than generated because a migration
+    /// proven against a shape this build invented proves nothing.
+    const V2_LIBRARY: &str = r#"{
+  "version": 2,
+  "snapshots": [
+    {
+      "id": "04 A2 2B 3A 5C 6D 80",
+      "name": "Back gate",
+      "note": "",
+      "kind": "HF",
+      "capturedAt": "2026-11-21T10:00:00.000Z",
+      "writeCount": 3,
+      "hf": { "uid": "04 A2 2B 3A 5C 6D 80", "raw": "01 01 04 43 8A 01 22 09" }
+    },
+    {
+      "id": "55 00 84 82 12",
+      "name": "Front door",
+      "note": "gate 3",
+      "kind": "LF",
+      "capturedAt": "2026-11-21T09:30:00.000Z",
+      "writeCount": 2,
+      "identity": {
+        "customer": 85,
+        "data32": 8684050,
+        "facility": 132,
+        "card": 33298,
+        "raw": "00 01 01"
+      }
+    }
+  ],
+  "drafts": [
+    { "id": "draft-2", "name": "Roof", "updatedAt": "2026-11-21T12:00:00.000Z", "records": [] },
+    { "id": "draft-1", "name": "Lobby", "updatedAt": "2026-11-21T11:00:00.000Z", "records": [] }
+  ],
+  "tags": ["Front door", "Back gate"],
+  "futureCollection": [{ "kept": true }]
+}"#;
+
+    fn written_v2_file(path: &Path) {
+        fs::write(path, V2_LIBRARY).expect("write a version 2 library");
+    }
+
+    #[test]
+    fn opening_a_v2_file_lifts_it_to_v3_with_every_key_and_every_entry_in_order() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        written_v2_file(&path);
+
+        let library = match LibraryStore::new(&path).open() {
+            Open::Opened { library, migration } => {
+                assert_eq!(
+                    migration,
+                    Some(Lifted::Written { from: 2 }),
+                    "the lift was written on open, and says which version it came from"
+                );
+                library
+            }
+            Open::Refused(problem) => panic!("a v2 file is lifted, not refused: {problem:?}"),
+        };
+
+        assert_eq!(library.version, SCHEMA_VERSION);
+        assert_eq!(
+            library.snapshots.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(),
+            vec!["Back gate", "Front door"],
+            "every Snapshot, in the order the file held them"
+        );
+        assert_eq!(
+            library.drafts.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            vec!["draft-2", "draft-1"],
+            "every Draft, in the order the file held them — not sorted"
+        );
+        assert_eq!(library.snapshots[0].write_count, 3, "a count is not reset");
+
+        // The file itself is what the next launch — and an older build — meet.
+        assert_eq!(version_on_disk(&path), u64::from(SCHEMA_VERSION));
+        assert_eq!(
+            key_on_disk(&path, "tags"),
+            serde_json::json!(["Front door", "Back gate"]),
+            "a key this build does not model is carried through the lift"
+        );
+        assert_eq!(
+            key_on_disk(&path, "futureCollection"),
+            serde_json::json!([{ "kept": true }])
+        );
+
+        // Opening again is not a second migration: the file already agrees.
+        match LibraryStore::new(&path).open() {
+            Open::Opened { library, migration } => {
+                assert_eq!(migration, None);
+                assert_eq!(library.snapshots.len(), 2);
+                assert_eq!(library.drafts.len(), 2);
+            }
+            Open::Refused(problem) => panic!("the lifted file must read back: {problem:?}"),
+        }
+    }
+
+    #[test]
+    fn a_v2_hf_snapshot_keeps_the_fields_that_shape_never_carried_absent() {
+        // The spec's hand-edited case: a v2 file that somehow holds a 13.56 MHz
+        // Snapshot. The fields schema 3 expects and schema 2 never held are left
+        // absent — never filled with a plausible card type, capacity or NDEF
+        // status — and the readout says they were not recorded.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        written_v2_file(&path);
+
+        assert!(matches!(
+            LibraryStore::new(&path).open(),
+            Open::Opened { .. }
+        ));
+
+        let library = LibraryStore::new(&path).load().expect("reload");
+        let hf = library.snapshots[0].hf.as_ref().expect("the hf fields");
+        assert_eq!(hf.uid, "04 A2 2B 3A 5C 6D 80");
+        assert_eq!(hf.raw, "01 01 04 43 8A 01 22 09");
+        assert_eq!(hf.atqa, None, "an ATQA the file never held is not invented");
+        assert_eq!(hf.sak, None);
+        assert_eq!(hf.card_type, None);
+        assert_eq!(hf.capacity_bytes, None);
+        assert_eq!(hf.ndef_formatted, None);
+        assert_eq!(
+            hf.records, None,
+            "no list was recorded, so there is none — not an empty one"
+        );
+
+        // And the file says exactly that much: the lift is a change of version
+        // claim, not a rebuild that stamps defaults onto every Snapshot.
+        let entry = &key_on_disk(&path, "snapshots")[0]["hf"];
+        assert_eq!(entry["uid"], "04 A2 2B 3A 5C 6D 80");
+        assert_eq!(entry["raw"], "01 01 04 43 8A 01 22 09");
+        for key in [
+            "atqa",
+            "sak",
+            "cardType",
+            "capacityBytes",
+            "ndefFormatted",
+            "records",
+        ] {
+            assert!(
+                entry.get(key).is_none(),
+                "{key} was written into a Snapshot that never carried it: {entry}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_v2_file_whose_lift_cannot_be_written_is_reported_and_the_library_stays_usable() {
+        // A failed write, not a failed read: the library was read whole, so
+        // refusing to open it would trade a small risk for a guaranteed loss.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        written_v2_file(&path);
+
+        // The staging path is a directory, so the replacement cannot be staged.
+        let staged = atomic_file::staging_path(&path);
+        fs::create_dir(&staged).expect("block the staging path");
+
+        let (library, migration) = match LibraryStore::new(&path).open() {
+            Open::Opened { library, migration } => (library, migration),
+            Open::Refused(problem) => panic!("a failed write is not a refusal: {problem:?}"),
+        };
+        let reported = migration.clone().expect("the failed lift is reported");
+        assert!(matches!(reported, Lifted::Unwritten { from: 2, .. }));
+        let message = reported.message().expect("a failed lift has something to say");
+        assert!(message.contains("could not be rewritten"), "{message}");
+        assert!(message.contains("saving will correct the file"), "{message}");
+
+        // The migrated library is in memory, whole, and usable.
+        assert_eq!(library.version, SCHEMA_VERSION);
+        assert_eq!(library.snapshots.len(), 2);
+        assert_eq!(library.drafts.len(), 2);
+        assert_eq!(version_on_disk(&path), 2, "the file still claims version 2");
+
+        // Clearing the obstruction lets the next save correct the claim, and
+        // the Snapshots it writes are the ones the failed lift produced.
+        fs::remove_dir(&staged).expect("clear the obstruction");
+        LibraryStore::new(&path).save(&library).expect("save");
+        assert_eq!(version_on_disk(&path), u64::from(SCHEMA_VERSION));
+        let after = LibraryStore::new(&path).load().expect("reload");
+        assert_eq!(after.snapshots, library.snapshots);
+        assert_eq!(after.drafts, library.drafts);
+    }
+
+    #[test]
+    fn opening_a_v1_file_walks_one_to_two_to_three_in_one_open() {
+        // Two versions behind, and the walk is one operation: nobody sees a v2
+        // library in memory, and the file never claims 2 on its way to 3.
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        fs::write(&path, V1_WITH_DRAFTS).expect("write a version 1 library");
+
+        let library = match LibraryStore::new(&path).open() {
+            Open::Opened { library, migration } => {
+                assert_eq!(migration, Some(Lifted::Written { from: 1 }));
+                library
+            }
+            Open::Refused(problem) => panic!("a v1 file is lifted, not refused: {problem:?}"),
+        };
+
+        assert_eq!(library.version, SCHEMA_VERSION);
+        assert_eq!(
+            version_on_disk(&path),
+            3,
+            "the file is written once, at the version the walk ended on"
+        );
+        // The v1 fixture's 13.56 MHz Snapshot is in the old shape too, so the
+        // walk leaves its schema-3 fields absent rather than inventing them.
+        let hf = library
+            .snapshots
+            .iter()
+            .find(|s| s.kind == Kind::HF)
+            .and_then(|s| s.hf.as_ref())
+            .expect("the v1 file's HF Snapshot");
+        assert_eq!(hf.uid, "04 A2 2B 3A 5C 6D 80");
+        assert_eq!(hf.card_type, None);
+        assert_eq!(hf.records, None);
+        assert_eq!(
+            library.drafts.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(),
+            vec!["draft-2", "draft-1"],
+            "the walk kept the Drafts in order"
         );
     }
 }
