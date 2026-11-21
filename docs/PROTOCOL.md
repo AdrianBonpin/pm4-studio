@@ -546,8 +546,40 @@ block into `0x10..0x30`, the `0x0083` request's page index and flags, and closin
 the read cycle first with the `0x0051` payload-`00` variant. Only the selector
 mattered.
 
-Only a **single page** was written here. Writing a whole NDEF message across
-several pages, and the multi-page state table that goes with it, is untested.
+**The state table is not limited to one page.** Several consecutive pages marked
+`2` in a single request are all written; ticket 18 exercised that on hardware and
+records it below.
+
+**Multi-page write — VERIFIED (ticket 18, 2026-11-21).** Three requests on the
+NTAG215 above (`04 43 7B 01 CC 09 03`, CC `E1 10 3E 00`), sent through the
+shipping path (`src-tauri/src/ntag.rs`, probe
+`cargo run --example ndefwrite -- --yes-disposable`):
+
+| Request (NDEF message inside a Type 2 TLV) | Pages marked `2` | Reply | Read-back |
+|---|---|---|---|
+| `03 09 D1 01 54 05 02 65 6E 68 69 FE` — a 9-byte Text message | 4, 5, 6 | status `0`, one `0x0085` frame per page | the 9 bytes, byte for byte |
+| `03 2F D1 01 54 2B … FE` — a 47-byte Text message | 4 … 16 | status `0`, 13 `0x0085` frames | the 47 bytes, byte for byte |
+| the 9-byte message again, written over the 47-byte one | 4 … 16 | status `0`, 13 `0x0085` frames | the 9 bytes, then zeros |
+
+The third row is the replacing case, which is what an NDEF write is: the request
+covers the union of the new message's pages and the pages the previous message
+occupied, and everything after the new terminator is zero. A **separate process**
+read that tag afterwards and saw pages 4..6 = `03 09 D1 01 / 54 05 02 65 /
+6E 68 69 FE` and pages 7..16 all `00 00 00 00`.
+
+Pages 0..3 read identically before and after every request — `04 43 7B B4 /
+01 CC 09 03 / C7 48 00 00 / E1 10 3E 00` — so a multi-page write leaves the UID,
+the BCC bytes, the static lock bytes and the Capability Container alone.
+
+A message larger than the CC's capacity was refused before any write frame
+existed: 500 message bytes, i.e. 505 bytes of TLV, against 496. The tag was
+unchanged afterwards, so capacity is enforced by reading the CC rather than by
+asking the firmware and hoping.
+
+What is still not exercised: a message that fills the whole 496 bytes (124
+pages), and a write in which one page reports state `4` while its neighbours
+succeed. Neither is needed to write a normal message; both are recorded here so
+the gap is visible rather than assumed away.
 
 ### `0x0084` — format — NOT ATTEMPTED
 
@@ -585,9 +617,9 @@ no-tag payloads contain. ATQA/SAK offsets therefore remain **unconfirmed** for
 1. **ATQA/SAK offsets** for the HF poll tail. A latched NTAG215 poll was captured
    (above) and its tail does not resemble ATQA/SAK, so ticket 12's capture still
    has to settle where those fields are — or that they are not transmitted.
-2. **Multi-page writes.** One page was written and verified. An NDEF message spans
-   several pages and needs several state-table entries set at once; that shape has
-   not been exercised.
+2. **Multi-page writes — solved.** Ticket 18 marked up to 13 consecutive pages in
+   one request and read every byte back; see the table in the `0x0082` section.
+   Unexercised: filling the whole 496 bytes, and a page that fails mid-write.
 3. **What the write-path tag selector means.** `0x0082` accepts `0..4` and rejects
    `5` and above, while `0x0083` reports `5` for the same NTAG215. Values 3 and 4
    are indistinguishable on a single-page write, so the selector's meaning is
@@ -614,6 +646,8 @@ Solved: **NTAG read** — `0x0081`, verified against the poll UID, the tag's own
 BCC bytes, the Type 2 CC and a decoded NDEF record.
 Solved: **NTAG write** — `0x0082`, one page written and read back from a separate
 process, see the write section.
+Solved: **multi-page NTAG write** — up to 13 pages marked `2` in one `0x0082`
+request, written and read back, see the write section.
 
 ## Spike 16 finding — NTAG viability
 
@@ -647,8 +681,9 @@ write landed on the very same class of tag.
 
 **The ADR 0002 gate is therefore cleared.** A write was observed to land and was
 confirmed by a later read, which is exactly what the ADR required. Slices that
-depend on writing 13.56 MHz tags — tickets 18 to 22 — may begin, subject to the
-multi-page work noted in the open problems.
+depend on writing 13.56 MHz tags — tickets 18 to 22 — may begin. Ticket 18 has
+since closed the multi-page question the spike left open: several pages marked
+`2` in one request are written and read back (see the `0x0082` section).
 
 ## Legal
 

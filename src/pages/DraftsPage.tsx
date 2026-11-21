@@ -3,6 +3,7 @@ import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Section } from "../components/Section";
+import { WriteDraftToTag } from "../components/WriteDraftToTag";
 import { useDrafts } from "../hooks/useDrafts";
 import {
   DRAFT_NOT_A_TAG_NOTICE,
@@ -49,7 +50,7 @@ function draftSize(draft: Draft): number | null {
  * constantly and belongs to no Tag. Showing them in one list would make "my
  * tags" mean two different things.
  */
-export function DraftsPage() {
+export function DraftsPage({ connected }: { connected: boolean }) {
   const drafts = useDrafts();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
@@ -296,6 +297,8 @@ export function DraftsPage() {
           </div>
         </Section>
       )}
+
+      {selected && <WriteDraftToTag draft={selected} connected={connected} />}
     </div>
   );
 }

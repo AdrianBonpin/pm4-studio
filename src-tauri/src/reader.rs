@@ -304,11 +304,30 @@ impl Reader {
     /// gives up if they are more than ~64 ms apart, so they go back to back.
     /// Build the bytes with [`crate::stream::encode_frame`].
     fn write_frame_bytes(&self, frame: &[u8]) -> Result<(), String> {
-        for report in split_reports(frame) {
+        self.write_frame_paced(frame, std::time::Duration::ZERO)
+    }
+
+    /// Write a frame of any length as consecutive 64-byte reports, pausing
+    /// `gap` between them.
+    ///
+    /// The pause exists because inter-report pacing matters outbound: the spike
+    /// proved a 5 ms gap between the 21 reports of an NTAG write is accepted and
+    /// a 64 ms gap makes the firmware give up on the frame entirely
+    /// (docs/PROTOCOL.md). Every other command fits in one report, so it asks
+    /// for no gap at all.
+    pub fn write_frame_paced(
+        &self,
+        frame: &[u8],
+        gap: std::time::Duration,
+    ) -> Result<(), String> {
+        for (index, report) in split_reports(frame).iter().enumerate() {
+            if index > 0 && !gap.is_zero() {
+                std::thread::sleep(gap);
+            }
             // hidapi on macOS wants the report id as byte 0, which is 0 for
             // this unnumbered report device.
             let mut buf = [0u8; REPORT_LEN + 1];
-            buf[1..].copy_from_slice(&report);
+            buf[1..].copy_from_slice(report);
             self.dev
                 .write(&buf)
                 .map_err(|e| format!("USB write failed: {e}"))?;

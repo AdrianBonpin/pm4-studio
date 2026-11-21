@@ -85,6 +85,11 @@ pub enum Evidence {
     Refused,
     /// The write command could not be transmitted.
     NotTransmitted,
+    /// The device accepted the frame and declined the operation, so nothing was
+    /// written. `0x0082` answers status `32` this way for a tag selector outside
+    /// `0..=4` (docs/PROTOCOL.md), which is a refusal to act rather than an
+    /// attempt whose result is unknown.
+    Declined,
     /// The write was transmitted; this is what the Tag read back, if anything.
     /// `None` means the read-back reported no Identity, which is a blanked Tag
     /// for a blanking write and an unknown result for a copying one.
@@ -97,15 +102,16 @@ pub enum Evidence {
 /// Classify one attempt from its evidence and the Identity it was aiming at.
 pub fn classify(evidence: Evidence, target: Identity) -> WriteOutcome {
     match evidence {
-        Evidence::Refused => WriteOutcome::Refused,
-        Evidence::NotTransmitted => WriteOutcome::Failed,
-        Evidence::Readback(Some(found)) if found == target => WriteOutcome::Verified,
-        // Sent, but the tag read back as nothing or as something else: the
-        // write happened and its result is unknown.
-        Evidence::Readback(_) => WriteOutcome::Unverified,
-        // Sent, but nothing could be read back: unknown, exactly as for a
-        // read-back that reported something else.
-        Evidence::ReadbackUnreadable => WriteOutcome::Unverified,
+        Evidence::Readback(Some(found)) => {
+            classify_evidence(JudgedEvidence::Readback(Some(found == target)))
+        }
+        Evidence::Readback(None) => classify_evidence(JudgedEvidence::Readback(None)),
+        Evidence::Refused => classify_evidence(JudgedEvidence::Refused),
+        Evidence::NotTransmitted => classify_evidence(JudgedEvidence::NotTransmitted),
+        Evidence::Declined => classify_evidence(JudgedEvidence::NotTransmitted),
+        // Sent, but the Tag could not be read back at all: nothing is known
+        // about what it carries, so this is unknown and never a failure.
+        Evidence::ReadbackUnreadable => classify_evidence(JudgedEvidence::Readback(None)),
     }
 }
 
@@ -128,12 +134,44 @@ pub fn classify_blank(evidence: Evidence) -> WriteOutcome {
     match evidence {
         Evidence::Refused => WriteOutcome::Refused,
         Evidence::NotTransmitted => WriteOutcome::Failed,
+        // The device declined to act, so nothing was written and the Tag still
+        // carries its Identity: the blank did not take.
+        Evidence::Declined => WriteOutcome::Failed,
         Evidence::Readback(None) => WriteOutcome::Blanked,
         // A Tag that still presents an Identity was not blanked. Any Identity
         // counts here, including a different one: a read-back that reports an
         // Identity at all is not a blank.
         Evidence::Readback(Some(_)) => WriteOutcome::Failed,
         Evidence::ReadbackUnreadable => WriteOutcome::Unverified,
+    }
+}
+
+/// The same evidence, with the read-back already judged as "this is the thing
+/// that was being written" or not.
+///
+/// A Draft write aims at a whole NDEF message rather than an Identity, so it
+/// cannot hand over an `Identity` to compare. Judging the read-back is the only
+/// part that differs, and it happens in one place per target kind; the rule that
+/// turns the result into an outcome stays here.
+pub enum JudgedEvidence {
+    /// Nothing was transmitted.
+    Refused,
+    /// The write could not be transmitted, or the device declined to act.
+    NotTransmitted,
+    /// The write was transmitted; `Some(true)` means the read-back presented
+    /// exactly what was written.
+    Readback(Option<bool>),
+}
+
+/// Classify one attempt from evidence that has already been judged.
+pub fn classify_evidence(evidence: JudgedEvidence) -> WriteOutcome {
+    match evidence {
+        JudgedEvidence::Refused => WriteOutcome::Refused,
+        JudgedEvidence::NotTransmitted => WriteOutcome::Failed,
+        JudgedEvidence::Readback(Some(true)) => WriteOutcome::Verified,
+        // Sent, but the tag did not read back as what was written: the write
+        // happened and its result is unknown.
+        JudgedEvidence::Readback(_) => WriteOutcome::Unverified,
     }
 }
 
@@ -147,6 +185,7 @@ mod tests {
             data32: 0x0084_8212,
         }
     }
+
 
     fn other() -> Identity {
         Identity {
@@ -200,6 +239,55 @@ mod tests {
         let outcome = classify(Evidence::NotTransmitted, target());
         assert_eq!(outcome, WriteOutcome::Failed);
         assert!(!outcome.counts_as_confirmed_copy());
+    }
+
+    #[test]
+    fn a_request_the_device_declined_is_not_treated_as_unknown() {
+        // `0x0082` answers status 32 for a bad tag selector and writes nothing
+        // (docs/PROTOCOL.md), so the Tag is not left in an unknown state.
+        let outcome = classify(Evidence::Declined, target());
+        assert_eq!(outcome, WriteOutcome::Failed);
+        assert!(!outcome.is_unknown());
+        assert!(!outcome.counts_as_confirmed_copy());
+    }
+
+    // ---- judged evidence, which is how a Draft write classifies ----------
+
+    #[test]
+    fn a_judged_readback_that_matches_what_was_written_is_verified() {
+        assert_eq!(
+            classify_evidence(JudgedEvidence::Readback(Some(true))),
+            WriteOutcome::Verified
+        );
+    }
+
+    #[test]
+    fn a_judged_readback_that_differs_is_unknown_not_failed() {
+        // A whole NDEF message that reads back different is still a Tag that
+        // may hold part of it: unverified, never a definitive failure.
+        let outcome = classify_evidence(JudgedEvidence::Readback(Some(false)));
+        assert_eq!(outcome, WriteOutcome::Unverified);
+        assert!(outcome.is_unknown());
+        assert!(!outcome.counts_as_confirmed_copy());
+    }
+
+    #[test]
+    fn a_judged_readback_that_never_happened_is_unknown() {
+        let outcome = classify_evidence(JudgedEvidence::Readback(None));
+        assert_eq!(outcome, WriteOutcome::Unverified);
+        assert!(!outcome.counts_as_confirmed_copy());
+    }
+
+    #[test]
+    fn judged_refusal_and_non_transmission_keep_their_meanings() {
+        assert_eq!(
+            classify_evidence(JudgedEvidence::Refused),
+            WriteOutcome::Refused
+        );
+        assert_eq!(
+            classify_evidence(JudgedEvidence::NotTransmitted),
+            WriteOutcome::Failed
+        );
     }
 
     #[test]
