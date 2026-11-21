@@ -61,7 +61,32 @@ export interface Backend {
 interface FakeIpc {
   invoke(command: string, args?: Record<string, unknown>): Promise<unknown>;
   transformCallback(callback: unknown): unknown;
+  /**
+   * What the webview knows about the window it is in. `getCurrentWindow()` reads
+   * the label from here before it sends anything, so a component that intercepts
+   * the close request needs it to exist. One window, named as the capability
+   * names it.
+   */
+  metadata: {
+    currentWindow: { label: string };
+    currentWebview: { windowLabel: string; label: string };
+  };
 }
+
+/**
+ * What the event plugin answers before a test says otherwise.
+ *
+ * Registering and unregistering a listener is plumbing `@tauri-apps/api` does on
+ * its own the moment a page listens for anything: it is not a command the app
+ * chose to send, and a page that listens would fail on mount without it. The
+ * calls are still recorded with the rest, so a test that wants to see them can.
+ * Every command the app itself issues — the window actions included — still has
+ * to be scripted.
+ */
+const EVENT_PLUGIN_ANSWERS: Record<string, CommandAnswer> = {
+  "plugin:event|listen": () => 1,
+  "plugin:event|unlisten": () => null,
+};
 
 /**
  * Install the fake backend at the IPC boundary and return its call log.
@@ -70,7 +95,7 @@ interface FakeIpc {
  * nobody scripted: the default is a loud failure, not `undefined`.
  */
 export function fakeBackend(answers: Record<string, CommandAnswer> = {}): Backend {
-  const handlers = new Map(Object.entries(answers));
+  const handlers = new Map(Object.entries({ ...EVENT_PLUGIN_ANSWERS, ...answers }));
   const calls: SentCommand[] = [];
 
   const ipc: FakeIpc = {
@@ -86,10 +111,27 @@ export function fakeBackend(answers: Record<string, CommandAnswer> = {}): Backen
     },
     // Only `Channel` construction needs this, and nothing under test uses one.
     transformCallback: (callback) => callback,
+    // The one window `tauri.conf.json` declares: `getCurrentWindow()` reads the
+    // label from here, and the window it hands back sends its commands under it.
+    metadata: {
+      currentWindow: { label: "main" },
+      currentWebview: { windowLabel: "main", label: "main" },
+    },
   };
 
   Object.defineProperty(window, "__TAURI_INTERNALS__", {
     value: ipc,
+    writable: true,
+    configurable: true,
+  });
+
+  // The webview's other half of event listening, installed beside the IPC
+  // boundary by Tauri itself. `unlisten` calls it directly rather than through a
+  // command, so a component that unregisters on unmount reaches it first. Nothing
+  // is registered here — `transformCallback` above hands the handler straight
+  // back — so there is nothing to drop.
+  Object.defineProperty(window, "__TAURI_EVENT_PLUGIN_INTERNALS__", {
+    value: { unregisterListener: (_event: string, _eventId: number) => {} },
     writable: true,
     configurable: true,
   });
@@ -128,4 +170,6 @@ afterEach(() => {
   // The boundary belongs to the webview, not to the test runner: leaving it
   // behind would make `isTauri()` true in a test that never asked for it.
   delete (window as { __TAURI_INTERNALS__?: unknown }).__TAURI_INTERNALS__;
+  delete (window as { __TAURI_EVENT_PLUGIN_INTERNALS__?: unknown })
+    .__TAURI_EVENT_PLUGIN_INTERNALS__;
 });

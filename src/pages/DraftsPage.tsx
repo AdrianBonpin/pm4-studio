@@ -5,6 +5,8 @@ import { Input } from "../components/ui/Input";
 import { Section } from "../components/Section";
 import { LoadTagIntoDraft } from "../components/LoadTagIntoDraft";
 import { WriteDraftToTag } from "../components/WriteDraftToTag";
+import { DraftClosePrompt } from "../components/DraftClosePrompt";
+import { useCloseGuard } from "../hooks/useCloseGuard";
 import { useDrafts } from "../hooks/useDrafts";
 import {
   DRAFT_NOT_A_TAG_NOTICE,
@@ -53,6 +55,10 @@ function draftSize(draft: Draft): number | null {
  */
 export function DraftsPage({ connected }: { connected: boolean }) {
   const drafts = useDrafts();
+  // Closing the window is not an unmount, so the queue is written from the one
+  // place the app is told a close is coming. Edits live only while this page is
+  // mounted; leaving it flushes them on the way out.
+  const closeGuard = useCloseGuard(drafts.settle);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -78,6 +84,14 @@ export function DraftsPage({ connected }: { connected: boolean }) {
 
   return (
     <div className="flex flex-col gap-8">
+      {closeGuard.problem && (
+        <DraftClosePrompt
+          problem={closeGuard.problem}
+          onQuitAnyway={closeGuard.quitAnyway}
+          onKeepEditing={closeGuard.keepEditing}
+        />
+      )}
+
       <Section
         title="Drafts"
         hint="A Draft is a message you compose before a Tag is in hand. It holds Records in order and is not attached to any Tag."

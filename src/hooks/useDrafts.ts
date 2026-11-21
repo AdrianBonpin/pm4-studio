@@ -27,6 +27,14 @@ export interface DraftsState {
   setRecords: (id: string, records: DraftRecord[]) => void;
   remove: (id: string) => Promise<void>;
   reload: () => Promise<void>;
+  /**
+   * Write everything still queued, wait for it, and report whether it reached
+   * the file: `null` when it did, otherwise the reason it did not. Resolves at
+   * once when nothing is queued, so a window with no pending edit closes with no
+   * delay. Used when the window is about to close, the one exit that is not an
+   * unmount and cannot be retried afterwards.
+   */
+  settle: () => Promise<string | null>;
 }
 
 /**
@@ -34,7 +42,8 @@ export interface DraftsState {
  * through the Rust store. Edits apply to the view immediately and are written
  * to disk a moment later, so typing does not turn into one file rewrite per
  * keystroke; anything still pending is written when the page unmounts, so
- * nothing is lost by leaving the section.
+ * nothing is lost by leaving the section, and `settle` writes it and waits when
+ * the window is closing, so nothing is lost by quitting either.
  */
 export function useDrafts(): DraftsState {
   const [drafts, setDrafts] = useState<Draft[]>([]);
@@ -45,22 +54,54 @@ export function useDrafts(): DraftsState {
   /** The latest list, readable from timers and cleanups without a re-render. */
   const draftsRef = useRef<Draft[]>([]);
   const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  /** Writes on their way to the store, so a close can wait for them first. */
+  const inFlight = useRef(new Set<Promise<string | null>>());
+  /** How many times each Draft has been edited, so a write knows if it is current. */
+  const revisions = useRef(new Map<string, number>());
+  /** Drafts whose newest edit has not reached the file yet. */
+  const unsaved = useRef(new Set<string>());
 
   const apply = useCallback((next: Draft[]) => {
     draftsRef.current = next;
     setDrafts(next);
   }, []);
 
-  /** Write one Draft to the store as it now stands. */
-  const persist = useCallback(async (id: string) => {
+  /**
+   * Write one Draft to the store as it now stands, and say what happened:
+   * `null` when the file took it, otherwise why it did not. A refusal is a
+   * failure here even though the call succeeded: the edit is not on disk, and a
+   * caller waiting to close the window must not mistake refusal for a write.
+   */
+  const persist = useCallback(async (id: string): Promise<string | null> => {
     const draft = draftsRef.current.find((d) => d.id === id);
-    if (!draft) return;
+    // A Draft that has been deleted has nothing left to write.
+    if (!draft) {
+      unsaved.current.delete(id);
+      return null;
+    }
+    const revision = revisions.current.get(id) ?? 0;
+    const write = (async () => {
+      try {
+        const view = await invoke<DraftsView>("draft_save", { draft });
+        setProblem(view.problem);
+        setError(null);
+        // The edit this write carried is on disk only if no newer edit arrived
+        // while it was out. Otherwise the Draft is still unsaved, and a close
+        // that ran now would drop what was typed since.
+        if (view.problem === null && (revisions.current.get(id) ?? 0) === revision) {
+          unsaved.current.delete(id);
+        }
+        return view.problem === null ? null : view.problem.message;
+      } catch (e) {
+        setError(String(e));
+        return String(e);
+      }
+    })();
+    inFlight.current.add(write);
     try {
-      const view = await invoke<DraftsView>("draft_save", { draft });
-      setProblem(view.problem);
-      setError(null);
-    } catch (e) {
-      setError(String(e));
+      return await write;
+    } finally {
+      inFlight.current.delete(write);
     }
   }, []);
 
@@ -87,6 +128,42 @@ export function useDrafts(): DraftsState {
       void persist(id);
     }
     timers.current.clear();
+  }, [persist]);
+
+  /**
+   * Write everything still queued and wait for it, so a caller about to end the
+   * process knows what is on disk.
+   *
+   * A write already on its way is awaited first. Only then is what is still
+   * unsaved written, because an unsaved Draft is newer than the copy in flight:
+   * writing the other way round would let the older copy land last and become
+   * the file. Nothing unsaved and nothing in flight resolves immediately, which
+   * is what keeps an idle window closing instantly.
+   *
+   * A write that failed stays unsaved, so the next close tries it again rather
+   * than treating an edit on screen as one that reached the file.
+   */
+  const settle = useCallback(async (): Promise<string | null> => {
+    const queued = [...unsaved.current];
+    if (queued.length === 0 && inFlight.current.size === 0) return null;
+
+    // The timers are stopped before anything is awaited: a timer that fired
+    // mid-close would write the same Draft a second time, after this call had
+    // already worked out what to write.
+    for (const timer of timers.current.values()) clearTimeout(timer);
+    timers.current.clear();
+
+    await Promise.allSettled([...inFlight.current]);
+
+    let failure: string | null = null;
+    for (const id of queued) {
+      // A write that was out when this started may have carried the newest state
+      // to the file already.
+      if (!unsaved.current.has(id)) continue;
+      const reported = await persist(id);
+      if (failure === null && reported !== null) failure = reported;
+    }
+    return failure;
   }, [persist]);
 
   useEffect(() => flush, [flush]);
@@ -179,6 +256,8 @@ export function useDrafts(): DraftsState {
         const edited = patch(draft);
         return { ...edited, updatedAt: new Date().toISOString() };
       });
+      unsaved.current.add(id);
+      revisions.current.set(id, (revisions.current.get(id) ?? 0) + 1);
       apply(next);
       schedule(id);
     },
@@ -202,6 +281,8 @@ export function useDrafts(): DraftsState {
         clearTimeout(queued);
         timers.current.delete(id);
       }
+      unsaved.current.delete(id);
+      revisions.current.delete(id);
       apply(draftsRef.current.filter((draft) => draft.id !== id));
       try {
         const view = await invoke<DraftsView>("draft_delete", { id });
@@ -215,5 +296,17 @@ export function useDrafts(): DraftsState {
     [apply, reload],
   );
 
-  return { drafts, problem, error, loading, create, createWith, rename, setRecords, remove, reload };
+  return {
+    drafts,
+    problem,
+    error,
+    loading,
+    create,
+    createWith,
+    rename,
+    setRecords,
+    remove,
+    reload,
+    settle,
+  };
 }
