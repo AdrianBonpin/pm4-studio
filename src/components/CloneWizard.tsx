@@ -4,6 +4,7 @@ import { ArrowRight, Check, RotateCcw } from "lucide-react";
 import { Button } from "./ui/Button";
 import { Field, Readout } from "./Section";
 import { useLfPoller } from "../hooks/useReader";
+import { describeDeviceFailure } from "../lib/readerIdentity";
 import type { LfCard, WriteResult } from "../types";
 
 type Step = "idle" | "awaitSource" | "sourceReady" | "awaitDest" | "writing" | "done" | "failed";
@@ -21,13 +22,15 @@ interface CloneWizardProps {
   connected: boolean;
   onSaved?: (card: LfCard) => void;
   onChirp: () => void;
+  /** Surfaces a dead or wedged Reader in the shell's notice strip. */
+  onDeviceError?: (message: string) => void;
 }
 
 /**
  * Guided clone: tap the original, confirm what was read, swap in a blank, write,
  * verify. One linear flow with the current step always visible.
  */
-export function CloneWizard({ connected, onSaved, onChirp }: CloneWizardProps) {
+export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: CloneWizardProps) {
   const [step, setStep] = useState<Step>("idle");
   const [source, setSource] = useState<LfCard | null>(null);
   const [dest, setDest] = useState<LfCard | null>(null);
@@ -65,30 +68,36 @@ export function CloneWizard({ connected, onSaved, onChirp }: CloneWizardProps) {
         }
       } catch (e) {
         setStep("failed");
-        setErr(String(e));
+        // A wedged firmware is reported with its remedy, not as a bare timeout.
+        setErr(describeDeviceFailure(e));
         void dst;
       }
     },
     [onChirp],
   );
 
-  useLfPoller(polling, connected, (card) => {
-    if (step === "awaitSource") {
-      setSource(card);
-      setNote(null);
-      setStep("sourceReady");
-      onChirp();
-      return;
-    }
-    if (step === "awaitDest" && source) {
-      if (card.id === source.id) {
-        setNote("That is still the source badge. Take it off and tap a blank tag.");
+  useLfPoller(
+    polling,
+    connected,
+    (card) => {
+      if (step === "awaitSource") {
+        setSource(card);
+        setNote(null);
+        setStep("sourceReady");
+        onChirp();
         return;
       }
-      setDest(card);
-      void doWrite(source, card);
-    }
-  });
+      if (step === "awaitDest" && source) {
+        if (card.id === source.id) {
+          setNote("That is still the source badge. Take it off and tap a blank tag.");
+          return;
+        }
+        setDest(card);
+        void doWrite(source, card);
+      }
+    },
+    onDeviceError,
+  );
 
   // Clear a stale "still the source badge" note once the flow moves on.
   useEffect(() => {

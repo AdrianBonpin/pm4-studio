@@ -7,10 +7,10 @@
 **Seams:** No new seam. Verified through the app shell against the physical Reader.
 
 **Tracker:** None
-**Status:** ready
+**Status:** done
 
-- [ ] Launching a second instance surfaces the existing window and never produces a USB access error.
-- [ ] The Reader's firmware revision is visible without opening a raw console.
-- [ ] With no Reader attached the app says so plainly and stays usable.
-- [ ] A device operation that wedges the firmware tells the user to replug, rather than leaving the interface waiting.
-- [ ] The capability limits of this Reader are stated once, in one place, and are not repeated on every tag.
+- [x] Launching a second instance surfaces the existing window and never produces a USB access error.
+- [x] The Reader's firmware revision is visible without opening a raw console.
+- [x] With no Reader attached the app says so plainly and stays usable.
+- [x] A device operation that wedges the firmware tells the user to replug, rather than leaving the interface waiting.
+- [x] The capability limits of this Reader are stated once, in one place, and are not repeated on every tag.

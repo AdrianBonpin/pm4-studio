@@ -116,6 +116,29 @@ OUT  55 00 53 00 00 FF 00
 An earlier build of this app had `0x0055` wired to the beeper, so the beep never
 fired and only the LED reacted.
 
+### `0x0054` — firmware version — VERIFIED
+
+Confirmed on this hardware by probing every id in the `0x0040..=0x008A` range
+with an empty payload and a 900 ms wait. The reply is a 17-byte payload: an
+ASCII revision, NUL padding, then a trailing `0x01`.
+
+```
+OUT  55 00 54 00 00 FF 00
+IN   55 00 54 00 11 48 30 30 53 30 37 00 00 00 00 00 00 00 00 00 00 01 <cksum>
+```
+
+The revision is `48 30 30 53 30 37` = **`H00S07`**. The payload length is `0x11`
+(17) and the checksum verified. Everything from the first NUL on is padding, so
+the string is read up to that byte; a payload with no printable bytes is
+treated as unreadable rather than displayed.
+
+The trailing `0x01` is unexplained. It is not a terminator — the string is
+already NUL-terminated — so it may be a flag or a second, numeric part of the
+version. Do not read it as part of the revision.
+
+This is the frame to quote in a bug report. The app surfaces the revision in
+the sidebar once the Reader is open.
+
 ### `0x0055` — LED off
 
 Confirmed on hardware. Turns the status LED off. **Not a beep.**
@@ -235,6 +258,8 @@ before the payload is meaningful.
 4. **What sets the T5577 lock bit.** One write locked a chip; another did not.
    Understanding which payloads are safe would remove the main hazard of the
    `0x0073` path.
+5. **The trailing `0x01`** in the `0x0054` version payload, and whether the
+   revision string ever carries a second component.
 
 Solved: **125 kHz write/clone** — command `0x0073`, see above.
 
