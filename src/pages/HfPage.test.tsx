@@ -3,12 +3,10 @@ import { describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import { HfPage } from "./HfPage";
 import { fakeBackend, renderUi } from "../test/dom";
-import { encodeNdefMessage, textRecord, urlRecord, type NdefRecord } from "../lib/ndef";
+import { MESSAGE, NTAG_CAPTURE, NTAG_UID, recordsRead } from "../test/hfState";
+import { encodeNdefMessage, type NdefRecord } from "../lib/ndef";
 import { subscribeSignals, type SignalSymbol } from "../lib/signal";
-import { bytesToHex, hexToBytes } from "../lib/tagWrite";
 import type { HfCard } from "../types";
-import type { MemoryDump } from "../lib/memoryDump";
-import type { TagNdef, TagRecordsRead } from "../lib/tagRecords";
 
 /**
  * Ticket 08 — one Read on 13.56 MHz fetches the identity and the message.
@@ -18,22 +16,15 @@ import type { TagNdef, TagRecordsRead } from "../lib/tagRecords";
  * Tauri IPC boundary, which is where the webview stops and Rust begins; the poll
  * itself arrives as the `onPoll` prop the shell hands the page.
  *
+ * Ticket 14 moved the Read into a mode: it is the first of the workspace's modes,
+ * and these tests render it as the mode that is showing. The workspace itself —
+ * its switch, its other modes and the password panel's absence — is held in
+ * `HfPage.workspace.test.tsx`.
+ *
  * The audible half is asserted through `subscribeSignals`, because "exactly one
  * outcome, and it distinguishes read-fully from read-but-check" is a claim about
  * the symbol the user hears, not about a callback having been called.
  */
-
-const NTAG_CAPTURE: HfCard = {
-  payload: [
-    0x01, 0x01,
-    0x04, 0x43, 0x8a, 0x01, 0x22, 0x09, 0x03, 0x1d, 0x00, 0x20,
-    0x07,
-    0x44, 0x00,
-    0x00,
-    0x02,
-    0x00, 0x00,
-  ],
-};
 
 const CLASSIC_CAPTURE: HfCard = {
   payload: [
@@ -59,46 +50,6 @@ const UNKNOWN_CAPTURE: HfCard = {
   ],
 };
 
-const NTAG_UID = "04 43 8A 01 22 09 03";
-
-const MESSAGE: NdefRecord[] = [
-  textRecord("en", "hello"),
-  urlRecord("https://devgo.studio"),
-];
-
-function dump(uid: string): MemoryDump {
-  return {
-    status: 0,
-    tag: { uid, tagType: 0x02, capturedAt: "2026-11-22T10:00:00.000Z" },
-    pageCount: 256,
-    readablePages: 34,
-    rows: [],
-  };
-}
-
-function recordsRead(
-  patch: Partial<TagNdef> = {},
-  uid = NTAG_UID,
-  records: NdefRecord[] = MESSAGE,
-): TagRecordsRead {
-  const hex = bytesToHex(encodeNdefMessage(records));
-  return {
-    dump: dump(uid),
-    ndef: {
-      outcome: "message",
-      messageHex: hex,
-      messageBytes: hexToBytes(hex).length,
-      userMemoryHex: "03 11 D1 01 0D 55 04 64 65 76 67 6F 2E 73 74 75 64 69 6F FE",
-      userMemoryBytes: 496,
-      capacityBytes: 496,
-      userPages: 124,
-      capabilityContainerHex: "E1 10 3E 00",
-      reason: null,
-      ...patch,
-    },
-  };
-}
-
 /** Collect what the audible half is told, for one test. */
 function hearSignals(): { symbols: SignalSymbol[]; stop: () => void } {
   const symbols: SignalSymbol[] = [];
@@ -113,12 +64,14 @@ async function readTag(
 ) {
   const backend = fakeBackend(answers);
   const { symbols, stop } = hearSignals();
-  const { user } = renderUi(<HfPage connected onPoll={async () => card} />);
+  const { user } = renderUi(
+    <HfPage connected mode="read" onModeChange={() => {}} onPoll={async () => card} />,
+  );
   await user.click(screen.getByRole("button", { name: "Read tag" }));
   return { backend, user, symbols, stop };
 }
 
-/** The Read section only: the memory panel below repeats the UID by design. */
+/** The Read mode only: the Memory mode repeats the UID by design. */
 function readout() {
   const section = screen.getByText("Read a tag").closest("section");
   if (section === null) throw new Error("the Read section is not on screen");

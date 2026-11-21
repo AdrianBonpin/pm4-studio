@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ChevronDown, ChevronUp, Plus, Trash2 } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { Select } from "../components/ui/Select";
 import { Section } from "../components/Section";
 import { LibraryProblemBanner } from "../components/LibraryProblemBanner";
 import { MigrationWarning } from "../components/MigrationWarning";
@@ -24,7 +25,6 @@ import {
   recordSummary,
 } from "../lib/drafts";
 import { recordProblem, recordSizeBytes, recordsByteLength } from "../lib/ndef";
-import { INPUT_ROUNDING } from "../lib/uiConstants";
 import type { Draft, DraftRecord, RecordKind, WifiAuth, WifiEncryption } from "../lib/drafts";
 
 /** The label above a field, in the design system's voice. */
@@ -372,7 +372,7 @@ function DraftDetail({
         )}
 
         <div className="flex flex-wrap items-center gap-2">
-          <Choice
+          <Select
             label="Record type to add"
             value={newKind}
             options={RECORD_KINDS.map((kind) => ({
@@ -648,7 +648,7 @@ function RecordFields({ record, disabled, onChange }: RecordFieldsProps) {
             />
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Choice
+            <Select
               label="Wi-Fi authentication"
               value={record.fields.auth}
               options={WIFI_AUTH_CHOICES}
@@ -657,7 +657,7 @@ function RecordFields({ record, disabled, onChange }: RecordFieldsProps) {
               }
               disabled={disabled}
             />
-            <Choice
+            <Select
               label="Wi-Fi encryption"
               value={record.fields.encryption}
               options={WIFI_ENCRYPTION_CHOICES}
@@ -746,31 +746,3 @@ const WIFI_ENCRYPTION_CHOICES = [
   { value: "tkip", label: "TKIP" },
   { value: "none", label: "None" },
 ];
-
-interface ChoiceProps {
-  label: string;
-  value: string;
-  options: readonly { value: string; label: string }[];
-  onChange: (value: string) => void;
-  disabled?: boolean;
-  className?: string;
-}
-
-/** A native select, kept local because a Draft's Record form is its only user. */
-function Choice({ label, value, options, onChange, disabled, className = "" }: ChoiceProps) {
-  return (
-    <select
-      aria-label={label}
-      value={value}
-      disabled={disabled}
-      onChange={(event) => onChange(event.target.value)}
-      className={`${INPUT_ROUNDING} cursor-pointer border border-border bg-surface px-3 py-2 text-sm text-text transition-colors focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/50 disabled:cursor-not-allowed disabled:opacity-50 ${className}`}
-    >
-      {options.map((option) => (
-        <option key={option.value} value={option.value}>
-          {option.label}
-        </option>
-      ))}
-    </select>
-  );
-}

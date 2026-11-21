@@ -3,6 +3,7 @@ import {
   BLANK_ACTION_LABEL,
   BLANK_IS_NOT_A_FACTORY_RESET,
   BLANK_OUTCOME_HINT,
+  WILL_NOT_ACCEPT_WRITES,
   blankConfirmation,
   blankNotice,
 } from "./blankTag";
@@ -55,6 +56,33 @@ describe("the blanking confirmation", () => {
     // The hazard is stated as real, because one of these blanks is already
     // permanently locked from earlier experiments.
     expect(copy).toMatch(/locked/i);
+  });
+
+  // ADR 0007: Reset is the only writability test, and it says so before it runs.
+  // The three caveats are facts in the confirmation, not a footnote under it.
+  describe("states the three writability caveats in plain words", () => {
+    const facts = confirmation.facts.map((f) => `${f.title} ${f.detail}`);
+    const inAFact = (pattern: RegExp) => facts.some((fact) => pattern.test(fact));
+
+    it("says this Reader cannot tell whether a tag will accept a write", () => {
+      expect(inAFact(/cannot (tell|determine)/i)).toBe(true);
+      expect(copy).toMatch(/cannot (tell|determine) whether a tag will accept a write/i);
+    });
+
+    it("says a tag already written once may refuse forever", () => {
+      expect(inAFact(/already been written/i)).toBe(true);
+      expect(copy).toMatch(/may (permanently )?refuse/i);
+    });
+
+    it("says the attempt is safe only on a tag you can afford to lose", () => {
+      expect(inAFact(/afford to lose/i)).toBe(true);
+    });
+
+    it("says no check exists, so nothing invites a pre-check", () => {
+      expect(copy).toMatch(/no (check|test)/i);
+      // The confirmation never offers, or hints at, a way to find out first.
+      expect(copy).not.toMatch(/check (the|this) tag first|probe/i);
+    });
   });
 
   it("is labelled blanking, and never claims a factory restore", () => {
@@ -131,12 +159,65 @@ describe("blankNotice", () => {
     expect(notice.text).not.toContain("Blanked");
   });
 
+  // The refusal is its own outcome: a tag that read back its own Identity after
+  // the write is evidence about the tag, so it is not worded as a generic
+  // failure and not as an unknown (ADR 0007).
+  describe("a tag that will not accept writes", () => {
+    const notice = blankNotice(
+      result("willNotAcceptWrites", {
+        stillIdentifies: CONFIRMED,
+        message: "the tag still reads as 55 00 84 82 12 after the blanking write",
+      }),
+    );
+
+    it("is named as what it is rather than as a failure", () => {
+      expect(notice.tone).toBe("err");
+      expect(notice.text).toContain(WILL_NOT_ACCEPT_WRITES);
+      expect(notice.text).not.toMatch(/^Not blanked/);
+      expect(notice.text).not.toMatch(/^Unknown/);
+    });
+
+    it("names both likely causes", () => {
+      expect(notice.text).toMatch(/already (been )?written/i);
+      expect(notice.text).toMatch(/never writable/i);
+    });
+
+    it("says nothing changed and no copy was counted", () => {
+      expect(notice.text).toMatch(/nothing about (it|the tag) (was )?changed/i);
+      expect(notice.text).not.toMatch(/confirmed cop(y|ies)/i);
+      expect(notice.text).not.toMatch(/verified/i);
+    });
+
+    it("does not offer a retry as though the attempt were the problem", () => {
+      expect(notice.text).not.toMatch(/try again/i);
+    });
+  });
+
   it("never claims a blank for any outcome other than blanked", () => {
-    const others: BlankResult["outcome"][] = ["refused", "unverified", "failed"];
+    const others: BlankResult["outcome"][] = [
+      "refused",
+      "unverified",
+      "failed",
+      "willNotAcceptWrites",
+    ];
     for (const outcome of others) {
       const notice = blankNotice(result(outcome, { message: "reason" }));
       expect(notice.tone).not.toBe("ok");
       expect(notice.text).not.toMatch(/^Blanked/);
+    }
+  });
+
+  it("is worded apart from a guard refusal, a failure, and an unknown", () => {
+    // A user who sees two of these on different days must be able to tell that
+    // something different happened: refused (nothing was sent), failed (sent,
+    // not working), unverified (sent, unknown), will-not-accept (sent, and the
+    // tag itself refused). Only the last one is evidence about the tag.
+    const others = (["refused", "failed", "unverified"] as const).map(
+      (outcome) => blankNotice(result(outcome, { message: "reason" })).text,
+    );
+    for (const other of others) {
+      expect(other).not.toContain(WILL_NOT_ACCEPT_WRITES);
+      expect(other).not.toMatch(/never writable/i);
     }
   });
 });

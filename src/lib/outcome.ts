@@ -30,7 +30,7 @@
  */
 
 import type { BlankResult, BuildRefusal, EraseResult, WriteResult } from "../types";
-import { blankNotice } from "./blankTag";
+import { blankNotice, WILL_NOT_ACCEPT_WRITES } from "./blankTag";
 import { describeClearReport, type ClearReport } from "./clearData";
 import { BUILD_REFUSAL_DETAIL, BUILD_REFUSAL_LABEL } from "./consoleRefusal";
 import { eraseNotice } from "./eraseTag";
@@ -327,6 +327,11 @@ export const outcomes = {
       refused: "refused",
       unverified: "unverified",
       failed: "failed",
+      // The tag read back its own Identity after the write: this tag will not
+      // accept writes. Not `failed` (which says the attempt is the problem) and
+      // not `unverified` (which says nothing is known) — the state of the tag is
+      // known, and it is the useful finding (ADR 0007).
+      willNotAcceptWrites: "reset-refused",
     };
     return make(kind[result.outcome], "reset", blankNotice(result).text);
   },
@@ -352,7 +357,7 @@ export const outcomes = {
     return make(
       "reset-refused",
       "reset",
-      "This tag will not accept writes.",
+      WILL_NOT_ACCEPT_WRITES,
       {
         detail:
           `${cause} A tag already written once may permanently refuse further writes, and ` +

@@ -31,6 +31,12 @@ export interface BlankFact {
 /**
  * The facts the confirmation states, each one a consequence the user cannot
  * discover afterwards without having lost a Tag to it.
+ *
+ * The three writability caveats are facts in this list rather than a footnote
+ * under it, because they are the reason the operation is risky and the reason no
+ * safer version of it exists (ADR 0007). A user who reads this confirmation and
+ * still presses the button has been told, in as many words, that the attempt is
+ * the only test there is.
  */
 export const BLANK_FACTS: readonly BlankFact[] = [
   {
@@ -39,14 +45,24 @@ export const BLANK_FACTS: readonly BlankFact[] = [
       "The Identity on the tag is overwritten for good. Whatever value it holds now cannot be recovered from the tag afterwards.",
   },
   {
+    title: "This Reader cannot tell whether a tag will accept a write",
+    detail:
+      "A 125 kHz reply carries no tag family and no writability flag, and there is no command that asks a tag whether it will take a write. Every command that would answer the question is itself a write, so no check exists — not in this app, and not in this protocol. Nothing here can look at the tag and tell you first.",
+  },
+  {
+    title: "A tag already written once may refuse forever",
+    detail:
+      "A T5577 that has already been written may permanently refuse every later write while still reading back the Identity it carries. This Reader cannot tell a tag that will refuse from one that will accept. A blanked tag may be unusable for further writes: a T5577 test tag has already been permanently locked by an earlier write experiment, so this is a real hazard rather than a theoretical one.",
+  },
+  {
+    title: "Only attempt this on a tag you can afford to lose",
+    detail:
+      "The write is the test, so there is no cheaper way to find out whether this tag accepts one. If you need the tag, do not put it here — the app cannot make the attempt safe.",
+  },
+  {
     title: "The tag may read as empty",
     detail:
       "A tag that carries no Identity reads as nothing, so reading it again will probably show no Identity at all. That is the expected result of blanking, not a failure.",
-  },
-  {
-    title: "The tag may be unusable afterwards",
-    detail:
-      "A blanked tag may be unusable for further writes. A T5577 test tag has already been permanently locked by an earlier write experiment, so this is a real hazard rather than a theoretical one.",
   },
 ];
 
@@ -94,6 +110,53 @@ export function blankConfirmation(identity: string): BlankConfirmation {
 }
 
 /**
+ * The sentence a refused Reset says. Its own words, not a failure's, because what
+ * happened is specific: bytes were sent and the tag kept its Identity, which is
+ * the one way this app can learn that a tag will not take a write (ADR 0007).
+ */
+export const WILL_NOT_ACCEPT_WRITES = "This tag will not accept writes.";
+
+/**
+ * Why it probably would not, stated as possibilities because that is what they
+ * are: the Reader cannot tell a tag that is locked from one that was never
+ * writable, and claiming one of them would be inventing a finding.
+ *
+ * This is also where the app says that no pre-check could have helped, so a user
+ * does not go looking for one — or ask for one (ADR 0007).
+ */
+export const WILL_NOT_ACCEPT_WRITES_CAUSE =
+  "The likely cause is that the tag has already been written once — a tag written once may permanently refuse further writes — or that it was never writable. This Reader cannot tell which of those it is, and no check exists that could have told you first: a writability test is a write, so the attempt was the only way to find out. Nothing about the tag was changed.";
+
+/**
+ * What a deliberate re-read after the attempt showed.
+ *
+ * This is the same finding as the write's own read-back, worded the same way: a
+ * tag that still presents an Identity is a tag that will not accept writes, and
+ * the app names the likely causes instead of reporting that nothing changed as
+ * though nothing could be concluded (ADR 0007). Silence is worded as the expected
+ * result of a blank, with the one caveat an empty reading cannot exclude.
+ */
+export function blankCheckNotice(read: { readonly id: string } | null): WriteNotice {
+  if (read === null) {
+    return {
+      tone: "ok",
+      text:
+        "No Identity read. That is the expected result for a blanked tag — though an empty " +
+        "reader looks the same, so re-seat the tag on the reader and check again if you " +
+        "want to be sure.",
+    };
+  }
+  return {
+    tone: "warn",
+    text:
+      `This tag still reads as ${read.id}. ` +
+      "If this is the tag the write was sent to, it will not accept writes: the likely cause " +
+      "is that it has already been written once, or that it was never writable. This Reader " +
+      "cannot tell which, and no check could have answered it first.",
+  };
+}
+
+/**
  * What to tell the user about one blanking attempt, in the words of its actual
  * outcome. A blanked Tag is "blanked" — never "verified" — and nothing else is
  * ever described as blanked.
@@ -108,6 +171,11 @@ export function blankNotice(result: BlankResult): WriteNotice {
           "now, showing no Identity at all, which is the expected result. Put it back on the " +
           "reader to check, and note that it may refuse further writes." +
           " No copy was recorded: blanking destroys an Identity rather than copying one.",
+      };
+    case "willNotAcceptWrites":
+      return {
+        tone: "err",
+        text: `${WILL_NOT_ACCEPT_WRITES} ${WILL_NOT_ACCEPT_WRITES_CAUSE}`,
       };
     case "refused":
       return {
