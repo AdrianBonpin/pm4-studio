@@ -7,6 +7,7 @@ pub mod library_io;
 pub mod library_migration;
 pub mod memory_dump;
 pub mod ntag;
+pub mod password;
 pub mod reader;
 pub mod stream;
 pub mod write_guard;
@@ -420,6 +421,105 @@ impl From<NdefWrite> for NdefWriteView {
     }
 }
 
+/// What the password panel is told about the Tag on the Reader.
+///
+/// Everything here comes from a **read**: `0x0083` and `0x0081` only. There is no
+/// write path for password protection on this Reader, so this view has no
+/// "allowed" field to be wrong about — the refusal is expressed by
+/// [`PasswordAttemptView`] instead.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordStatusView {
+    /// UID of the Tag that was read, when one was.
+    pub uid: Option<String>,
+    /// User memory in bytes, from the Type 2 Capability Container.
+    pub capacity_bytes: Option<usize>,
+    /// "unknown" | "disabled" | "enabled". Always "unknown" on this Reader.
+    pub protection: &'static str,
+    /// Why protection cannot be determined, in one sentence.
+    pub why_unknown: String,
+    /// Page 131 as the Reader returned it (AUTH0, ACCESS, VCTID, RFUI), hex.
+    /// Deliberately named as a read: it is not the Tag's configuration.
+    pub auth0_page_read: Option<String>,
+    /// Page 133 as the Reader returned it (PWD), hex.
+    pub pwd_page_read: Option<String>,
+    /// Page 134 as the Reader returned it (PACK), hex.
+    pub pack_page_read: Option<String>,
+    /// False: this Reader's configuration-area read is not real configuration.
+    pub configuration_real: bool,
+    /// Pages setting a password would have to change. Never written.
+    pub set_pages: Vec<usize>,
+    /// Pages removing a password would have to change. Never written.
+    pub remove_pages: Vec<usize>,
+    /// False: this protocol has no command that authenticates a Tag.
+    pub reader_can_authenticate: bool,
+}
+
+impl From<password::PasswordReport> for PasswordStatusView {
+    fn from(report: password::PasswordReport) -> Self {
+        let hex_page = |page: Option<[u8; 4]>| page.map(|bytes| reader::hex(&bytes));
+        let config = report.config;
+        Self {
+            uid: report.uid,
+            capacity_bytes: report.capacity_bytes,
+            protection: report.protection.as_str(),
+            why_unknown: report.why_unknown,
+            auth0_page_read: config.and_then(|c| hex_page(c.auth0_page_read)),
+            pwd_page_read: config.and_then(|c| hex_page(c.pwd_page_read)),
+            pack_page_read: config.and_then(|c| hex_page(c.pack_page_read)),
+            configuration_real: config
+                .map(|c| c.real_configuration)
+                .unwrap_or(password::CONFIG_PAGES_ARE_REAL),
+            set_pages: report.set_pages,
+            remove_pages: report.remove_pages,
+            reader_can_authenticate: password::READER_CAN_AUTHENTICATE,
+        }
+    }
+}
+
+/// What one requested password operation came to: a refusal, always.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PasswordAttemptView {
+    /// Always "refused". Spelled out so the shared notice vocabulary reads it
+    /// the same way it reads a write outcome.
+    pub outcome: &'static str,
+    /// Machine code: "not-acknowledged", "cannot-authenticate",
+    /// "protection-unknown", "config-unreadable", "nothing-to-remove",
+    /// "config-page-write".
+    pub refusal: &'static str,
+    pub message: String,
+    /// Pages the operation would have had to change, had it been possible.
+    pub would_write_pages: Vec<usize>,
+    /// Always empty: no frame is sent for either operation.
+    pub wrote_pages: Vec<usize>,
+}
+
+impl PasswordAttemptView {
+    /// Ask the password module and hand back its answer.
+    ///
+    /// `password::decide` returns `Result<Infallible, _>`, so the `Ok` arm holds a
+    /// value that cannot exist. Matching it with an empty `match never {}` is how
+    /// this file proves no password operation has a success path.
+    fn attempt(operation: password::PasswordOperation, acknowledged: bool) -> Self {
+        let request = password::PasswordRequest {
+            operation,
+            acknowledged,
+            protection: password::ProtectionStatus::Unknown,
+        };
+        match password::decide(&request) {
+            Err(refusal) => Self {
+                outcome: "refused",
+                refusal: refusal.code(),
+                message: refusal.notice(),
+                would_write_pages: operation.config_pages(),
+                wrote_pages: Vec::new(),
+            },
+            Ok(never) => match never {},
+        }
+    }
+}
+
 /// The NDEF message a Draft encodes to, as bytes. The codec lives in the
 /// webview (`src/lib/ndef.ts`), which owns NDEF; this only refuses bytes it
 /// cannot read, so a malformed message never reaches a Tag.
@@ -463,6 +563,51 @@ fn hf_ndef_write(
 ) -> Result<NdefWriteView, String> {
     let message = message_bytes(&message_hex)?;
     with_reader(&state, |r| Ok(ntag::write_message(r, &message).into()))
+}
+
+/// What can be determined about the password protection of the Tag on the
+/// Reader.
+///
+/// Read-only: `0x0083` info and `0x0081` memory read, nothing else. The answer is
+/// always "cannot be determined", because this firmware's configuration-area
+/// read is not the Tag's configuration (docs/PROTOCOL.md open problem 5, and
+/// `password.rs` for the contradiction that settles it). A Tag that cannot be
+/// read is reported as such rather than as unprotected.
+#[tauri::command]
+fn hf_password_status(state: State<'_, AppState>) -> Result<PasswordStatusView, String> {
+    with_reader(&state, |r| {
+        Ok(match ntag::read_tag(r) {
+            Ok(Some(read)) => password::report_from_image(read.info.uid_hex(), &read.memory).into(),
+            Ok(None) => password::report_without_tag(ntag::NO_TAG_MESSAGE).into(),
+            Err(e) => password::report_without_tag(&format!(
+                "the Tag could not be read, so its protection cannot be determined: {e}"
+            ))
+            .into(),
+        })
+    })
+}
+
+/// Set a password on the Tag on the Reader — refused, always.
+///
+/// No frame is sent and the Reader is not opened. The protocol has no
+/// authentication command, so a password set here could never be satisfied and
+/// the write that would clear `AUTH0` sits behind the protection it clears.
+/// `password::decide` has no success path at all, so this cannot become a write
+/// by changing a flag.
+#[tauri::command]
+fn hf_password_set(acknowledged: bool) -> PasswordAttemptView {
+    PasswordAttemptView::attempt(password::PasswordOperation::Set, acknowledged)
+}
+
+/// Remove the password from the Tag on the Reader — refused, always.
+///
+/// Removing protection needs either `PWD_AUTH` to get in, or an unprotected write
+/// of `AUTH0 = 0xFF`; this protocol has the first nowhere and the second is
+/// exactly what a protected Tag refuses. Protection status also cannot be read,
+/// so a Tag whose password is unknown is never treated as recoverable.
+#[tauri::command]
+fn hf_password_remove(acknowledged: bool) -> PasswordAttemptView {
+    PasswordAttemptView::attempt(password::PasswordOperation::Remove, acknowledged)
 }
 
 /// Send an arbitrary frame. Input is a hex string; the frame is zero-padded to
@@ -1030,6 +1175,9 @@ pub fn run() {
             lf_blank,
             hf_ndef_preview,
             hf_ndef_write,
+            hf_password_status,
+            hf_password_set,
+            hf_password_remove,
             raw_send,
             send_cmd,
             library_load,
