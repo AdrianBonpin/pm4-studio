@@ -9,6 +9,7 @@ pub mod memory_dump;
 pub mod ntag;
 pub mod reader;
 pub mod stream;
+pub mod tag_records;
 pub mod write_guard;
 pub mod write_outcome;
 #[cfg(test)]
@@ -23,6 +24,7 @@ use library::{
 use library_io::{FileError, ImportPreview};
 use memory_dump::MemoryDump;
 use ntag::{NdefPreview, NdefWrite, TagView};
+use tag_records::{TagNdef, TagRecordsRead};
 use reader::{DeviceInfo, Frame, HfCard, LfCard, LfWriteAttempt, Reader, REPORT_LEN};
 use write_outcome::Evidence;
 use serde::{Deserialize, Serialize};
@@ -149,6 +151,27 @@ fn ntag_memory_read(
         let info = ntag::read_info(r)?;
         let payload = ntag::read_payload(r, &info)?;
         MemoryDump::parse(&payload, info.identity(&captured_at)).map_err(|e| e.message())
+    })
+}
+
+/// Read a Tag's Records: its memory, then the NDEF TLV inside that memory.
+///
+/// Read-only, and read-only in the strict sense that matters here: this sends
+/// `0x0083` and `0x0081` and nothing else, so a Tag is never changed by being
+/// loaded into a Draft. Decoding the message into Records happens in the
+/// webview codec; this returns the bytes and what the TLV structure was.
+#[tauri::command]
+fn ntag_records_read(
+    state: State<'_, AppState>,
+    captured_at: String,
+) -> Result<TagRecordsRead, String> {
+    with_reader(&state, |r| {
+        let info = ntag::read_info(r)?;
+        let payload = ntag::read_payload(r, &info)?;
+        let identity = info.identity(&captured_at);
+        let dump = MemoryDump::parse(&payload, identity).map_err(|e| e.message())?;
+        let ndef = TagNdef::from_read_payload(&payload).map_err(|e| e.message())?;
+        Ok(TagRecordsRead { dump, ndef })
     })
 }
 
@@ -1023,6 +1046,7 @@ pub fn run() {
             lf_poll,
             hf_poll,
             ntag_memory_read,
+            ntag_records_read,
             memory_dump_export,
             beep,
             led_off,
