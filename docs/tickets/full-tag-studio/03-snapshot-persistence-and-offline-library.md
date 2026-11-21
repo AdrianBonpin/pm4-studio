@@ -8,13 +8,13 @@
 - S8 Library store — catches persistence, atomic replacement, corruption handling and version refusal; misses UI state.
 
 **Tracker:** None
-**Status:** ready
+**Status:** done
 
-- [ ] A saved read survives quitting and reopening the app.
-- [ ] The library lists with no Reader attached.
-- [ ] A file written by a newer schema version is reported and never rewritten.
-- [ ] A file that fails to parse is reported and never replaced with an empty one.
-- [ ] Interrupting the app during a save leaves the previous library intact.
-- [ ] An empty library explains what a Snapshot is instead of showing a blank area.
-- [ ] The user is told the library is local plaintext and never synced.
-- [ ] Saving a read that is already in the library does not create a duplicate.
+- [x] A saved read survives quitting and reopening the app.
+- [x] The library lists with no Reader attached.
+- [x] A file written by a newer schema version is reported and never rewritten.
+- [x] A file that fails to parse is reported and never replaced with an empty one.
+- [x] Interrupting the app during a save leaves the previous library intact.
+- [x] An empty library explains what a Snapshot is instead of showing a blank area.
+- [x] The user is told the library is local plaintext and never synced.
+- [x] Saving a read that is already in the library does not create a duplicate.

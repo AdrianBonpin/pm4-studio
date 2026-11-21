@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Nfc, Radio, Terminal, X } from "lucide-react";
+import { Library as LibraryIcon, Nfc, Radio, Terminal, X } from "lucide-react";
 import { Badge } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
 import { Toggle } from "./components/ui/Toggle";
 import { useBeep } from "./hooks/useBeep";
+import { useLibrary } from "./hooks/useLibrary";
 import { useReader } from "./hooks/useReader";
 import {
   classifyDeviceFailure,
@@ -12,10 +13,11 @@ import {
 } from "./lib/readerIdentity";
 import { isMacOS, isTauri } from "./lib/platform";
 import { HfPage } from "./pages/HfPage";
+import { LibraryPage } from "./pages/LibraryPage";
 import { LfPage } from "./pages/LfPage";
 import { ToolsPage } from "./pages/ToolsPage";
 
-type Page = "lf" | "hf" | "tools";
+type Page = "lf" | "hf" | "library" | "tools";
 
 const STATUS_COLOR = {
   idle: "#A1A1AA",
@@ -55,6 +57,13 @@ const PAGES: {
     icon: Radio,
   },
   {
+    id: "library",
+    label: "Library",
+    title: "Library",
+    subtitle: "Snapshots of every read, browsable with no Reader attached.",
+    icon: LibraryIcon,
+  },
+  {
     id: "tools",
     label: "Tools",
     title: "Tools",
@@ -66,6 +75,7 @@ const PAGES: {
 export default function App() {
   const [page, setPage] = useState<Page>("lf");
   const reader = useReader();
+  const library = useLibrary();
   const { beepOn, setBeepOn, chirp } = useBeep();
 
   const current = PAGES.find((p) => p.id === page) ?? PAGES[0];
@@ -203,6 +213,7 @@ export default function App() {
                 <LfPage
                   connected={connected}
                   onChirp={chirp}
+                  library={library}
                   onDeviceError={reader.setError}
                 />
               )}
@@ -212,6 +223,9 @@ export default function App() {
                   onPoll={reader.pollHfOnce}
                   onChirp={chirp}
                 />
+              )}
+              {page === "library" && (
+                <LibraryPage connected={connected} library={library} onChirp={chirp} />
               )}
               {page === "tools" && <ToolsPage connected={connected} />}
 
