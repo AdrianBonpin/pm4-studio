@@ -4,6 +4,7 @@ import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
 import { Section } from "../components/Section";
 import { LoadTagIntoDraft } from "../components/LoadTagIntoDraft";
+import { MigrationWarning } from "../components/MigrationWarning";
 import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
 import { WriteDraftToTag } from "../components/WriteDraftToTag";
 import { DraftClosePrompt } from "../components/DraftClosePrompt";
@@ -107,17 +108,7 @@ export function DraftsPage({ connected }: { connected: boolean }) {
         title="Drafts"
         hint="A Draft is a message you compose before a Tag is in hand. It holds Records in order and is not attached to any Tag."
       >
-        {migrationWarning && (
-          <div className="mb-4 border-l-2 border-warn bg-warn/5 px-3 py-2">
-            <p className="text-sm text-warn">
-              This library was upgraded from an older version
-            </p>
-            <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
-              {migrationWarning} Saving is still on: a save writes the upgraded library and
-              corrects the version the file claims.
-            </p>
-          </div>
-        )}
+        {migrationWarning && <MigrationWarning detail={migrationWarning} />}
 
         {drafts.problem && (
           <div className="mb-4 border-l-2 border-err bg-err/5 px-3 py-2">
