@@ -4,11 +4,12 @@
  * The work lives in `designCheck.ts` so it can be tested without an engine; this
  * file only names the vendored launcher, the target and the exit code.
  *
- * A missing detector is a failure, never a pass: if the launcher is absent, its
- * engine could not be fetched, or a requested target could not be scanned, this
- * exits non-zero with the reason. Violations are advisory for now, which is why a
- * red finding still exits 0 — the distinction between "found something" and
- * "could not look" is the whole point.
+ * This is a gate, not a notice. A violation exits non-zero, and so does a
+ * detector that cannot look: if the launcher is absent, its engine could not be
+ * fetched, or a requested target could not be scanned, this exits non-zero with
+ * the reason. "Found something" and "could not look" are different failures, and
+ * neither is a pass. `bun run build` and `bun run verify` run this command, so it
+ * fails the build rather than waiting to be run by hand.
  */
 
 import { dirname, resolve } from "node:path";

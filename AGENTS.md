@@ -17,12 +17,25 @@ TypeScript + Vite, driven by `bun`; the backend is Rust in `src-tauri/`.
 ## Verify before claiming done
 
 ```bash
-bun install          # once
-bunx tsc --noEmit    # types
-bun run test         # vitest + jsdom
-bun run build        # tsc --noEmit && vite build
-cd src-tauri && cargo test   # only if src-tauri/ changed; cold compile is minutes
+bun install      # once
+bun run verify   # the gate
 ```
+
+`bun run verify` is the ordinary verification command, and the one to quote when
+claiming a change is done. It runs, in order:
+
+```bash
+bun run build        # design gate, then tsc --noEmit, then vite build
+bun run test         # vitest + jsdom
+bun run verify:rust  # cd src-tauri && cargo test
+```
+
+The design check is part of `build`, not a command somebody has to remember: a
+rule violation exits non-zero there and therefore fails `verify` too. The Rust
+step is the slow one — a cold compile is minutes — and it stays in `verify`
+because the whole point of the command is that nothing is verified by memory.
+While iterating, run the cheap steps on their own: `bun run design:check`
+(under a second), `bun run typecheck`, `bun run test`.
 
 Tests are vitest with `environment: "node"`; component tests opt into jsdom with a
 `@vitest-environment jsdom` docblock and render against the Tauri invoke boundary
@@ -77,8 +90,9 @@ bun run design:check
 ```
 
 Runs the vendored detector over `src/` and reports rule violations, allow-listed
-suppressions and the detector's own caveats. It is **advisory** while the redesign
-is in progress and does not fail the build; a later slice makes it blocking.
+suppressions and the detector's own caveats. **It is a gate:** a violation exits
+non-zero, and `bun run build` runs it, so a violation fails the build and
+`bun run verify` with it. The redesign is finished; nothing here is advisory.
 
 - A missing engine, a failed download or an unscannable target exits **non-zero**.
   A tool that is not there is never a passing result.
@@ -87,7 +101,9 @@ is in progress and does not fail the build; a later slice makes it blocking.
   finding through: fix the finding, or record why this world overrides the rule.
 - The detector is development-only. It is not a dependency of the app, nothing in
   `src/` imports it, and it never runs in the shipped bundle. Its first-run engine
-  download is a developer-machine concern.
+  download is a developer-machine concern: on a machine that has never run it, the
+  check needs network access once, and a failed download fails the gate loudly
+  rather than skipping it.
 
 The detector catches what it encodes and nothing else: taste, hierarchy, copy
 quality and the rendered page are the skill's and the reviewer's job. No edit hook
