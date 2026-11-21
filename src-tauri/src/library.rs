@@ -332,6 +332,24 @@ impl Library {
         self.snapshots.retain(|s| s.id != id);
         self.snapshots.len() != before
     }
+
+    /// Write the name and note a user gave one Snapshot, in one go.
+    ///
+    /// These two fields are the whole of a Snapshot's user copy, so they are
+    /// set together: a caller that cancels simply never calls this, and a
+    /// caller that confirms cannot leave one of them written on its own.
+    /// Surrounding whitespace is dropped; the lines inside a note are kept.
+    /// `false` means no Snapshot carries that id.
+    pub fn edit(&mut self, id: &str, name: &str, note: &str) -> bool {
+        match self.snapshots.iter_mut().find(|s| s.id == id) {
+            Some(snapshot) => {
+                snapshot.name = name.trim().to_string();
+                snapshot.note = note.trim().to_string();
+                true
+            }
+            None => false,
+        }
+    }
 }
 
 /// Decode one library file, deciding first whether this build may read it at all.
@@ -898,6 +916,100 @@ mod tests {
 
         let bytes = serde_json::to_vec(&library).expect("encode");
         assert_eq!(parse_library(&bytes), Ok(library));
+    }
+
+    // Ticket 04: the name and note a user gives a Snapshot are the only editable
+    // fields, so they are written together in one replacement of the file.
+
+    #[test]
+    fn a_name_and_note_written_together_survive_reopening() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        let store = LibraryStore::new(&path);
+        let mut library = store.load().expect("empty library");
+        let snapshot = saved_lf(&mut library, 0x0084_8212);
+        store.save(&library).expect("save");
+
+        let mut reopened = store.load().expect("reload");
+        assert!(
+            reopened.edit(&snapshot.id, "Front door", "Gate 3, front car park"),
+            "edit reports a change"
+        );
+        store.save(&reopened).expect("save the edit");
+
+        let after = store.load().expect("reload after the edit");
+        assert_eq!(after.snapshots[0].name, "Front door");
+        assert_eq!(after.snapshots[0].note, "Gate 3, front car park");
+    }
+
+    #[test]
+    fn a_note_may_hold_several_lines_and_only_loses_its_edges() {
+        let mut library = Library::empty();
+        let snapshot = saved_lf(&mut library, 0x0084_8212);
+
+        assert!(library.edit(&snapshot.id, " Front door ", "  gate 3\nspare for the van\n"));
+        assert_eq!(library.snapshots[0].name, "Front door");
+        assert_eq!(
+            library.snapshots[0].note, "gate 3\nspare for the van",
+            "the lines the user typed are kept; only the ends are trimmed"
+        );
+
+        // A note can be cleared again, which is not the same as never having one.
+        assert!(library.edit(&snapshot.id, "Front door", ""));
+        assert_eq!(library.snapshots[0].note, "");
+    }
+
+    #[test]
+    fn an_abandoned_edit_leaves_the_stored_snapshot_unchanged() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        let store = LibraryStore::new(&path);
+        let mut library = store.load().expect("empty library");
+        let snapshot = saved_lf(&mut library, 0x0084_8212);
+        store.save(&library).expect("save");
+        let before = bytes_at(&path);
+
+        // What the user typed, then cancelled: the store is never told about it.
+        let draft = ("Front door", "Gate 3");
+        assert!(
+            draft.0 != snapshot.name && draft.1 != snapshot.note,
+            "the draft really did differ from what is stored"
+        );
+
+        assert_eq!(
+            bytes_at(&path),
+            before,
+            "an edit that was not confirmed writes nothing at all"
+        );
+        let after = store.load().expect("reload again");
+        assert_eq!(after.snapshots[0].name, "Snapshot 1");
+        assert_eq!(after.snapshots[0].note, "");
+    }
+
+    #[test]
+    fn editing_one_snapshot_leaves_the_others_untouched() {
+        let mut library = Library::empty();
+        let first = saved_lf(&mut library, 0x0084_8212);
+        let second = saved_lf(&mut library, 0x0053_C7B3);
+
+        assert!(library.edit(&first.id, "Front door", "gate 3"));
+
+        assert_eq!(library.snapshots[0].name, "Front door");
+        assert_eq!(
+            library.snapshots[1], second,
+            "the other Snapshot is exactly what it was"
+        );
+    }
+
+    #[test]
+    fn editing_an_unknown_snapshot_changes_nothing() {
+        let mut library = Library::empty();
+        saved_lf(&mut library, 0x0084_8212);
+
+        assert!(!library.edit("no such snapshot", "Name", "Note"));
+        assert_eq!(library.snapshots[0].name, "Snapshot 1");
+        assert_eq!(library.snapshots[0].note, "");
+        assert_eq!(library.snapshots.len(), 1);
     }
 
     #[test]

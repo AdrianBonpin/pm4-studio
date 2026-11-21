@@ -127,3 +127,110 @@ export function formatCapturedAt(iso: string, now: number = Date.now()): string 
   if (days < 7) return `${days}d ago`;
   return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short" });
 }
+
+/* ------------------------------------------------------------------------- *
+ * Finding a Snapshot once the library is too long to scroll.
+ *
+ * Filtering and sorting are pure and take the array the view already holds:
+ * one pass per keystroke over entries that are reused, never rebuilt. The
+ * library file is only read again when it changes on disk, so typing in the
+ * search field costs nothing but comparisons.
+ * ------------------------------------------------------------------------- */
+
+const WHITESPACE = /\s+/g;
+
+/** Everything about a Snapshot the user may be typing at, in one string. */
+function searchableText(snapshot: Snapshot): string {
+  const parts: string[] = [snapshot.name, snapshot.note, snapshot.id];
+  if (snapshot.identity) {
+    const { customer, data32, facility, card, raw } = snapshot.identity;
+    parts.push(
+      `facility ${facility}`,
+      `card ${card}`,
+      String(facility),
+      String(card),
+      hex(customer, 2),
+      hex(data32, 8),
+      raw,
+    );
+  }
+  if (snapshot.hf) parts.push(snapshot.hf.uid, snapshot.hf.raw);
+  return parts.join(" ").toLowerCase();
+}
+
+/**
+ * Whether a Snapshot answers the query: its name, its Identity (id, facility,
+ * card, customer and data bytes) or its UID. Bytes may be typed with or without
+ * the spaces between them.
+ */
+export function snapshotMatches(snapshot: Snapshot, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return true;
+  const text = searchableText(snapshot);
+  if (text.includes(needle)) return true;
+  const compact = needle.replace(WHITESPACE, "");
+  return compact.length > 0 && text.replace(WHITESPACE, "").includes(compact);
+}
+
+/** The Snapshots that answer the query, in the order they were given. */
+export function filterSnapshots(snapshots: readonly Snapshot[], query: string): Snapshot[] {
+  // Nothing typed: hand back the very array the view holds, so an empty search
+  // costs nothing at all.
+  if (query.trim().length === 0) return snapshots as Snapshot[];
+  return snapshots.filter((snapshot) => snapshotMatches(snapshot, query));
+}
+
+/** Name, or the order the Tags were read in. */
+export type SnapshotOrder = "name" | "captured";
+
+function capturedTime(snapshot: Snapshot): number {
+  const time = new Date(snapshot.capturedAt).getTime();
+  // A time this build cannot read sorts behind every time it can, rather than
+  // silently jumping to 1970 and claiming to be the oldest read.
+  return Number.isNaN(time) ? Number.NEGATIVE_INFINITY : time;
+}
+
+const NAME_ORDER = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+/**
+ * A sorted copy: by name (numbers inside a name in numeric order) or by when
+ * the Tag was read, most recent first. The array handed in is left alone, so
+ * the library in the view keeps the order the file was written in.
+ */
+export function sortSnapshots(
+  snapshots: readonly Snapshot[],
+  order: SnapshotOrder,
+): Snapshot[] {
+  const sorted = [...snapshots];
+  if (order === "name") {
+    sorted.sort(
+      (a, b) =>
+        NAME_ORDER.compare(snapshotTitle(a), snapshotTitle(b)) || NAME_ORDER.compare(a.id, b.id),
+    );
+  } else {
+    sorted.sort((a, b) => capturedTime(b) - capturedTime(a) || NAME_ORDER.compare(a.id, b.id));
+  }
+  return sorted;
+}
+
+/**
+ * The two fields of a Snapshot the user may change. A Draft here is a copy held
+ * in the page while the user types: nothing is written until they confirm, so
+ * cancelling an edit cannot leave a half-written Snapshot behind.
+ */
+export interface SnapshotDraft {
+  name: string;
+  note: string;
+}
+
+/** Start editing from what is stored. */
+export function draftOf(snapshot: Snapshot): SnapshotDraft {
+  return { name: snapshot.name, note: snapshot.note };
+}
+
+/** Whether confirming this draft would actually change the stored Snapshot. */
+export function draftIsDirty(snapshot: Snapshot, draft: SnapshotDraft): boolean {
+  return (
+    draft.name.trim() !== snapshot.name.trim() || draft.note.trim() !== snapshot.note.trim()
+  );
+}

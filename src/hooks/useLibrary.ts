@@ -17,6 +17,8 @@ export interface LibraryState {
   /** Save a 125 kHz read. `null` means the call itself failed. */
   saveLf: (card: LfCard) => Promise<SaveResult | null>;
   rename: (id: string, name: string) => Promise<void>;
+  /** Write the name and note of one Snapshot in a single call, or neither. */
+  edit: (id: string, draft: { name: string; note: string }) => Promise<void>;
   remove: (id: string) => Promise<void>;
   reload: () => Promise<void>;
 }
@@ -77,6 +79,21 @@ export function useLibrary(): LibraryState {
     }
   }, []);
 
+  const edit = useCallback(async (id: string, draft: { name: string; note: string }) => {
+    try {
+      setView(
+        await invoke<LibraryView>("library_edit", {
+          id,
+          name: draft.name,
+          note: draft.note,
+        }),
+      );
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
   const remove = useCallback(async (id: string) => {
     try {
       setView(await invoke<LibraryView>("library_delete", { id }));
@@ -86,5 +103,5 @@ export function useLibrary(): LibraryState {
     }
   }, []);
 
-  return { view, error, loading, saveLf, rename, remove, reload };
+  return { view, error, loading, saveLf, rename, edit, remove, reload };
 }
