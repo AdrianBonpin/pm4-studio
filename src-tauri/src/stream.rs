@@ -48,8 +48,9 @@ impl std::fmt::Display for StreamError {
             } => write!(
                 f,
                 "the reader's 0x{cmd:04X} response is truncated: the frame declares \
-                 {declared_len} payload bytes and needs {} more, but only {received} arrived",
-                declared_len + 2
+                 {declared_len} payload bytes and {needed} payload-and-checksum bytes in \
+                 total, but only {received} arrived after the header",
+                needed = declared_len + 2
             ),
             StreamError::TruncatedHeader { received } => write!(
                 f,
