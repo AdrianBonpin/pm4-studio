@@ -168,14 +168,10 @@ export function EraseNdef({ connected }: EraseNdefProps) {
               </p>
             )}
             <div className="mt-3 flex flex-wrap items-center gap-2">
-              <button
-                disabled={busy}
-                onClick={() => void erase()}
-                className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-err/50 bg-err/10 px-3 py-1.5 text-sm font-medium text-err transition-colors hover:bg-err/20 disabled:cursor-not-allowed disabled:opacity-50"
-              >
+              <Button variant="danger" disabled={busy} onClick={() => void erase()}>
                 <Eraser size={13} />{" "}
                 {phase === "erasing" ? "Erasing…" : confirmation.action}
-              </button>
+              </Button>
               <Button variant="ghost" disabled={busy} onClick={cancel}>
                 Keep the content
               </Button>

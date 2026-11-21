@@ -1,33 +1,38 @@
 import { useState } from "react";
 import { FileText, Library as LibraryIcon, Nfc, Radio, Terminal, X } from "lucide-react";
-import { Badge } from "./components/ui/Badge";
+import { Badge, type BadgeTone } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
 import { Toggle } from "./components/ui/Toggle";
 import { useBeep } from "./hooks/useBeep";
 import { useLibrary } from "./hooks/useLibrary";
-import { useReader } from "./hooks/useReader";
+import { useReader, type Status } from "./hooks/useReader";
 import {
   classifyDeviceFailure,
   deviceFailureNotice,
   formatFirmwareRevision,
 } from "./lib/readerIdentity";
 import { isMacOS, isTauri } from "./lib/platform";
+import { PAGES, type PageId } from "./lib/pageCopy";
 import { HfPage } from "./pages/HfPage";
 import { DraftsPage } from "./pages/DraftsPage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { LfPage } from "./pages/LfPage";
 import { ToolsPage } from "./pages/ToolsPage";
 
-type Page = "lf" | "hf" | "drafts" | "library" | "tools";
-
-const STATUS_COLOR = {
-  idle: "#A1A1AA",
-  connecting: "#FBBF24",
-  connected: "#4ADE80",
-  absent: "#A1A1AA",
-  wedged: "#FBBF24",
-  error: "#F87171",
-} as const;
+/**
+ * Tone per Reader status, in the design system's own vocabulary.
+ *
+ * A tone, not a colour: the tokens in `src/index.css` are the only place a hue
+ * is defined, so a status badge cannot drift away from the theme.
+ */
+const STATUS_TONE: Record<Status, BadgeTone> = {
+  idle: "muted",
+  connecting: "warn",
+  connected: "ok",
+  absent: "muted",
+  wedged: "warn",
+  error: "err",
+};
 
 /** Left-rule tone per classified failure. Hardware faults carry the remedy. */
 const NOTICE_TONE = {
@@ -36,52 +41,17 @@ const NOTICE_TONE = {
   error: { box: "border-err bg-err/5", title: "text-err" },
 } as const;
 
-const PAGES: {
-  id: Page;
-  label: string;
-  title: string;
-  subtitle: string;
-  icon: typeof Nfc;
-}[] = [
-  {
-    id: "lf",
-    label: "125 kHz",
-    title: "125 kHz",
-    subtitle: "Badges, fobs and elevator tags. Read, clone and write EM4100.",
-    icon: Nfc,
-  },
-  {
-    id: "hf",
-    label: "13.56 MHz",
-    title: "13.56 MHz",
-    subtitle: "ISO14443-A tags. Read the UID, the card type, and the raw memory.",
-    icon: Radio,
-  },
-  {
-    id: "drafts",
-    label: "Drafts",
-    title: "Drafts",
-    subtitle: "NDEF messages you are composing. Not attached to any Tag.",
-    icon: FileText,
-  },
-  {
-    id: "library",
-    label: "Library",
-    title: "Library",
-    subtitle: "Snapshots of every read, browsable with no Reader attached.",
-    icon: LibraryIcon,
-  },
-  {
-    id: "tools",
-    label: "Tools",
-    title: "Tools",
-    subtitle: "Hardware probes and raw command frames.",
-    icon: Terminal,
-  },
-];
+/** The sidebar icon per page. The words are in `lib/pageCopy`. */
+const PAGE_ICON: Record<PageId, typeof Nfc> = {
+  lf: Nfc,
+  hf: Radio,
+  drafts: FileText,
+  library: LibraryIcon,
+  tools: Terminal,
+};
 
 export default function App() {
-  const [page, setPage] = useState<Page>("lf");
+  const [page, setPage] = useState<PageId>("lf");
   const reader = useReader();
   const library = useLibrary();
   const { beepOn, setBeepOn, chirp } = useBeep();
@@ -114,7 +84,7 @@ export default function App() {
 
           <nav className="flex flex-col gap-0.5 px-2">
             {PAGES.map((p) => {
-              const Icon = p.icon;
+              const Icon = PAGE_ICON[p.id];
               const active = p.id === page;
               return (
                 <button
@@ -139,7 +109,7 @@ export default function App() {
               <span className="truncate font-mono text-[11px] text-text-muted">
                 {reader.info ? reader.info.product : "no reader"}
               </span>
-              <Badge label={reader.status} color={STATUS_COLOR[reader.status]} />
+              <Badge label={reader.status} tone={STATUS_TONE[reader.status]} />
             </div>
             <div className="flex items-center justify-between gap-2">
               <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">

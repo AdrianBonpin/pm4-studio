@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { ArrowRight, Check, Layers, RotateCcw } from "lucide-react";
+import { AlertTriangle, ArrowRight, Check, Layers, RotateCcw } from "lucide-react";
 import { Button } from "./ui/Button";
 import { BatchClone } from "./BatchClone";
 import { Field, Readout } from "./Section";
 import { useLfPoller } from "../hooks/useReader";
 import { describeDeviceFailure } from "../lib/readerIdentity";
+import { replacementConfirmation } from "../lib/replacement";
 import { confirmedCopiesLabel, writeNotice } from "../lib/writeOutcome";
 import type { LfCard, WriteResult } from "../types";
 
@@ -14,20 +15,29 @@ type Step =
   | "awaitSource"
   | "sourceReady"
   | "awaitDest"
+  /** The Blank was read; the write waits on a confirmation naming what it holds. */
+  | "confirmDest"
   | "writing"
   | "done"
   | "failed"
   /** Several Blanks from the one source reading. Rendered by `BatchClone`. */
   | "batch";
 
-const STEP_ORDER: Step[] = ["awaitSource", "sourceReady", "awaitDest", "writing", "done"];
+const STEP_ORDER: Step[] = [
+  "awaitSource",
+  "sourceReady",
+  "awaitDest",
+  "confirmDest",
+  "writing",
+  "done",
+];
 
 function stepIndex(step: Step): number {
   const i = STEP_ORDER.indexOf(step);
   return i < 0 ? 0 : i;
 }
 
-const LABELS = ["Tap source", "Read source", "Tap blank", "Writing", "Done"];
+const LABELS = ["Tap source", "Read source", "Tap blank", "Confirm", "Writing", "Done"];
 
 interface CloneWizardProps {
   connected: boolean;
@@ -40,6 +50,12 @@ interface CloneWizardProps {
 /**
  * Guided clone: tap the original, confirm what was read, swap in a blank, write,
  * verify. One linear flow with the current step always visible.
+ *
+ * The blank is read before it is written, and that reading is what the
+ * confirmation names: a Tag that carries another Identity is not a Blank, and the
+ * write destroys what it carries. The wording comes from `lib/replacement.ts`,
+ * the same module authoring an Identity uses, so the two confirmations cannot
+ * disagree about what a destructive write says.
  *
  * The same source reading also feeds a Batch Clone (`batch` step): one Identity
  * written to successive Blanks, each attempt reporting its own result. Sharing
@@ -109,8 +125,12 @@ export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: Clon
           setNote("That is still the original tag. Take it off and tap a blank tag.");
           return;
         }
+        // Read, then ask. `write_guard::decide` allows writing over a Tag that
+        // carries a different Identity, so this reading is the only chance to say
+        // which Identity is about to be lost.
         setDest(card);
-        void doWrite(source, card);
+        setNote(null);
+        setStep("confirmDest");
       }
     },
     onDeviceError,
@@ -152,6 +172,13 @@ export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: Clon
   }
 
   const current = stepIndex(step);
+
+  // Built from the reading taken in the step before, never from what the flow
+  // assumed was on the reader: the Tag that was read is the Tag the button names.
+  const cloneConfirmation =
+    step === "confirmDest" && source && dest
+      ? replacementConfirmation(source, { kind: "identified", card: dest })
+      : null;
 
   return (
     <div className="flex flex-col gap-5">
@@ -212,6 +239,44 @@ export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: Clon
           </p>
           {note && <p className="text-xs text-warn">{note}</p>}
           <div>
+            <Button variant="ghost" onClick={reset}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {cloneConfirmation && source && dest && (
+        <div className="flex flex-col gap-4">
+          <Readout value={cloneConfirmation.identity} />
+          <div className="border-l-2 border-warn bg-warn/5 px-3 py-2">
+            <p className="flex items-center gap-1.5 text-sm text-warn">
+              <AlertTriangle size={14} /> {cloneConfirmation.title}
+            </p>
+            <ul className="mt-2 flex flex-col gap-2">
+              {cloneConfirmation.facts.map((fact) => (
+                <li key={fact.title} className="text-xs leading-relaxed text-text-muted">
+                  <span className="text-text">{fact.title}.</span> {fact.detail}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant={cloneConfirmation.destructive ? "danger" : "primary"}
+              onClick={() => void doWrite(source, dest)}
+            >
+              {cloneConfirmation.action}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => {
+                setDest(null);
+                setStep("awaitDest");
+              }}
+            >
+              Tap a different tag
+            </Button>
             <Button variant="ghost" onClick={reset}>
               Cancel
             </Button>

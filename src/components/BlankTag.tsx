@@ -184,12 +184,9 @@ export function BlankTag({ connected, onChirp, onDeviceError }: BlankTagProps) {
           </p>
 
           <div className="flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => void blank(card)}
-              className="inline-flex cursor-pointer items-center gap-1.5 rounded-full border border-err/50 bg-err/10 px-3 py-1.5 text-sm font-medium text-err transition-colors hover:bg-err/20"
-            >
+            <Button variant="danger" onClick={() => void blank(card)}>
               <Ban size={13} /> Blank this tag permanently
-            </button>
+            </Button>
             <Button variant="ghost" autoFocus onClick={reset}>
               Keep the tag as it is
             </Button>

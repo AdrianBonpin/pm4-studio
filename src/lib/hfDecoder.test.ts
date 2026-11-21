@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { decodeHfPayload } from "./hfDecoder";
+import {
+  decodeHfPayload,
+  ndefField,
+  ndefStatusFor,
+  uidMatchesMemory,
+} from "./hfDecoder";
 
 /**
  * Seam S5 — the HF decoder.
@@ -121,10 +126,72 @@ describe("decodeHfPayload — a resolvable pair", () => {
     const r = decodeHfPayload(CLASSIC_1K);
     expect(r.state).toBe("decoded");
     if (r.state !== "decoded") return;
-    // Formatting lives in the tag's memory, which this Reader cannot read, so
-    // the honest answer is "not determined" — never true or false.
+    // Formatting lives in the tag's memory, not in a poll reply, so a reading
+    // taken from a poll alone has no answer — never true or false.
     expect(r.ndef.formatted).toBeNull();
     expect(r.ndef.note).toMatch(/memory/i);
+  });
+
+  it("points at the memory read that settles formatting, and never claims the Reader cannot read memory", () => {
+    const r = decodeHfPayload(CLASSIC_1K);
+    if (r.state !== "decoded") throw new Error("fixture decodes");
+    // The Reader reads memory (`0x0081`) and this page already decodes the
+    // Capability Container for the erase and write panels. Saying it has no such
+    // command is false, and it would tell the user the answer cannot be had.
+    expect(r.ndef.note).not.toMatch(/cannot read memory|no command that reads memory/i);
+    expect(r.ndef.note).toMatch(/0x0081|memory read/i);
+  });
+});
+
+describe("NDEF formatting, once the tag's memory has been read", () => {
+  it("shows no NDEF field at all while the answer is not determined", () => {
+    // The per-tag greyed row is the thing user story 56 forbids: a field this
+    // Reader cannot produce from a poll must be omitted, not shown as "unknown".
+    expect(ndefField(ndefStatusFor(null))).toBeNull();
+  });
+
+  it("reports a real yes or no from the Type 2 structure the memory read returned", () => {
+    expect(ndefStatusFor("message").formatted).toBe(true);
+    expect(ndefStatusFor("empty").formatted).toBe(true);
+    expect(ndefStatusFor("missing").formatted).toBe(true);
+    expect(ndefField(ndefStatusFor("message"))).toEqual({
+      label: "NDEF formatted",
+      value: "yes",
+    });
+
+    expect(ndefStatusFor("notFormatted").formatted).toBe(false);
+    expect(ndefField(ndefStatusFor("notFormatted"))).toEqual({
+      label: "NDEF formatted",
+      value: "no",
+    });
+  });
+
+  it("keeps the field off the screen when even the memory read could not say", () => {
+    const status = ndefStatusFor("unreadable");
+    expect(status.formatted).toBeNull();
+    expect(status.note).toMatch(/could not/i);
+    expect(ndefField(status)).toBeNull();
+  });
+
+  it("always explains the answer it gives", () => {
+    for (const outcome of [null, "message", "empty", "missing", "notFormatted", "unreadable"] as const) {
+      expect(ndefStatusFor(outcome).note.trim()).not.toBe("");
+    }
+  });
+});
+
+describe("matching a memory read to the reading above it", () => {
+  it("matches on the UID bytes the poll splits", () => {
+    // The poll's UID field holds the first four bytes of a 7-byte UID, and the
+    // memory read reports the whole UID, so the poll's bytes are a prefix.
+    expect(uidMatchesMemory("04 43 8A 01", "04 43 8A 01 22 09 03")).toBe(true);
+    expect(uidMatchesMemory("04 43 8A 01", "04 43 8A 02 22 09 03")).toBe(false);
+    expect(uidMatchesMemory("04 43 8A 01", "04 43 8A 01")).toBe(true);
+  });
+
+  it("refuses to match an empty UID rather than matching everything", () => {
+    expect(uidMatchesMemory("", "04 43 8A 01 22 09 03")).toBe(false);
+    expect(uidMatchesMemory("04 43 8A 01", "")).toBe(false);
   });
 });
 

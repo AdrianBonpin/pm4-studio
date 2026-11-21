@@ -180,6 +180,12 @@ export interface AuthorConfirmation {
   /** The Identity that will be written, as the user saw it typed. */
   readonly identity: string;
   readonly title: string;
+  /**
+   * The label of the button that starts the write. It says *read then write*
+   * rather than *write*, because the Tag in the write position is read before the
+   * write is offered: the next screen names what that write will replace, and an
+   * existing Identity is only visible once the Tag has been read.
+   */
   readonly action: string;
   readonly facts: readonly AuthorFact[];
   /** Whether this write also keeps the Identity as a Snapshot in one action. */
@@ -211,7 +217,7 @@ export function authorConfirmation(
   return {
     identity: preview.id,
     title: `Write ${preview.id} to the Blank on the reader?`,
-    action: "Write to the blank tag",
+    action: "Read the tag, then write",
     facts,
     keepSnapshot,
     blankHint: BLANK_ON_READER_HINT,

@@ -477,7 +477,7 @@ page 133: 00 00 00 00     upstream label: PWD
 page 134: 00 00 00 00     upstream label: PACK
 ```
 
-### `0x0082` — NTAG write — CONFIRMED (one page, verified by read-back)
+### `0x0082` — NTAG write — CONFIRMED for one page (verbatim bytes recorded); multi-page PROVISIONAL
 
 Request payload is exactly **1328 bytes** (`0x530`), sent as 21 reports:
 
@@ -546,11 +546,13 @@ block into `0x10..0x30`, the `0x0083` request's page index and flags, and closin
 the read cycle first with the `0x0051` payload-`00` variant. Only the selector
 mattered.
 
-**The state table is not limited to one page.** Several consecutive pages marked
-`2` in a single request are all written; ticket 18 exercised that on hardware and
-records it below.
+**The state table is not limited to one page — observed, PROVISIONAL.** Several
+consecutive pages marked `2` in a single request were all written in ticket 18's
+run on hardware, but that run did not record the request and reply frames, so the
+observation is not independently auditable. See the multi-page section below for
+what is recorded and what is missing.
 
-**Multi-page write — VERIFIED (ticket 18, 2026-11-21).** Three requests on the
+**Multi-page write — PROVISIONAL (ticket 18, 2026-11-21).** Three requests on the
 NTAG215 above (`04 43 7B 01 CC 09 03`, CC `E1 10 3E 00`), sent through the
 shipping path (`src-tauri/src/ntag.rs`, probe
 `cargo run --example ndefwrite -- --yes-disposable`):
@@ -580,6 +582,29 @@ What is still not exercised: a message that fills the whole 496 bytes (124
 pages), and a write in which one page reports state `4` while its neighbours
 succeed. Neither is needed to write a normal message; both are recorded here so
 the gap is visible rather than assumed away.
+
+**Why this section is PROVISIONAL, and what would settle it.** The frame that
+*is* auditable is the single-page write above: its request header, its reply and
+its `0x0085` progress frame are reproduced verbatim, and the read-back came from a
+separate process. The three requests in this section are **not**: ticket 18
+recorded what each one did (the pages marked `2`, the number of `0x0085` frames,
+status `0`, and the bytes a separate process read back) but not the request and
+reply bytes themselves — neither the 1328-byte payload nor the per-page state
+table of the reply. Nothing here should be read as "verified": the evidence is a
+record of the run, and the run's own numbers are self-consistent (a 47-byte
+message is a 50-byte TLV, which is 13 pages, which is 13 `0x0085` frames).
+Recording one of these requests and its reply verbatim, as the single-page write
+does, is what would promote this section. That is the open half of ticket 18's
+first criterion, which stays unchecked for this reason.
+
+One later multi-page request *was* recorded byte for byte: the 14-page erase
+below has its request header, its state table, its status reply and its read-back
+in full, which is why erase is stated as verified on its own evidence. That is one
+run of one shape — an empty NDEF TLV over existing content — and it does not make
+the three NDEF-write requests above auditable.
+
+The capacity refusal below does **not** depend on the missing frames: it happened
+before any write frame existed, so "nothing was written" is the whole claim.
 
 **Correction (ticket 20), about the bytes rather than the write.** The 9-byte
 message in the first row is recorded as bytes only. `D1 01 54 05 …` puts the type
@@ -728,9 +753,12 @@ no-tag payloads contain. ATQA/SAK offsets therefore remain **unconfirmed** for
 1. **ATQA/SAK offsets** for the HF poll tail. A latched NTAG215 poll was captured
    (above) and its tail does not resemble ATQA/SAK, so ticket 12's capture still
    has to settle where those fields are — or that they are not transmitted.
-2. **Multi-page writes — solved.** Ticket 18 marked up to 13 consecutive pages in
-   one request and read every byte back; see the table in the `0x0082` section.
-   Unexercised: filling the whole 496 bytes, and a page that fails mid-write.
+2. **Multi-page writes — PROVISIONAL.** Ticket 18 marked up to 13 consecutive
+   pages in one request and a separate process read every byte back, but the
+   request and reply frames were not recorded, so the observation cannot be
+   audited from this document the way the single-page write can. See the
+   `0x0082` section for exactly what is missing. Unexercised: filling the whole
+   496 bytes, and a page that fails mid-write.
 3. **What the write-path tag selector means.** `0x0082` accepts `0..4` and rejects
    `5` and above, while `0x0083` reports `5` for the same NTAG215. Values 3 and 4
    are indistinguishable on a single-page write, so the selector's meaning is
@@ -757,8 +785,10 @@ Solved: **NTAG read** — `0x0081`, verified against the poll UID, the tag's own
 BCC bytes, the Type 2 CC and a decoded NDEF record.
 Solved: **NTAG write** — `0x0082`, one page written and read back from a separate
 process, see the write section.
-Solved: **multi-page NTAG write** — up to 13 pages marked `2` in one `0x0082`
-request, written and read back, see the write section.
+Provisional: **multi-page NTAG write** — up to 13 pages marked `2` in one
+`0x0082` request were written and read back in ticket 18's run, but the verbatim
+request and reply were not recorded, so the claim is not auditable here; see the
+write section. The single-page write is the part confirmed by bytes.
 
 ## Spike 16 finding — NTAG viability
 
@@ -793,8 +823,10 @@ write landed on the very same class of tag.
 **The ADR 0002 gate is therefore cleared.** A write was observed to land and was
 confirmed by a later read, which is exactly what the ADR required. Slices that
 depend on writing 13.56 MHz tags — tickets 18 to 22 — may begin. Ticket 18 has
-since closed the multi-page question the spike left open: several pages marked
-`2` in one request are written and read back (see the `0x0082` section).
+since reported that several pages marked `2` in one request are written and read
+back; that report is recorded as PROVISIONAL in the `0x0082` section, because its
+request and reply frames were not captured — the single page the spike wrote is
+the one with verbatim bytes behind it.
 
 ## Legal
 

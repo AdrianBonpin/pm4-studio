@@ -13,11 +13,19 @@
 - [x] Each listed Record type can be authored and round-trips through encode and decode.
 - [x] Each Record displays its encoded byte length.
 - [x] The Draft displays a total byte count.
-- [ ] Where target capacity is known the total is compared against it; where unknown the absence is stated rather than guessed.
-  - The unknown half is met and shown in the UI: a Draft belongs to no Tag, so the page
-    states capacity is not known rather than inventing a number.
-  - The known half is unproven end to end. `capacityNote` implements the comparison and
-    `drafts.test.ts` covers it, but no Draft carries a target Tag at this stage, so no
-    UI path passes a real capacity. Writing a Draft to a Tag is a later gated ticket.
+- [x] Where target capacity is known the total is compared against it; where unknown the absence is stated rather than guessed.
+  - The unknown half is met and shown in the UI: a Draft belongs to no Tag, so the
+    Drafts page passes no capacity and `capacityNote(total, null)` states that the total
+    is not compared rather than inventing a number.
+  - The known half is now met in the write path (ticket 18). `hf_ndef_preview` reads the
+    Type 2 Capability Container, `ntag::plan` compares the encoded message's TLV length
+    against that capacity, and `capacitySentence` shows it in the confirmation: "The
+    message needs N of the tag's C bytes." A message that does not fit is refused with
+    `PlanError::TooLarge` before any write frame exists. On hardware a 500-byte message
+    (505 bytes of TLV) was refused against 496 with "the message needs 505 bytes and the
+    Tag holds 496", and the tag read back unchanged (`docs/PROTOCOL.md`, the `0x0082`
+    section). The Draft itself still carries no target Tag, so the comparison happens
+    where the target is read rather than on the Drafts page — that is the only place a
+    real capacity exists.
 - [x] A malformed field is rejected with the problem named instead of being silently encoded.
 - [x] Record types that are meaningless from a desktop app are not offered.

@@ -39,6 +39,7 @@
  */
 
 import { resolveCardType, type CardType } from "./cardType";
+import type { TagNdefOutcome } from "./tagRecords";
 
 /** The 13.56 MHz poll reply is 19 payload bytes. */
 export const HF_POLL_PAYLOAD_LEN = 19;
@@ -79,24 +80,106 @@ export type HfRawOnlyReason =
   /** The ATQA/SAK pair matches nothing in the published table. */
   | "unknown-card-type";
 
-/** Whether a Tag is NDEF formatted, as far as a poll reply can say.
+/** Whether a Tag is NDEF formatted, and what settled the answer.
  *
- * It cannot say. Formatting lives in the Tag's memory — the capability
- * container — and this Reader has no command that reads memory, so `formatted`
- * is null until a read path exists. Assuming true because a family is
- * NDEF-capable, or false because it is not, would invent a value. */
+ * A poll reply does not carry it: formatting is in the Tag's memory, in the Type 2
+ * Capability Container. The Reader *can* read that memory (`0x0081` — the same
+ * command the memory dump and the erase preview use), so the answer is available;
+ * it just takes a second command. `formatted` is therefore null on a reading
+ * taken from a poll alone, and `true`/`false` once a memory read of the same Tag
+ * has settled it (`ndefStatusFor`). It is never filled in from the card family: an
+ * NTAG215 can be unformatted, and a MIFARE Classic cannot hold NDEF at all, but a
+ * family is still not a reading of the memory. */
 export type NdefStatus = {
   formatted: boolean | null;
-  /** Why the answer is unknown. Never empty. */
+  /** What is known, and what would settle it. Never empty. */
   note: string;
 };
 
-const NDEF_UNDETERMINED: NdefStatus = {
+/** A poll reply alone never answers it: the answer is one memory read away. */
+const NDEF_NOT_READ_YET: NdefStatus = {
   formatted: null,
   note:
-    "A poll reply carries no NDEF information: formatting lives in the Tag's memory, " +
-    "and this Reader cannot read memory. Read the Tag's memory to find out.",
+    "A poll reply carries no NDEF information: whether a Tag is formatted lives in its " +
+    "memory, in the Type 2 Capability Container. Read the Tag's memory (0x0081) below and " +
+    "the answer appears here.",
 };
+
+/**
+ * The NDEF status a memory read settled, or the honest "read the memory" status
+ * when no memory read has been taken (`null`).
+ *
+ * `outcome` is `tag_records::TagNdef`'s verdict on the Type 2 structure, so this
+ * is a wording layer over one determination rather than a second opinion: the
+ * erase and load panels read the same field out of the same reply.
+ */
+export function ndefStatusFor(outcome: TagNdefOutcome | null): NdefStatus {
+  switch (outcome) {
+    case null:
+      return NDEF_NOT_READ_YET;
+    case "message":
+      return {
+        formatted: true,
+        note:
+          "The Tag's memory was read: its Capability Container is a Type 2 one and its user " +
+          "memory holds an NDEF message, so the Tag is NDEF formatted.",
+      };
+    case "empty":
+      return {
+        formatted: true,
+        note:
+          "The Tag's memory was read: it holds an empty NDEF TLV (03 00 FE), so it is NDEF " +
+          "formatted and carries no Records.",
+      };
+    case "missing":
+      return {
+        formatted: true,
+        note:
+          "The Tag's memory was read: page 3 is a Type 2 Capability Container, so the Tag is " +
+          "NDEF formatted, but its user memory holds no NDEF TLV yet.",
+      };
+    case "notFormatted":
+      return {
+        formatted: false,
+        note:
+          "The Tag's memory was read: page 3 is not a Type 2 Capability Container, so the Tag " +
+          "is not NDEF formatted.",
+      };
+    case "unreadable":
+      return {
+        formatted: null,
+        note:
+          "The Tag's memory was read, but the NDEF area could not be parsed, so whether it is " +
+          "formatted could not be determined from it. The raw bytes are shown below.",
+      };
+  }
+}
+
+/**
+ * The NDEF row a readout shows, or `null` when there is nothing true to show.
+ *
+ * User story 56: a field this Reader cannot produce for a Tag must be omitted
+ * rather than printed as a greyed "not determinable" row on every reading.
+ */
+export function ndefField(status: NdefStatus): { label: string; value: string } | null {
+  if (status.formatted === null) return null;
+  return { label: "NDEF formatted", value: status.formatted ? "yes" : "no" };
+}
+
+/**
+ * Whether a memory read describes the Tag a reading came from.
+ *
+ * A poll's UID field holds the first four bytes of a wider UID, and a memory read
+ * reports the whole thing, so the reading's bytes are a **prefix** of the dump's.
+ * An empty UID never matches: a memory read of some other Tag must not be applied
+ * to a reading that named none.
+ */
+export function uidMatchesMemory(readingUid: string, dumpUid: string): boolean {
+  const reading = readingUid.trim().toUpperCase();
+  const dump = dumpUid.trim().toUpperCase();
+  if (reading === "" || dump === "") return false;
+  return dump === reading || dump.startsWith(`${reading} `);
+}
 
 export type HfDecodedReading = {
   state: "decoded";
@@ -253,7 +336,7 @@ export function decodeHfPayload(payload: readonly number[]): HfReading {
     atqa,
     sak,
     cardType,
-    ndef: NDEF_UNDETERMINED,
+    ndef: NDEF_NOT_READ_YET,
     provisional: !HF_OFFSETS_CONFIRMED,
   };
 }

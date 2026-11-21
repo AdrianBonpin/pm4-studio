@@ -16,3 +16,9 @@
 - [x] The guard refuses when no tag can be read, and refuses when the tag already presents the target Identity, both provable with no hardware attached.
 - [x] An encode request for an out-of-range Identity is rejected rather than silently truncated.
 - [ ] A clone performed on the physical Reader still writes and verifies exactly as before.
+      NOT EXECUTED, and not claimed. The 125 kHz field was empty in every probe run of
+      this work: no Tag was ever presented in the write position, so no clone was run on
+      the physical Reader and there is no observation to record. What the codec and the
+      guard decide is covered by the criteria above with no hardware attached; whether
+      the device still accepts the 24-byte payload it accepted before stays unverified
+      until a Tag is actually read and written.

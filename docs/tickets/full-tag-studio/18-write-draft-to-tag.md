@@ -18,9 +18,11 @@ recorded but its raw frames are not, so that one criterion is left unchecked
       That is specific and self-consistent (47-byte message, 50-byte TLV, 13 pages,
       matching the probe's built-in text). What is missing is the *verbatim* request
       and reply — the byte range and the page-state table — which the single-page
-      write above does record in full. The `0x0082` heading and the "Solved" summary
-      in PROTOCOL.md also still say "one page" next to the multi-page claim. Not
-      accepted as proven without those bytes.
+      write above does record in full. PROTOCOL.md now says the same thing in every
+      place: the single-page write is CONFIRMED by verbatim bytes, and multi-page is
+      PROVISIONAL with exactly this gap named, including its `0x0082` heading, open
+      problem 2 and the Solved/Provisional summary. Not accepted as proven without
+      those bytes.
 - [x] The confirmation names the existing content being replaced, or states the tag appears empty.
       `replacementSentence` in `src/lib/tagWrite.ts`: "The tag appears empty, so nothing is
       being replaced", or "Writing replaces what the tag holds now: 1 Record: URL
