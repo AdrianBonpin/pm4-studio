@@ -5,6 +5,7 @@ import { PasswordProtection } from "../components/PasswordProtection";
 import { Badge } from "../components/ui/Badge";
 import { Button } from "../components/ui/Button";
 import { Field, Readout, Section } from "../components/Section";
+import { variantsNote } from "../lib/cardType";
 import {
   HF_POLL_LAYOUT,
   decodeHfPayload,
@@ -114,7 +115,7 @@ function DecodedReadout({
 
       {cardType.variants.length > 1 && (
         <p className="text-xs leading-relaxed text-text-muted">
-          This pair covers several chips: {cardType.variants.join(", ")}.
+          {variantsNote(cardType.variants)}
         </p>
       )}
 

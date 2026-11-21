@@ -11,7 +11,7 @@ import {
   type NdefErasePreview,
 } from "./eraseTag";
 import { draftMessageHex, type ExistingNdef, type NdefTagView } from "./tagWrite";
-import { PAGES } from "./pageCopy";
+import { pageCopyViolations, unapprovedWords } from "./copyGuard";
 import type { EraseResult } from "../types";
 
 /**
@@ -199,11 +199,9 @@ describe("the confirmation", () => {
       confirmation.notReadOnly,
       confirmation.notPasswordRemoval,
     ].join(" ");
-    expect(copy).not.toMatch(/badge|fob/i);
-    // The shell's page copy is held to the same words, in one place with this.
-    for (const page of PAGES) {
-      expect(`${page.label} ${page.title} ${page.subtitle}`).not.toMatch(/badge|fob/i);
-    }
+    expect(unapprovedWords(copy)).toEqual([]);
+    // The shell's page copy is held to the same words, through the same guard.
+    expect(pageCopyViolations()).toEqual([]);
   });
 
   it("is built from what was read, so it cannot describe an unread tag", () => {

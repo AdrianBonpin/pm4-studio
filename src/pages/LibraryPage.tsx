@@ -301,13 +301,13 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
                           Tag itself is not touched.
                         </p>
                         <div className="flex items-center gap-2">
-                          <button
+                          <Button
                             autoFocus
+                            variant="danger"
                             onClick={() => deleteSnapshot(snapshot)}
-                            className="cursor-pointer rounded-full border border-err/50 bg-err/10 px-3 py-1.5 text-sm font-medium text-err transition-colors hover:bg-err/20"
                           >
                             Delete permanently
-                          </button>
+                          </Button>
                           <Button variant="ghost" onClick={() => setConfirmingId(null)}>
                             Keep
                           </Button>

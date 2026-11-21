@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { bareCardUses, pageCopyViolations } from "./copyGuard";
 import { PAGES, PAGE_SUBTITLES } from "./pageCopy";
 
 /**
@@ -7,14 +8,9 @@ import { PAGES, PAGE_SUBTITLES } from "./pageCopy";
  * `App.tsx` for exactly that reason: the guard could not reach it otherwise, and
  * a retired word in a page subtitle is the same defect as one in a confirmation.
  *
- * The words GLOSSARY.md retires for a physical transponder are `card`, `fob`,
- * `badge`, `chip` and `transponder`; "the object is a Tag". `card type` survives
- * as an approved term of its own (a derived 13.56 MHz label), which is why the
- * check below strips it before looking for a bare `card`.
+ * The words, and their inflections, live in `copyGuard.ts` — one guard shared
+ * with the confirmation tests, so the three cannot drift apart.
  */
-
-/** Words GLOSSARY.md retires, in the sense this app uses them. */
-const RETIRED = /\b(badge|fob|chip|transponder)\b/i;
 
 describe("the shell's page copy", () => {
   it("covers every page in the sidebar", () => {
@@ -34,16 +30,12 @@ describe("the shell's page copy", () => {
   });
 
   it("never calls a Tag a badge, fob, chip or transponder", () => {
-    for (const page of PAGES) {
-      const copy = `${page.label} ${page.title} ${page.subtitle}`;
-      expect(copy).not.toMatch(RETIRED);
-    }
+    expect(pageCopyViolations()).toEqual([]);
   });
 
   it("uses 'card' only in the approved term 'card type'", () => {
     for (const page of PAGES) {
-      const withoutCardType = page.subtitle.replace(/card type/gi, "");
-      expect(withoutCardType).not.toMatch(/\bcard/i);
+      expect(bareCardUses(page.subtitle)).toEqual([]);
     }
   });
 

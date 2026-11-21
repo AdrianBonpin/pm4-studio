@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, ArrowRight, Check, Layers, RotateCcw } from "lucide-react";
+import { ArrowRight, Check, Layers, RotateCcw } from "lucide-react";
 import { Button } from "./ui/Button";
 import { BatchClone } from "./BatchClone";
 import { Field, Readout } from "./Section";
+import {
+  ReplacementConfirmation,
+  replacementActionVariant,
+} from "./ReplacementConfirmation";
 import { useLfPoller } from "../hooks/useReader";
 import { describeDeviceFailure } from "../lib/readerIdentity";
 import { replacementConfirmation } from "../lib/replacement";
@@ -54,8 +58,10 @@ interface CloneWizardProps {
  * The blank is read before it is written, and that reading is what the
  * confirmation names: a Tag that carries another Identity is not a Blank, and the
  * write destroys what it carries. The wording comes from `lib/replacement.ts`,
- * the same module authoring an Identity uses, so the two confirmations cannot
- * disagree about what a destructive write says.
+ * the same module authoring an Identity uses, and the markup from
+ * `ReplacementConfirmation`, which both paths render — so the two confirmations
+ * cannot disagree about what a destructive write says, or about how serious it
+ * looks.
  *
  * The same source reading also feeds a Batch Clone (`batch` step): one Identity
  * written to successive Blanks, each attempt reporting its own result. Sharing
@@ -248,22 +254,10 @@ export function CloneWizard({ connected, onSaved, onChirp, onDeviceError }: Clon
 
       {cloneConfirmation && source && dest && (
         <div className="flex flex-col gap-4">
-          <Readout value={cloneConfirmation.identity} />
-          <div className="border-l-2 border-warn bg-warn/5 px-3 py-2">
-            <p className="flex items-center gap-1.5 text-sm text-warn">
-              <AlertTriangle size={14} /> {cloneConfirmation.title}
-            </p>
-            <ul className="mt-2 flex flex-col gap-2">
-              {cloneConfirmation.facts.map((fact) => (
-                <li key={fact.title} className="text-xs leading-relaxed text-text-muted">
-                  <span className="text-text">{fact.title}.</span> {fact.detail}
-                </li>
-              ))}
-            </ul>
-          </div>
+          <ReplacementConfirmation confirmation={cloneConfirmation} />
           <div className="flex flex-wrap items-center gap-2">
             <Button
-              variant={cloneConfirmation.destructive ? "danger" : "primary"}
+              variant={replacementActionVariant(cloneConfirmation.destructive)}
               onClick={() => void doWrite(source, dest)}
             >
               {cloneConfirmation.action}

@@ -6,7 +6,8 @@ import {
   blankConfirmation,
   blankNotice,
 } from "./blankTag";
-import { PAGES, PAGE_SUBTITLES } from "./pageCopy";
+import { pageCopyViolations, unapprovedWords } from "./copyGuard";
+import { PAGE_SUBTITLES } from "./pageCopy";
 import type { BlankResult } from "../types";
 
 // The confirmation is the only thing standing between a user and a destroyed
@@ -70,13 +71,12 @@ describe("the blanking confirmation", () => {
   });
 
   it("never uses the words the glossary retired", () => {
-    expect(copy).not.toMatch(/badge|fob/i);
-    expect(BLANK_IS_NOT_A_FACTORY_RESET).not.toMatch(/badge|fob/i);
+    expect(unapprovedWords(copy)).toEqual([]);
+    expect(unapprovedWords(BLANK_IS_NOT_A_FACTORY_RESET)).toEqual([]);
     // The same guard covers the shell's page copy. It used to reach module
-    // constants only, so a subtitle reading "badges, fobs" passed CI.
-    for (const page of PAGES) {
-      expect(`${page.label} ${page.title} ${page.subtitle}`).not.toMatch(/badge|fob/i);
-    }
+    // constants only, so a subtitle reading "badges, fobs" passed CI — the
+    // plural form the pattern could not see.
+    expect(pageCopyViolations()).toEqual([]);
     expect(PAGE_SUBTITLES.length).toBeGreaterThan(0);
   });
 
