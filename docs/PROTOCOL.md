@@ -274,7 +274,33 @@ source badge.
    behaviour. Treat each blank as single-use until proven otherwise, and never
    experiment on a tag you care about.
 
-## Multi-report frames — VERIFIED (spike 16, 2026-11-21)
+#### Blanking — writing no Identity — IMPLEMENTED, HARDWARE UNVERIFIED
+
+Blanking writes the neutral Identity: customer `0x00`, data32 `0x00000000`, in
+the usual 24-byte `0x0073` payload (`00 01 01` then all zeros). It is not a
+factory reset and it does not unlock a locked chip; neither is reachable over
+this protocol.
+
+The read path cannot confirm it the way a clone is confirmed. An all-zero data
+field decodes as "no reading", so a Tag that has been blanked reads as **empty**
+— the same as no Tag at all. That is why the app reports `blanked` rather than
+`verified` (ADR 0003): the success condition of a blanking write is the absence
+of an Identity, which the codec reports as `None`.
+
+Probe: `cargo run --example blankprobe -- read` (reads only) and
+`cargo run --example blankprobe -- blank` (writes the neutral Identity to the Tag
+on the Reader, consuming it).
+
+**No blanking write has been observed on hardware yet.** What has been observed:
+the Reader opens and answers (wake, `0x0069` poll, `0x0072` read all reply), and
+the 125 kHz field was empty on every attempt — three separate
+`blankprobe -- read` runs each reported `no tag latched`, so there was nothing to
+blank. The write path is therefore proven only by unit tests over the codec, the
+guard and the read-back scan; whether `0x0073` with the neutral payload blanks a
+T5577, what it reads as afterwards, and whether it can trigger the lock bit in
+open problem 7 are all still open. Record the probe's output here when it runs.
+
+### Multi-report frames — VERIFIED (spike 16, 2026-11-21)
 
 Everything above fits in one 64-byte report. Frames that do not are real, in
 both directions, and this is how they behave.
@@ -578,7 +604,8 @@ no-tag payloads contain. ATQA/SAK offsets therefore remain **unconfirmed** for
 6. **`C8 42`** meaning in the LF read payload.
 7. **What sets the T5577 lock bit.** One write locked a chip; another did not.
    Understanding which payloads are safe would remove the main hazard of the
-   `0x0073` path.
+   `0x0073` path. Blanking writes a payload unlike any tried so far, so whether
+   it is safe is unknown; `blankprobe` is the probe that would say.
 
 Solved: **125 kHz write/clone** — command `0x0073`, see above.
 Solved: **multi-report reassembly** — verified in both directions, with real

@@ -14,6 +14,27 @@ pub struct Identity {
 }
 
 impl Identity {
+    /// The Identity a blanked Tag carries: no customer byte and no data.
+    ///
+    /// Writing this is what blanking means. The read path cannot report it back
+    /// as an Identity — an all-zero data field decodes to "no reading" — so a
+    /// Tag that holds it reads as empty. That asymmetry is the point, and it is
+    /// why a blanking write is judged by [`crate::write_outcome::classify_blank`]
+    /// rather than by the copy rule.
+    pub const BLANK: Identity = Identity {
+        customer: 0,
+        data32: 0,
+    };
+
+    /// True when this Identity carries no assigned value: no customer byte and
+    /// an empty data field.
+    ///
+    /// A *reading* is judged blank on its data field alone, because that is what
+    /// the codec gates on; see [`TagPresence::from_read_payload`].
+    pub fn is_blank(&self) -> bool {
+        self.customer == 0 && self.data32 == 0
+    }
+
     /// An Identity from the values the UI holds. Out-of-range values are
     /// rejected here, so an Identity this app cannot encode never exists.
     ///
@@ -60,20 +81,15 @@ impl Identity {
     /// `None` means there is no Identity to report: no tag latched, a payload
     /// too short to hold the fields, or an all-zero data field (a Tag whose
     /// Identity has been blanked reads back empty).
+    ///
+    /// This is the combined view: it cannot tell "no Tag" from "a Tag with no
+    /// Identity", which is exactly the distinction a blanking write needs. Use
+    /// [`TagPresence::from_read_payload`] when that distinction matters.
     pub fn from_read_payload(payload: &[u8]) -> Option<Self> {
-        // 24-byte payload: validity flag at [2], customer at [8], data field
-        // little endian at [12..16].
-        if payload.len() < LF_READ_PAYLOAD_LEN || payload[2] != 0x01 {
-            return None;
+        match TagPresence::from_read_payload(payload) {
+            TagPresence::Identified(identity) => Some(identity),
+            TagPresence::Absent | TagPresence::Unreadable | TagPresence::Blank => None,
         }
-        let data32 = u32::from_le_bytes([payload[12], payload[13], payload[14], payload[15]]);
-        if data32 == 0 {
-            return None;
-        }
-        Some(Identity {
-            customer: payload[8],
-            data32,
-        })
     }
 
     /// Encode the payload of a `0x0073` write.
@@ -95,6 +111,58 @@ impl Identity {
         payload[12] = self.customer;
         payload[16..20].copy_from_slice(&self.data32.to_le_bytes());
         Ok(payload)
+    }
+}
+
+/// What a `0x0072` read reply says about the Tag in the field.
+///
+/// The codec's combined decoder ([`Identity::from_read_payload`]) folds three of
+/// these into `None`, because the read UI only cares whether there is an
+/// Identity to show. A blanking write needs the distinction: a Tag that is
+/// present but carries no Identity is exactly what blanking aims to produce, and
+/// it must not be confused with an empty field.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TagPresence {
+    /// No Tag latched: the validity flag is clear.
+    Absent,
+    /// The reply is too short to hold the fields, so it says nothing at all.
+    /// Never read as "absent": a malformed reply is not evidence of an empty
+    /// field.
+    Unreadable,
+    /// A Tag is latched and its data field is empty: it carries no Identity.
+    Blank,
+    /// A Tag carrying an Identity.
+    Identified(Identity),
+}
+
+impl TagPresence {
+    /// Decode the payload of a `0x0072` reply into presence plus Identity.
+    ///
+    /// The layout is the read layout: validity flag at `[2]`, customer at `[8]`,
+    /// data field little endian at `[12..16]`.
+    pub fn from_read_payload(payload: &[u8]) -> Self {
+        if payload.len() < LF_READ_PAYLOAD_LEN {
+            return TagPresence::Unreadable;
+        }
+        if payload[2] != 0x01 {
+            return TagPresence::Absent;
+        }
+        let data32 = u32::from_le_bytes([payload[12], payload[13], payload[14], payload[15]]);
+        if data32 == 0 {
+            return TagPresence::Blank;
+        }
+        TagPresence::Identified(Identity {
+            customer: payload[8],
+            data32,
+        })
+    }
+
+    /// True when a Tag was seen at all, holding an Identity or not.
+    ///
+    /// A blanking write requires this: the ADR 0001 refusal is about writing
+    /// blind, not about the Tag having a value worth replacing.
+    pub fn tag_present(self) -> bool {
+        matches!(self, TagPresence::Blank | TagPresence::Identified(_))
     }
 }
 
@@ -304,5 +372,79 @@ mod tests {
             identity.write_payload(),
             Err(IdentityError::Data32OutOfRange { .. })
         ));
+    }
+
+    // ---- blankness: presence versus an empty data field --------------------
+
+    #[test]
+    fn the_neutral_identity_carries_no_identity() {
+        assert!(Identity::BLANK.is_blank());
+        assert_eq!(Identity::BLANK.customer, 0);
+        assert_eq!(Identity::BLANK.data32, 0);
+        assert!(!Identity {
+            customer: 0,
+            data32: 1
+        }
+        .is_blank());
+        assert!(!Identity {
+            customer: 1,
+            data32: 0
+        }
+        .is_blank());
+    }
+
+    #[test]
+    fn the_neutral_identity_encodes_as_a_neutral_write() {
+        // Still a full 24-byte payload with the firmware's enable flags: a short
+        // payload wedges the Reader, so "write nothing" is 24 bytes of nothing.
+        let payload = Identity::BLANK
+            .write_payload()
+            .expect("the neutral identity is in range");
+        assert_eq!(payload.len(), LF_WRITE_PAYLOAD_LEN);
+        assert_eq!(&payload[..3], &[0x00, 0x01, 0x01], "enable flags");
+        assert_eq!(&payload[3..], &[0u8; 21], "every other byte is zero");
+    }
+
+    #[test]
+    fn a_latched_payload_with_an_empty_data_field_reads_as_blank_not_absent() {
+        // The design problem this ticket inherited: the combined decoder calls
+        // this "no reading", so only the presence-aware decoder can say that a
+        // Tag is there and carries no Identity.
+        let mut payload = [0u8; LF_READ_PAYLOAD_LEN];
+        payload[2] = 0x01;
+        payload[8] = 0x00;
+        assert_eq!(TagPresence::from_read_payload(&payload), TagPresence::Blank);
+        assert!(TagPresence::from_read_payload(&payload).tag_present());
+        assert_eq!(Identity::from_read_payload(&payload), None);
+    }
+
+    #[test]
+    fn a_cleared_validity_flag_is_absent() {
+        let payload = test_frames::payload(test_frames::LF_READ_NO_CARD);
+        assert_eq!(
+            TagPresence::from_read_payload(&payload),
+            TagPresence::Absent
+        );
+        assert!(!TagPresence::from_read_payload(&payload).tag_present());
+    }
+
+    #[test]
+    fn a_short_reply_is_unreadable_and_never_absent() {
+        // A truncated reply is not evidence that the field is empty.
+        assert_eq!(TagPresence::from_read_payload(&[]), TagPresence::Unreadable);
+        assert_eq!(
+            TagPresence::from_read_payload(&[0u8; 23]),
+            TagPresence::Unreadable
+        );
+    }
+
+    #[test]
+    fn a_reading_decodes_to_the_same_identity_through_both_decoders() {
+        let payload = test_frames::payload(test_frames::LF_READ_CARD_PRESENT);
+        let combined = Identity::from_read_payload(&payload).expect("a latched tag decodes");
+        assert_eq!(
+            TagPresence::from_read_payload(&payload),
+            TagPresence::Identified(combined)
+        );
     }
 }

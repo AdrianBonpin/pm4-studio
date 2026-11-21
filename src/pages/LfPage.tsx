@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { BookmarkPlus, Check } from "lucide-react";
 import { Button } from "../components/ui/Button";
+import { BlankTag } from "../components/BlankTag";
 import { CloneWizard } from "../components/CloneWizard";
 import { Field, Readout, Section } from "../components/Section";
 import { useLfPoller } from "../hooks/useReader";
@@ -126,6 +127,7 @@ export function LfPage({ connected, onChirp, library, onDeviceError }: LfPagePro
         </p>
       </Section>
 
+      <BlankTag connected={connected} onChirp={onChirp} onDeviceError={onDeviceError} />
     </div>
   );
 }

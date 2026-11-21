@@ -27,7 +27,8 @@
 //! checksummed over its whole payload is ignored, while the `len & 0xFF`
 //! checksum is accepted. `xor_checksum` and `stream::encode_frame` reproduce it.
 
-use crate::identity::Identity;
+use crate::blank::{self, BlankAttempt, BlankReadback, BlankScan};
+use crate::identity::{Identity, TagPresence};
 use crate::stream::{split_reports, ReportStream};
 use crate::write_guard;
 use hidapi::{HidApi, HidDevice};
@@ -428,6 +429,21 @@ impl Reader {
         Ok(LfCard::from_payload(&f.payload))
     }
 
+    /// 125 kHz read, reporting presence separately from the Identity.
+    ///
+    /// [`Reader::lf_read_once`] folds "no Tag" and "a Tag with no Identity"
+    /// into `None`, which is right for the read UI and useless for blanking:
+    /// a Tag that carries no Identity is exactly what a blanking write aims to
+    /// produce. A reply that never arrived is `Absent`; the firmware always
+    /// answers a poll, so silence is the field being empty.
+    pub fn lf_read_presence_once(&self) -> Result<TagPresence, String> {
+        let f = match self.transact(CMD_LF_READ, &[0x00, 0x01], Some(CMD_LF_READ), 1500)? {
+            Some(f) => f,
+            None => return Ok(TagPresence::Absent),
+        };
+        Ok(TagPresence::from_read_payload(&f.payload))
+    }
+
     /// Write an Identity onto a 125 kHz Tag with command `0x0073`.
     ///
     /// The payload comes from the Identity codec, which owns the write layout
@@ -504,6 +520,86 @@ impl Reader {
             }
         }
         LfWriteAttempt::Transmitted(None)
+    }
+
+    /// Read the tag in the write position, keeping presence apart from Identity.
+    /// Retries briefly for the same reason as the copy path: a tag that was just
+    /// placed needs a moment to be seen.
+    fn read_presence_in_position(&self) -> Result<TagPresence, String> {
+        for attempt in 0..10 {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(200));
+            }
+            self.wake().ok();
+            match self.lf_read_presence_once()? {
+                // An empty field is the only answer worth retrying; a Tag that
+                // is there, blank or identified, is an answer.
+                TagPresence::Absent => continue,
+                found => return Ok(found),
+            }
+        }
+        Ok(TagPresence::Absent)
+    }
+
+    /// Re-read after a blanking write, without trusting a single early reply.
+    ///
+    /// See [`BlankScan`]: an Identity reading ends the scan, and "no Identity"
+    /// is only concluded after the whole window reports none. A transport error
+    /// leaves the Tag's state unknown, which is reported as such rather than as
+    /// a blank.
+    fn read_after_blank(&self) -> BlankAttempt {
+        const ATTEMPTS: usize = 8;
+        let mut scan = BlankScan::new();
+        for attempt in 0..ATTEMPTS {
+            if attempt > 0 {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+            self.wake().ok();
+            match self.lf_read_presence_once() {
+                Ok(presence) => {
+                    if let Some(readback) = scan.observe(presence) {
+                        return BlankAttempt::Transmitted(readback);
+                    }
+                }
+                // The write already went out, so a failing read leaves the Tag
+                // in an unknown state rather than unwritten.
+                Err(_) => return BlankAttempt::Transmitted(BlankReadback::Unreadable),
+            }
+        }
+        BlankAttempt::Transmitted(scan.finish(ATTEMPTS))
+    }
+
+    /// Blank a 125 kHz Tag's Identity, read first and judged honestly.
+    ///
+    /// `confirmed` is the Identity the user agreed to destroy. It is compared
+    /// byte for byte with what the Tag in the write position presents, so a
+    /// confirmation cannot be applied to a different Tag, and it is deliberately
+    /// not range-checked: a Tag whose data field carries the reserved high byte
+    /// still reads and is still fair game to blank.
+    ///
+    /// The write itself is `0x0073` with the neutral Identity. It is not a
+    /// factory reset and it does not unlock a locked T5577; a chip that has
+    /// stopped accepting writes stays that way, which is why the UI warns about
+    /// it before this is called.
+    pub fn lf_blank_attempt(&self, confirmed: Identity) -> BlankAttempt {
+        let presence = match self.read_presence_in_position() {
+            Ok(presence) => presence,
+            // No reading means the guard cannot be satisfied: nothing is sent.
+            Err(e) => return BlankAttempt::Refused(e),
+        };
+        let current = match presence {
+            TagPresence::Identified(identity) => Some(identity),
+            _ => None,
+        };
+        let decision = blank::decide(presence, confirmed);
+        if let Some(refusal) = decision.refusal_message(confirmed, current) {
+            return BlankAttempt::Refused(refusal);
+        }
+
+        if let Err(e) = self.lf_write(Identity::BLANK) {
+            return BlankAttempt::Failed(e);
+        }
+        self.read_after_blank()
     }
 
     /// 13.56 MHz ISO14443-A poll.

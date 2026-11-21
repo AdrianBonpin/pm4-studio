@@ -1,5 +1,6 @@
 //! Tauri command surface for PM4 Studio.
 
+pub mod blank;
 pub mod identity;
 pub mod library;
 pub mod library_io;
@@ -11,6 +12,7 @@ pub mod write_outcome;
 #[cfg(test)]
 mod test_frames;
 
+use blank::BlankAttempt;
 use identity::Identity;
 use library::{
     Draft, InsertOutcome, Library, LibraryProblem, LibraryStore, SaveError, Snapshot,
@@ -246,6 +248,66 @@ fn lf_write(
             Some(_) => None,
         },
         count_problem,
+    })
+}
+
+/// What one guarded blanking attempt produced, in the shape the webview reads.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlankResult {
+    /// The Identity the user confirmed, which is what was blanked.
+    pub customer: u8,
+    pub data32: u32,
+    /// "refused" | "blanked" | "unverified" | "failed" — see `write_outcome`.
+    /// Never "verified": a blanking write creates no copy to verify.
+    pub outcome: &'static str,
+    /// True only when the re-read found no Identity. Mirror of
+    /// `outcome == "blanked"`.
+    pub blanked: bool,
+    /// The Identity the Tag still presents, when it still presents one.
+    pub still_identifies: Option<String>,
+    /// Why the Tag was not blanked, when it was not.
+    pub message: Option<String>,
+}
+
+/// Blank the Identity on the 125 kHz tag on the reader.
+///
+/// `customer` and `data32` are the Identity the user confirmed in the UI. The
+/// guard refuses unless the tag in the write position presents exactly that
+/// Identity, so a confirmation can never be applied to a different tag — and
+/// refuses outright when no tag can be read, per ADR 0001. There is no
+/// "write anyway": neither refusal is a prompt.
+///
+/// Nothing is recorded in the library. Blanking destroys an Identity rather than
+/// copying one, so no Snapshot's confirmed-copy count may move; a Snapshot that
+/// describes the destroyed value stays exactly as it is, because a Snapshot
+/// records what a Tag held when it was read, not what a Tag holds now.
+#[tauri::command]
+fn lf_blank(
+    state: State<'_, AppState>,
+    customer: u8,
+    data32: u32,
+) -> Result<BlankResult, String> {
+    // Built without `Identity::new`: a reading is not range-checked, and a tag
+    // whose data field carries bits this app cannot encode is still a tag the
+    // user may want to blank.
+    let confirmed = Identity { customer, data32 };
+    let attempt = with_reader(&state, |r| Ok(r.lf_blank_attempt(confirmed)))?;
+    if matches!(attempt, BlankAttempt::Failed(_)) {
+        // A transport error means the handle is suspect; drop it so the next
+        // call re-enumerates instead of failing forever.
+        if let Ok(mut slot) = state.reader.lock() {
+            *slot = None;
+        }
+    }
+    let verdict = blank::verdict(&attempt);
+    Ok(BlankResult {
+        customer,
+        data32,
+        outcome: verdict.outcome.as_str(),
+        blanked: matches!(verdict.outcome, write_outcome::WriteOutcome::Blanked),
+        still_identifies: verdict.still_identifies.map(|id| id.id()),
+        message: verdict.message,
     })
 }
 
@@ -770,6 +832,7 @@ pub fn run() {
             beep,
             led_off,
             lf_write,
+            lf_blank,
             raw_send,
             send_cmd,
             library_load,
