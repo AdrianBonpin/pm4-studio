@@ -2440,6 +2440,32 @@ mod tests {
         // that never happened.
         let after = LibraryStore::new(&path).load().expect("reload");
         assert_eq!(after.drafts.len(), 3, "the save wrote the Draft it was given");
+
+        // A second save, on the file this build itself wrote. `rest` is
+        // recomputed from the file on every replacement, so the keys have to
+        // survive the second write as well as the one that followed the lift:
+        // the app is on this file from now on, and the first save is not the last.
+        store
+            .update(|library| {
+                library.add_draft("Side gate", UPDATED_AT);
+            })
+            .expect("save a second Draft");
+
+        assert_eq!(
+            key_on_disk(&path, "tags"),
+            serde_json::json!(["Front door", "Back gate"]),
+            "the second save keeps them too, not only the one after the lift"
+        );
+        assert_eq!(
+            key_on_disk(&path, "futureCollection"),
+            serde_json::json!([{ "kept": true }])
+        );
+        let after_second = LibraryStore::new(&path).load().expect("reload again");
+        assert_eq!(
+            after_second.drafts.len(),
+            4,
+            "the second save wrote the Draft it was given"
+        );
     }
 
     #[test]
@@ -2464,5 +2490,22 @@ mod tests {
             "a save of the whole library is still a save of the whole file"
         );
         assert_eq!(version_on_disk(&path), u64::from(SCHEMA_VERSION));
+
+        // And again, from a library read out of the file the first save wrote:
+        // the rule has to hold on the file this build maintains, not only on the
+        // one it inherited.
+        let mut again = LibraryStore::new(&path).load().expect("reload");
+        again.add_draft("Roof light", UPDATED_AT);
+        LibraryStore::new(&path).save(&again).expect("save again");
+
+        assert_eq!(
+            key_on_disk(&path, "tags"),
+            serde_json::json!(["kept"]),
+            "the second save keeps it too"
+        );
+        assert_eq!(
+            LibraryStore::new(&path).load().expect("reload again").drafts.len(),
+            2
+        );
     }
 }
