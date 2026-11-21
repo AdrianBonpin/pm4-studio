@@ -138,11 +138,31 @@ describe("READER_CAPABILITY_LIMITS", () => {
     expect(text).toContain("ndef");
     expect(text).toContain("mifare classic");
     expect(text).toContain("apdu");
+    // Ticket 14 removed the password panel from 13.56 MHz; the capability is
+    // recorded here instead, once, with the rest of the limits.
+    expect(text).toContain("password");
   });
 
   it("never calls a Tag a badge or a fob", () => {
     for (const limit of READER_CAPABILITY_LIMITS) {
       expect(`${limit.label} ${limit.detail}`).not.toMatch(/\bbadge\b|\bfob\b/i);
     }
+  });
+
+  it("records, once, that 125 kHz writability cannot be determined without a write", () => {
+    // ADR 0007: the absence of a writability check is a documented limit, so a
+    // user who goes looking for one finds the reason instead of an oversight.
+    const writability = READER_CAPABILITY_LIMITS.filter((limit) =>
+      /writability/i.test(`${limit.label} ${limit.detail}`),
+    );
+    expect(writability).toHaveLength(1);
+
+    const [limit] = writability;
+    const text = `${limit?.label} ${limit?.detail}`;
+    expect(text).toMatch(/cannot be determined/i);
+    expect(text).toMatch(/without attempting a write/i);
+    expect(text).toMatch(/125 kHz/i);
+    // And that there is no probe, so nothing implies one could be built.
+    expect(text).toMatch(/no probe/i);
   });
 });

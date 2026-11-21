@@ -295,6 +295,15 @@ pub struct WriteResult {
     pub verified: bool,
     /// Why this write did not confirm a copy, when it did not.
     pub message: Option<String>,
+    /// Which of ADR 0001's two refusal conditions stopped the write, as
+    /// `"unreadable"` or `"already-carries"`. `None` for any attempt that was
+    /// transmitted, and for a failure that was never a refusal.
+    ///
+    /// This is the cause as a value rather than inside the prose above: the two
+    /// conditions have two different fixes, and a caller that had to pattern-match
+    /// a sentence to tell them apart would be one rewording away from presenting
+    /// them identically (`write_guard::RefusalCause`).
+    pub refusal_cause: Option<&'static str>,
     /// Confirmed copies of this Identity after the write, when a Snapshot in the
     /// library carries it. `None` means the library holds no such Snapshot.
     pub confirmed_copies: Option<u32>,
@@ -375,11 +384,16 @@ fn lf_write(
     let identity = Identity::new(customer, data32).map_err(|e| e.to_string())?;
     let attempt = with_reader(&state, |r| Ok(r.lf_write_attempt(identity)))?;
 
-    let (evidence, message) = match &attempt {
-        LfWriteAttempt::Refused(why) => (Evidence::Refused, Some(why.clone())),
-        LfWriteAttempt::Failed(why) => (Evidence::NotTransmitted, Some(why.clone())),
+    let (evidence, message, refusal_cause) = match &attempt {
+        LfWriteAttempt::Refused { cause, message } => (
+            Evidence::Refused,
+            Some(message.clone()),
+            Some(cause.as_str()),
+        ),
+        LfWriteAttempt::Failed(why) => (Evidence::NotTransmitted, Some(why.clone()), None),
         LfWriteAttempt::Transmitted(card) => (
             Evidence::Readback(card.as_ref().map(LfCard::identity)),
+            None,
             None,
         ),
     };
@@ -406,6 +420,7 @@ fn lf_write(
         outcome: outcome.as_str(),
         verified: outcome.counts_as_confirmed_copy(),
         message,
+        refusal_cause,
         // A count that failed to persist is not reported as if it had.
         confirmed_copies: match count_problem {
             None => record.confirmed_copies(),
@@ -431,6 +446,10 @@ pub struct BatchAttemptView {
     pub outcome: &'static str,
     /// Why this attempt did not confirm a copy, when it did not.
     pub message: Option<String>,
+    /// Which of ADR 0001's two refusal conditions stopped the attempt, when one
+    /// did — `"unreadable"` or `"already-carries"`. A skip is the second one by
+    /// definition, and it is still never counted as a copy.
+    pub refusal_cause: Option<&'static str>,
     /// What the Tag read as for this attempt, when it read as anything.
     pub readback: Option<LfCard>,
     /// Confirmed copies of this Identity after the attempt, when a Snapshot in
@@ -475,6 +494,7 @@ fn lf_clone_attempt(
         data32,
         outcome: outcome.as_str(),
         message: verdict.message,
+        refusal_cause: verdict.refusal.map(|cause| cause.as_str()),
         readback: verdict.readback,
         confirmed_copies: match count_problem {
             None => record.confirmed_copies(),
@@ -1829,4 +1849,83 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running PM4 Studio");
+}
+
+#[cfg(test)]
+mod wire_tests {
+    //! The two write views as the webview receives them.
+    //!
+    //! A refusal's cause travels as its own field rather than inside `message`,
+    //! so a test that only ever reads the prose would not notice the field being
+    //! renamed, dropped or defaulted to the wrong condition. These assertions are
+    //! about the wire shape, which is the contract the TypeScript side switches
+    //! on (`src/types.ts`).
+
+    use super::*;
+
+    fn write_result(outcome: &'static str, refusal_cause: Option<&'static str>) -> WriteResult {
+        WriteResult {
+            customer: 0x55,
+            data32: 0x0084_8212,
+            readback: None,
+            outcome,
+            verified: false,
+            message: Some("the guard said no".to_string()),
+            refusal_cause,
+            confirmed_copies: None,
+            count_problem: None,
+        }
+    }
+
+    fn attempt_view(
+        outcome: &'static str,
+        refusal_cause: Option<&'static str>,
+    ) -> BatchAttemptView {
+        BatchAttemptView {
+            customer: 0x55,
+            data32: 0x0084_8212,
+            outcome,
+            message: None,
+            refusal_cause,
+            readback: None,
+            confirmed_copies: None,
+            count_problem: None,
+        }
+    }
+
+    #[test]
+    fn a_write_refusal_carries_its_cause_beside_the_message() {
+        let json = serde_json::to_value(write_result("refused", Some("already-carries")))
+            .expect("a write result serialises");
+        assert_eq!(json["refusalCause"], "already-carries");
+        assert_eq!(json["outcome"], "refused");
+        assert_eq!(json["message"], "the guard said no");
+    }
+
+    #[test]
+    fn a_write_that_was_transmitted_carries_a_null_cause() {
+        let json = serde_json::to_value(write_result("unverified", None))
+            .expect("a write result serialises");
+        assert!(json["refusalCause"].is_null());
+    }
+
+    #[test]
+    fn a_batch_skip_carries_the_same_identity_cause_it_was_judged_by() {
+        // A skip is the guard's second condition, so it names it: the two
+        // conditions have different fixes and must not arrive looking alike.
+        let json =
+            serde_json::to_value(attempt_view("skipped", Some("already-carries")))
+                .expect("an attempt view serialises");
+        assert_eq!(json["refusalCause"], "already-carries");
+        assert_eq!(json["outcome"], "skipped");
+    }
+
+    #[test]
+    fn an_unreadable_attempt_names_the_other_condition() {
+        let json =
+            serde_json::to_value(attempt_view("refused", Some("unreadable")))
+                .expect("an attempt view serialises");
+        assert_eq!(json["refusalCause"], "unreadable");
+        assert_eq!(json["outcome"], "refused");
+    }
 }

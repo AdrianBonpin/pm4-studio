@@ -48,6 +48,12 @@ export const READER_CAPABILITY_LIMITS: readonly CapabilityLimit[] = [
       "Not available. Without a transparent APDU channel there is no Signature, authenticated NFC counter, or password-protection status.",
   },
   {
+    id: "password",
+    label: "Password protection",
+    detail:
+      "Not available on a 13.56 MHz Tag. Setting or clearing a password needs authentication this Reader has no command for, so a password cannot be set here and one set by another device cannot be cleared. The operation is absent from the interface rather than offered and refused.",
+  },
+  {
     id: "uid-width",
     label: "7- and 10-byte UIDs",
     detail:
@@ -58,6 +64,14 @@ export const READER_CAPABILITY_LIMITS: readonly CapabilityLimit[] = [
     label: "Factory restore and unlock",
     detail:
       "Not possible. A T5577 configuration block cannot be written, and a Tag locked by an earlier write cannot be recovered.",
+  },
+  {
+    // Stated once, here, so a missing check reads as a documented limit rather
+    // than a missing feature (ADR 0007). The absence is deliberate and permanent.
+    id: "writability",
+    label: "125 kHz writability",
+    detail:
+      "Cannot be determined without attempting a write. A 125 kHz reply carries no Tag family and no writability flag, so no command can answer whether a Tag will accept a write — and every command that would answer is itself a write. There is therefore no probe, in this app or in the protocol, and none is planned: Reset is the test.",
   },
 ];
 

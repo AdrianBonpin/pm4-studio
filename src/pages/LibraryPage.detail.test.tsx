@@ -92,6 +92,7 @@ const VERIFIED: WriteResult = {
   outcome: "verified",
   verified: true,
   message: null,
+  refusalCause: null,
   confirmedCopies: 1,
   countProblem: null,
 };

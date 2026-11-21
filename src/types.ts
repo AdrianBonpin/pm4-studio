@@ -47,6 +47,22 @@ export type WriteOutcome =
   | "unverified"
   | "failed";
 
+/**
+ * Which of ADR 0001's two refusal conditions stopped a write.
+ *
+ * A refusal is not one problem with one fix, so it is not one word either. The
+ * cause is a value the backend reports rather than a sentence the interface has
+ * to pattern-match, because the two conditions are worded, sounded and remedied
+ * differently (`write_guard::RefusalCause`):
+ *
+ *   - `unreadable` — nothing could be read in the write position. The fix is a
+ *     Tag that reads: seat one, or use one that does.
+ *   - `already-carries` — the Tag read fine and already presents the Identity
+ *     being written. The fix is a different Tag; almost always the original is
+ *     still on the Reader.
+ */
+export type RefusalCause = "unreadable" | "already-carries";
+
 export type WriteResult = {
   customer: number;
   data32: number;
@@ -57,6 +73,8 @@ export type WriteResult = {
   verified: boolean;
   /** Why this write did not confirm a copy, when it did not. */
   message: string | null;
+  /** Which refusal condition fired; null for anything that was transmitted. */
+  refusalCause: RefusalCause | null;
   /** Confirmed copies of this Identity after the write; null = no such Snapshot. */
   confirmedCopies: number | null;
   /** Set when the count could not be written to the library file. */
@@ -91,8 +109,12 @@ export type BlankResult = {
   /** The Identity the user confirmed, which is what was blanked. */
   customer: number;
   data32: number;
-  /** See `src/lib/blankTag.ts` for the wording of each outcome. */
-  outcome: "refused" | "blanked" | "unverified" | "failed";
+  /** See `src/lib/blankTag.ts` for the wording of each outcome.
+   *
+   * `willNotAcceptWrites` is the re-read that still found an Identity: the tag
+   * refused the write, which is a fact about the tag rather than a generic
+   * failure or an unknown (ADR 0007). */
+  outcome: "refused" | "blanked" | "unverified" | "failed" | "willNotAcceptWrites";
   /** True only when the re-read found no Identity. Never a "verified" claim. */
   blanked: boolean;
   /** The Identity the tag still presents, when it still presents one. */
@@ -126,6 +148,12 @@ export type BatchAttemptResult = {
   outcome: BatchAttemptOutcome;
   /** Why this attempt did not confirm a copy, when it did not. */
   message: string | null;
+  /**
+   * Which of ADR 0001's two refusal conditions stopped this attempt, when one
+   * did. A `skipped` attempt is `already-carries` by definition; a `refused`
+   * attempt is normally `unreadable`. Null for a transmitted attempt.
+   */
+  refusalCause: RefusalCause | null;
   /** What the Tag read as for this attempt, when it read as anything. */
   readback: LfCard | null;
   /** Confirmed copies of this Identity after the attempt; null = no Snapshot. */

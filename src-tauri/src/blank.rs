@@ -239,7 +239,9 @@ pub struct BlankVerdict {
 ///
 /// `Blanked` is reported only for a transmission whose re-read found no
 /// Identity. It is never reported for a refusal, for a transmission that never
-/// happened, or for a re-read that failed.
+/// happened, or for a re-read that failed. A re-read that still finds an Identity
+/// reports `WillNotAcceptWrites` and names the likely causes, because that is the
+/// useful reading: the attempt was the only way to learn it (ADR 0007).
 pub fn verdict(attempt: &BlankAttempt) -> BlankVerdict {
     let outcome = write_outcome::classify_blank(attempt.evidence());
     let (message, still_identifies) = match attempt {
@@ -248,9 +250,14 @@ pub fn verdict(attempt: &BlankAttempt) -> BlankVerdict {
         BlankAttempt::Transmitted(BlankReadback::NoIdentity) => (None, None),
         BlankAttempt::Transmitted(BlankReadback::StillIdentifies(identity)) => (
             Some(format!(
-                "the tag still reads as {} after the blanking write, so it was not blanked. \
-                 Nothing else was changed.",
-                identity.id()
+                "the tag still reads as {identity} after the blanking write, so it was not \
+                 blanked and this tag will not accept writes. The likely cause is that the tag \
+                 has already been written once — a T5577 that has been written may permanently \
+                 refuse further writes — or that it was never writable. This Reader cannot tell \
+                 which it is, and no check exists that could have told you first: a writability \
+                 test is a write, so this attempt was the only way to find out. Nothing else \
+                 about the tag was changed.",
+                identity = identity.id()
             )),
             Some(*identity),
         ),
@@ -415,19 +422,42 @@ mod tests {
     }
 
     #[test]
-    fn a_transmitted_blank_that_still_reads_is_failed_and_names_the_identity() {
+    fn a_transmitted_blank_that_still_reads_will_not_accept_writes() {
+        // The re-read found an Identity, so the write did not take. That is a
+        // report about the chip, and it is neither a generic failure nor an
+        // unknown (ADR 0007).
         let verdict = verdict(&BlankAttempt::Transmitted(BlankReadback::StillIdentifies(
             written_tag(),
         )));
-        assert_eq!(verdict.outcome, WriteOutcome::Failed);
+        assert_eq!(verdict.outcome, WriteOutcome::WillNotAcceptWrites);
+        assert_ne!(verdict.outcome, WriteOutcome::Failed);
+        assert_ne!(verdict.outcome, WriteOutcome::Unverified);
         assert_eq!(verdict.still_identifies, Some(written_tag()));
-        let message = verdict.message.expect("a failure has a message");
+        assert!(!verdict.outcome.counts_as_confirmed_copy());
+        let message = verdict.message.expect("a refusal has a message");
+        // It names the Identity it read back, and it names both likely causes.
         assert!(
             message.contains("still reads as 55 00 84 82 12"),
             "{message}"
         );
-        assert!(message.contains("not blanked"), "{message}");
-        assert!(!verdict.outcome.counts_as_confirmed_copy());
+        assert!(message.contains("will not accept writes"), "{message}");
+        assert!(message.contains("already been written"), "{message}");
+        assert!(message.contains("never writable"), "{message}");
+        // Nothing about the tag changed, so it must not imply it did.
+        assert!(message.contains("was not blanked"), "{message}");
+    }
+
+    #[test]
+    fn a_still_reading_blank_says_no_check_could_have_warned_first() {
+        // The app must not leave the user thinking they skipped a pre-check.
+        let verdict = verdict(&BlankAttempt::Transmitted(BlankReadback::StillIdentifies(
+            written_tag(),
+        )));
+        let message = verdict.message.unwrap_or_default();
+        assert!(
+            message.contains("cannot tell") || message.contains("no check"),
+            "{message}"
+        );
     }
 
     #[test]

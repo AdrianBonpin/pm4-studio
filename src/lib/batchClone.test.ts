@@ -46,6 +46,7 @@ function attempt(
     data32: SOURCE.data32,
     outcome,
     message: null,
+    refusalCause: null,
     readback: null,
     confirmedCopies: null,
     countProblem: null,

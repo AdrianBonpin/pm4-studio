@@ -47,6 +47,7 @@ const WRITTEN: WriteResult = {
   outcome: "verified",
   verified: true,
   message: null,
+  refusalCause: null,
   confirmedCopies: null,
   countProblem: null,
 };

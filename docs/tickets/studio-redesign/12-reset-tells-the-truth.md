@@ -9,14 +9,14 @@
 - Signal vocabulary (existing) — catches the refusal not reaching the attention symbol; misses whether the buzzer sounded.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/23
-**Status:** ready
+**Status:** done
 
-- [ ] The confirmation states the three caveats before the write, in plain words, not as a footnote.
-- [ ] A re-read that still finds an Identity produces its own outcome — the tag will not accept writes — separate from a generic failure and separate from unverified.
-- [ ] That outcome's message names the likely cause: the chip has already been written, or was never writable.
-- [ ] That outcome emits the attention symbol, including the LED held on for two seconds.
-- [ ] No outcome of this operation ever counts a confirmed copy.
-- [ ] The capability limits record, once, that 125 kHz writability cannot be determined without attempting a write, so its absence reads as a documented limit.
-- [ ] No writability probe exists anywhere in the app, including one hidden behind an acknowledgement or on a diagnostics surface.
-- [ ] A never-written tag still resets successfully, and its success is reported as blanked rather than verified.
-- [ ] Nothing in the interface invites a pre-check, because none exists.
+- [x] The confirmation states the three caveats before the write, in plain words, not as a footnote.
+- [x] A re-read that still finds an Identity produces its own outcome — the tag will not accept writes — separate from a generic failure and separate from unverified.
+- [x] That outcome's message names the likely cause: the chip has already been written, or was never writable.
+- [x] That outcome emits the attention symbol, including the LED held on for two seconds.
+- [x] No outcome of this operation ever counts a confirmed copy.
+- [x] The capability limits record, once, that 125 kHz writability cannot be determined without attempting a write, so its absence reads as a documented limit.
+- [x] No writability probe exists anywhere in the app, including one hidden behind an acknowledgement or on a diagnostics surface.
+- [x] A never-written tag still resets successfully, and its success is reported as blanked rather than verified.
+- [x] Nothing in the interface invites a pre-check, because none exists.

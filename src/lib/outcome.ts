@@ -12,9 +12,10 @@
  *
  * 1. **The discriminator set is closed.** `OutcomeKind` is a small union derived
  *    from the write-outcome vocabulary this app already had (`WriteOutcome` plus
- *    the blanking and erasing results), the new Reset refusal, the Reader's own
- *    failures, and a build refusal. A new kind is a deliberate edit here, not a
- *    sentence invented at a call site.
+ *    the blanking and erasing results), the two conditions ADR 0001 can refuse a
+ *    write on, the new Reset refusal, the Reader's own failures, and a build
+ *    refusal. A new kind is a deliberate edit here, not a sentence invented at a
+ *    call site.
  * 2. **Severity belongs to the outcome.** `SEVERITY_OF` maps each discriminator
  *    to one severity; the signal is derived from that severity by `signalFor`. So
  *    a message cannot be styled as a warning while it sounds like a failure.
@@ -29,9 +30,18 @@
  * marked exception, and it disappears in ticket 17.
  */
 
-import type { BlankResult, BuildRefusal, EraseResult, WriteResult } from "../types";
+import type {
+  BatchAttemptOutcome,
+  BatchAttemptResult,
+  BlankResult,
+  BuildRefusal,
+  EraseResult,
+  RefusalCause,
+  WriteResult,
+} from "../types";
 import type { SaveResult } from "./library";
-import { blankNotice } from "./blankTag";
+import { attemptNotice } from "./batchClone";
+import { blankNotice, WILL_NOT_ACCEPT_WRITES } from "./blankTag";
 import { describeClearReport, type ClearReport } from "./clearData";
 import { BUILD_REFUSAL_DETAIL, BUILD_REFUSAL_LABEL } from "./consoleRefusal";
 import { eraseNotice } from "./eraseTag";
@@ -39,7 +49,7 @@ import { QUIET_LEVEL_LABEL, type QuietLevel } from "./quietLevel";
 import { classifyDeviceFailure, deviceFailureNotice } from "./readerIdentity";
 import { emitSignal } from "./signal";
 import { pushToast } from "./toastStore";
-import { writeNotice } from "./writeOutcome";
+import { refusalCauseOf, writeNotice } from "./writeOutcome";
 import type { SignalSymbol } from "./signal";
 
 /** How much attention one outcome deserves. Chosen by the kind, never by a caller. */
@@ -98,6 +108,26 @@ export type OutcomeKind =
   | "unverified"
   /** Stopped before anything was sent: the guard, the tag or the frame refused. */
   | "refused"
+  /**
+   * Nothing was written because the Tag in the write position already presents
+   * the Identity being written. ADR 0001's second refusal, named for what it is:
+   * the Tag read perfectly well, so nothing failed and nowhere needs reseating —
+   * the answer is a *different* Tag, almost always the original taken off the
+   * Reader.
+   *
+   * It is therefore a warning and not an error (two chirps, not three). That is
+   * also what keeps it audible apart from a refusal: in a batch, "that fob
+   * worked", "the tag you left on already carries it" and "nothing could be
+   * read" are three different things to hear (ADR 0009).
+   */
+  | "skipped"
+  /**
+   * Nothing was written because nothing could be read in the write position.
+   * ADR 0001's first refusal, and its own outcome rather than the generic one:
+   * the fix is to seat a Tag that reads, which is not the fix for a Tag that
+   * reads fine and is the wrong Tag.
+   */
+  | "unreadable"
   /** Attempted and did not work. */
   | "failed"
   /** A Reset this Tag will not accept writes for; nothing changed. */
@@ -134,6 +164,8 @@ export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
   "unverified",
   "refused",
   "failed",
+  "skipped",
+  "unreadable",
   "reset-refused",
   "refused-by-build",
   "reader-absent",
@@ -161,6 +193,8 @@ const SEVERITY_OF: Record<OutcomeKind, Severity> = {
   unverified: "warning",
   refused: "error",
   failed: "error",
+  skipped: "warning",
+  unreadable: "error",
   "reset-refused": "error",
   "refused-by-build": "error",
   "reader-absent": "warning",
@@ -234,6 +268,39 @@ function make(
   rest: Omit<Partial<Outcome>, "kind" | "operation" | "severity" | "message"> = {},
 ): Outcome {
   return { kind, operation, severity: SEVERITY_OF[kind], message, ...rest };
+}
+
+/**
+ * The discriminator a refusal gets from the condition the guard reported.
+ *
+ * `null` — no cause established — stays on the generic refusal, which is an
+ * error: so does a cause the app has never heard of, because softening an
+ * unknown refusal into a skip would tell the user the wrong Tag is the only
+ * problem when nobody established that.
+ */
+function refusalKind(cause: RefusalCause | null): OutcomeKind {
+  if (cause === "already-carries") return "skipped";
+  if (cause === "unreadable") return "unreadable";
+  return "refused";
+}
+
+/**
+ * The discriminator one batch attempt gets.
+ *
+ * The attempt's own vocabulary decides first, because `skipped` is the batch's
+ * word for a Tag that already carries the Identity — the same condition the
+ * single-clone guard learns only from the cause. A `refused` attempt is split by
+ * its cause so an unreadable write position is named as one.
+ */
+function attemptKind(result: BatchAttemptResult): OutcomeKind {
+  const byOutcome: Record<BatchAttemptOutcome, OutcomeKind> = {
+    verified: "verified",
+    skipped: "skipped",
+    unverified: "unverified",
+    failed: "failed",
+    refused: refusalKind(result.refusalCause),
+  };
+  return byOutcome[result.outcome];
 }
 
 /**
@@ -320,19 +387,82 @@ export const outcomes = {
    * wording is not re-invented here: `writeNotice` owns it, so the inline notice
    * and the toast cannot drift apart.
    *
+   * A refusal is split by the condition the guard reported, never by what the
+   * message happens to say: `unreadable` is an error (seat a Tag that reads) and
+   * `already-carries` is a skip (this is the wrong Tag). A refusal whose cause
+   * nobody established keeps the generic kind, because the fail-safe direction is
+   * the error rather than the milder skip.
+   *
    * A copy write that reports `blanked` or `erased` is a bug, not a result — it
    * places no copy — so it is reported as a failure rather than as success.
    */
   write(operation: "write" | "clone" | "batch", result: WriteResult): Outcome {
     const kind: Record<WriteResult["outcome"], OutcomeKind> = {
       verified: "verified",
-      refused: "refused",
+      refused: refusalKind(refusalCauseOf(result)),
       unverified: "unverified",
       failed: "failed",
       blanked: "failed",
       erased: "failed",
     };
     return make(kind[result.outcome], operation, writeNotice(result).text);
+  },
+
+  /**
+   * The wizard read the original Tag: the read is the whole result.
+   *
+   * The reads belong to the Clone rather than to a plain Read because they are
+   * the two things the wizard waits for. A flow that reported nothing until the
+   * write would leave both taps silent, and the wait indistinguishable from a
+   * hang.
+   */
+  cloneSourceRead(identity: string): Outcome {
+    return make("read", "clone", `Read ${identity} — the original.`);
+  },
+
+  /**
+   * The wizard read the Tag in the write position. The same read that fills the
+   * confirmation, reported on its own: it is the second thing the wizard waits
+   * for, and what it read is on screen beneath the message.
+   */
+  cloneDestinationRead(identity: string): Outcome {
+    return make("read", "clone", `Read ${identity} — the tag in the write position.`);
+  },
+
+  /**
+   * The wizard read the original back: it is still on the Reader, so there is
+   * nothing in the write position to write to.
+   *
+   * This is the condition the guard refuses a write on, caught at the read
+   * instead of at the write — so it is the same outcome kind and the same sound,
+   * and the remedy is the same one: take the original off, put the blank on.
+   * Nothing was sent, so nothing is counted.
+   */
+  cloneSourceStillInPlace(identity: string): Outcome {
+    return make(
+      "skipped",
+      "clone",
+      `Skipped: the tag on the reader is still the original, ${identity}.`,
+      {
+        detail:
+          "That tag already carries the identity being written, so a write to it would be " +
+          "refused. Take it off the reader and tap the blank you want to write. Nothing was " +
+          "written and no copy was counted.",
+      },
+    );
+  },
+
+  /**
+   * One Batch Clone attempt, reported on its own.
+   *
+   * A run is a list of these, never one verdict for the whole run: a skip, a
+   * refusal, an unknown result and a verified write are different things to hear,
+   * and an aggregate "the batch worked" would bury whichever of them came back.
+   * The words are the batch's own (`attemptNotice`), so the ledger and the message
+   * cannot disagree about what one attempt came to.
+   */
+  batchAttempt(result: BatchAttemptResult): Outcome {
+    return make(attemptKind(result), "batch", attemptNotice(result).text);
   },
 
   /**
@@ -373,7 +503,6 @@ export const outcomes = {
       trimmed === "" ? {} : { detail: trimmed },
     );
   },
-
   /** What became of one Reset, in the blanking copy's own words. */
   blank(result: BlankResult): Outcome {
     const kind: Record<BlankResult["outcome"], OutcomeKind> = {
@@ -381,6 +510,11 @@ export const outcomes = {
       refused: "refused",
       unverified: "unverified",
       failed: "failed",
+      // The tag read back its own Identity after the write: this tag will not
+      // accept writes. Not `failed` (which says the attempt is the problem) and
+      // not `unverified` (which says nothing is known) — the state of the tag is
+      // known, and it is the useful finding (ADR 0007).
+      willNotAcceptWrites: "reset-refused",
     };
     return make(kind[result.outcome], "reset", blankNotice(result).text);
   },
@@ -406,7 +540,7 @@ export const outcomes = {
     return make(
       "reset-refused",
       "reset",
-      "This tag will not accept writes.",
+      WILL_NOT_ACCEPT_WRITES,
       {
         detail:
           `${cause} A tag already written once may permanently refuse further writes, and ` +

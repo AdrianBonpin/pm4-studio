@@ -10,6 +10,7 @@ import { outcomes, report } from "./lib/outcome";
 import { formatFirmwareRevision } from "./lib/readerIdentity";
 import { isMacOS, isTauri } from "./lib/platform";
 import { PAGES, type PageId } from "./lib/pageCopy";
+import type { HfMode } from "./lib/hfWorkspace";
 import { HfPage } from "./pages/HfPage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { LfPage } from "./pages/LfPage";
@@ -56,9 +57,15 @@ const PAGE_ICON: Record<PageId, typeof Nfc> = {
  *
  * The credits that used to close every page are gone from the page flow. They are
  * a fact about the project, so they are stated once in Settings → About.
+ *
+ * A band page's mode is the shell's state for the same reason the destination is:
+ * the page unmounts when the user visits another destination, and a mode that
+ * forgot itself on the way would send them back to Read every time. Like the
+ * destination, it lives for the session and no longer.
  */
 export default function App() {
   const [page, setPage] = useState<PageId>("lf");
+  const [hfMode, setHfMode] = useState<HfMode>("read");
   const reader = useReader();
   const library = useLibrary();
   const { quietLevel, setQuietLevel, chirp } = useBeep();
@@ -174,7 +181,13 @@ export default function App() {
                 />
               )}
               {page === "hf" && (
-                <HfPage connected={connected} onPoll={reader.pollHfOnce} library={library} />
+                <HfPage
+                  connected={connected}
+                  mode={hfMode}
+                  onModeChange={setHfMode}
+                  onPoll={reader.pollHfOnce}
+                  library={library}
+                />
               )}
               {page === "library" && (
                 <LibraryPage connected={connected} library={library} onChirp={chirp} />

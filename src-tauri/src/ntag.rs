@@ -1185,6 +1185,15 @@ pub fn write_message(reader: &Reader, message: &[u8]) -> NdefWrite {
             Ok(Some(_)) => "the write was sent but the Tag does not read back as the message                             that was written, so what it holds is unknown"
                 .to_string(),
         }),
+        // A Draft write is a copy, so it never concludes a chip refuses writes:
+        // that is Reset's reading of a still-identified Tag after a blanking
+        // write. Named rather than defaulted for the same reason as the two
+        // arms above.
+        WriteOutcome::WillNotAcceptWrites => Some(
+            "the write reported that the tag will not accept writes, which a Draft write cannot \
+             produce"
+                .to_string(),
+        ),
     };
 
     report
@@ -1467,6 +1476,14 @@ pub fn erase_ndef(reader: &Reader) -> EraseReport {
         ),
         WriteOutcome::Verified => Some(
             "the erase reported a verified write, which clearing NDEF content cannot produce"
+                .to_string(),
+        ),
+        // Nor can it conclude that a chip refuses writes: that is Reset's
+        // reading of a still-identified Tag after a blanking write. Unreachable
+        // here, and named so the shared vocabulary cannot silently absorb it.
+        WriteOutcome::WillNotAcceptWrites => Some(
+            "the erase reported that the tag will not accept writes, which clearing NDEF \
+             content cannot produce"
                 .to_string(),
         ),
     };

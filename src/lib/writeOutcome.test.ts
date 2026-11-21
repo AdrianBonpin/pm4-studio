@@ -29,6 +29,7 @@ function result(outcome: WriteOutcome, overrides: Partial<WriteResult> = {}): Wr
     outcome,
     verified: outcome === "verified",
     message: null,
+    refusalCause: null,
     confirmedCopies: outcome === "verified" ? 1 : 0,
     countProblem: null,
     ...overrides,
@@ -123,6 +124,78 @@ describe("writeNotice", () => {
       expect(notice.tone).not.toBe("ok");
       expect(notice.text).not.toMatch(/now reads|Cloned and verified/);
     }
+  });
+});
+
+describe("a refusal names which condition fired", () => {
+  /** Nothing could be read in the write position: ADR 0001's first case. */
+  const unreadable = () =>
+    result("refused", {
+      refusalCause: "unreadable",
+      confirmedCopies: 2,
+      message:
+        "could not read the tag on the reader, so refusing to write blind. Put a blank 125 kHz " +
+        "tag on the reader and try again.",
+    });
+
+  /** The Tag already presents the Identity being written: ADR 0001's second. */
+  const alreadyCarries = () =>
+    result("refused", {
+      refusalCause: "already-carries",
+      confirmedCopies: 2,
+      message:
+        "the tag on the reader already reads as 55 00 84 82 12 — that looks like the original " +
+        "tag. Take it off and put a blank tag on instead.",
+    });
+
+  it("words an unreadable write position as not written, in the guard's own words", () => {
+    const notice = writeNotice(unreadable());
+    expect(notice.tone).toBe("err");
+    expect(notice.text).toContain("could not read");
+    expect(notice.text).toContain("write blind");
+    // Nothing was written, so the count stands where it was.
+    expect(notice.text).toContain("2 confirmed copies");
+    expect(notice.text).not.toContain("now lists");
+  });
+
+  it("words a tag that already carries the Identity as skipped, not as a failure", () => {
+    const notice = writeNotice(alreadyCarries());
+    // A warning, not an error: nothing failed and the Tag is perfectly good, it
+    // is simply the wrong Tag.
+    expect(notice.tone).toBe("warn");
+    expect(notice.text).toContain("Skipped");
+    expect(notice.text).toContain("55 00 84 82 12");
+    expect(notice.text).toContain("2 confirmed copies");
+    expect(notice.text).not.toContain("could not read");
+  });
+
+  it("does not word the two conditions the same way", () => {
+    // Two problems with two fixes must not look identical. Both the tone and the
+    // first word differ, so neither a glance nor a screen reader can confuse
+    // "seat a tag" with "swap the tag".
+    const a = writeNotice(unreadable());
+    const b = writeNotice(alreadyCarries());
+    expect(a.tone).not.toBe(b.tone);
+    expect(a.text).not.toBe(b.text);
+    expect(b.text.startsWith("Not written")).toBe(false);
+  });
+
+  it("counts neither condition as a copy", () => {
+    // The counting rule is unchanged by naming the cause: only a verified write
+    // is a copy, and a refusal is not one however it arrived.
+    expect(countsAsConfirmedCopy("refused")).toBe(false);
+    for (const notice of [writeNotice(unreadable()), writeNotice(alreadyCarries())]) {
+      expect(notice.tone).not.toBe("ok");
+      expect(notice.text).not.toMatch(/now lists/);
+    }
+  });
+
+  it("falls back to a plain not-written refusal when no cause was reported", () => {
+    // An older reply, or a refusal whose cause nobody established, is still a
+    // refusal: the fail-safe direction is the error, never the milder skip.
+    const notice = writeNotice(result("refused", { message: "the frame was declined" }));
+    expect(notice.tone).toBe("err");
+    expect(notice.text).toContain("Not written");
   });
 });
 
