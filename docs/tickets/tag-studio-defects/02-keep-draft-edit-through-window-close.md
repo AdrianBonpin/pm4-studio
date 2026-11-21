@@ -56,5 +56,6 @@ leaves; the JS API's own `destroy` command is not in `core:default`, which grant
 the window getters. No new Rust command, no schema change — ticket 04 owns the file
 format.
 
-**Suite:** `bun run test` 33 files / 425 tests; `cargo test --manifest-path
-src-tauri/Cargo.toml` 350. Both green. `bunx tsc --noEmit` and `bun run build` clean.
+**Suite:** `bun run test` 33 files / 427 tests (417 before this branch, 8 here, 2 from
+06 after merging it); `cargo test --manifest-path src-tauri/Cargo.toml` 350. Both green.
+`bunx tsc --noEmit` and `bun run build` clean.
