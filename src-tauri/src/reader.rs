@@ -187,9 +187,35 @@ impl LfCard {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HfCard {
-    pub uid: String,
-    /// Full payload so nothing is hidden while ATQA/SAK offsets are confirmed.
-    pub raw: String,
+    /// The poll reply's payload, byte for byte.
+    ///
+    /// Decoding happens in the frontend (`src/lib/hfDecoder.ts`) because every
+    /// offset in that reply is an unverified hypothesis: keeping the transport
+    /// dumb means the hypothesis lives in one place, is testable without
+    /// hardware, and can be corrected by a single table when a real capture
+    /// lands. The raw bytes travel with every reading so the UI can always show
+    /// them, decoded or not.
+    pub payload: Vec<u8>,
+}
+
+/// One `0x0069` reply payload, or `None` when nothing was latched.
+///
+/// Only the validity flag is interpreted here, because "no Tag in the field" is
+/// a Reader state and not a decode result: the UI must not report a Tag for a
+/// silent poll. Everything else — length, UID, ATQA, SAK — is the frontend
+/// decoder's decision, so a reply of an unexpected shape still reaches the UI as
+/// raw bytes instead of being swallowed.
+///
+/// The flag is payload byte 0, i.e. the byte right after the five-byte frame
+/// header. Payload byte 1 is a constant `0x01` and means nothing; reading the
+/// flag there was a bug that hid every real reading.
+pub fn hf_card_from_payload(payload: &[u8]) -> Option<HfCard> {
+    if payload.first() != Some(&0x01) {
+        return None;
+    }
+    Some(HfCard {
+        payload: payload.to_vec(),
+    })
 }
 
 // ---- device wrapper ---------------------------------------------------
@@ -383,27 +409,14 @@ impl Reader {
     }
 
     /// 13.56 MHz ISO14443-A poll.
+    ///
+    /// Returns the payload undecoded; see `hf_card_from_payload`.
     pub fn hf_poll_once(&self) -> Result<Option<HfCard>, String> {
         let f = match self.transact(CMD_HF_POLL, &[], Some(CMD_HF_POLL), 1500)? {
             Some(f) => f,
             None => return Ok(None),
         };
-        let p = &f.payload;
-        if p.len() < 6 || p[0] != 0x01 {
-            return Ok(None);
-        }
-        let uid = &p[2..6];
-        if uid.iter().all(|&b| b == 0) {
-            return Ok(None);
-        }
-        Ok(Some(HfCard {
-            uid: uid
-                .iter()
-                .map(|b| format!("{b:02X}"))
-                .collect::<Vec<_>>()
-                .join(" "),
-            raw: hex(&f.payload),
-        }))
+        Ok(hf_card_from_payload(&f.payload))
     }
 
     /// Discard any queued input frames. The LF read emits two responses per
@@ -520,6 +533,62 @@ mod tests {
         assert_eq!(parse_version(&[0x00, 0x00, 0x00, 0x00]), None);
         assert_eq!(parse_version(&[0x01, 0x02, 0x03]), None);
         assert_eq!(parse_version(&[0x20, 0x20]), None);
+    }
+
+    // ---- 13.56 MHz poll -------------------------------------------------
+    //
+    // There are no HF captures: every one of these payloads is synthetic, built
+    // to the layout hypothesis in src/lib/hfDecoder.ts. They pin the transport
+    // boundary only — which byte is the validity flag, and that nothing else is
+    // decoded here. Whether the hypothesis matches a real Tag is ticket 12.
+
+    /// 19-byte poll reply: flag 0x01, constant 0x01, UID `DE AD BE EF`,
+    /// ATQA 0x0004 at 14..16, SAK 0x08 at 17.
+    #[rustfmt::skip]
+    const HF_REPLY_LATCHED: [u8; 19] = [
+        0x01, 0x01,
+        0xDE, 0xAD, 0xBE, 0xEF,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x04, 0x00,
+        0x00,
+        0x08,
+        0x00,
+    ];
+
+    #[test]
+    fn a_latched_hf_reply_is_a_reading_with_its_raw_bytes() {
+        let card = hf_card_from_payload(&HF_REPLY_LATCHED).expect("flag set means latched");
+        assert_eq!(card.payload, HF_REPLY_LATCHED);
+    }
+
+    #[test]
+    fn the_hf_validity_flag_is_payload_byte_zero() {
+        // Flag clear at byte 0, constant 0x01 still at byte 1: nothing latched.
+        let mut no_tag = HF_REPLY_LATCHED;
+        no_tag[0] = 0x00;
+        assert!(hf_card_from_payload(&no_tag).is_none());
+
+        // A reply whose byte 1 is 0x00 and byte 0 is 0x01 is still a reading:
+        // byte 1 is a constant, not the flag, and must never gate the read.
+        let mut odd = HF_REPLY_LATCHED;
+        odd[1] = 0x00;
+        assert!(hf_card_from_payload(&odd).is_some());
+    }
+
+    #[test]
+    fn an_empty_hf_reply_is_not_a_reading() {
+        assert!(hf_card_from_payload(&[]).is_none());
+    }
+
+    #[test]
+    fn an_unexpectedly_shaped_hf_reply_still_reaches_the_ui() {
+        // The frontend decoder is what reports a length mismatch; the transport
+        // must not decide the reply is worthless and hide the bytes.
+        let short = vec![0x01, 0x01, 0xDE, 0xAD];
+        assert!(hf_card_from_payload(&short).is_some());
+        let mut long = HF_REPLY_LATCHED.to_vec();
+        long.extend_from_slice(&[0x00; 5]);
+        assert!(hf_card_from_payload(&long).is_some());
     }
 
     #[test]

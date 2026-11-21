@@ -161,9 +161,41 @@ IN   55 00 69 00 13 ST 01 [UID(4)] …tail…
   garbage and must be ignored)
 - UID at payload offset 2..6
 
-**Not verified:** ATQA/SAK tail offsets. Upstream reports `ATQA 0x0004,
-SAK 0x08` (MIFARE Classic 1K) for one card, but we have not reproduced this on
-real HF hardware. This app therefore reports only the UID plus the raw payload.
+**Not verified — the tail offsets are a hypothesis.** Upstream reports `ATQA
+0x0004, SAK 0x08` (MIFARE Classic 1K) for one card, but we have not reproduced
+this on real HF hardware. Nothing below is backed by a capture from this
+Reader; it comes from third-party client source:
+
+| Payload offset | Meaning (hypothesis) |
+|---|---|
+| 0 | validity flag (`0x01` latched) — the byte right after the header |
+| 1 | constant `0x01`, carries nothing |
+| 2..6 | UID, 4 bytes |
+| 6..14 | unconfirmed |
+| 14..16 | ATQA, byte-swapped relative to how NXP quotes it |
+| 16 | unconfirmed |
+| 17 | SAK of the last cascade level |
+| 18 | unconfirmed |
+
+> **Counter-evidence from a real capture.** A latched NTAG215 was captured — see
+> "`0x0069` payloads, for the record" below. Its payload carries a **7-byte UID
+> at offsets 2..9**, and the tail after that UID does not resemble ATQA/SAK. For
+> that Tag the hypothesis above yields no resolvable ATQA/SAK pair, so the
+> readout correctly falls back to raw bytes with the reason shown instead of
+> naming a family. This is one more reason the decoded values below stay
+> provisional until ticket 12.
+
+The whole reply is 19 bytes in one USB report, so nothing needs reassembling.
+The app decodes this layout in `src/lib/hfDecoder.ts` and **labels every decoded
+value provisional** until a real capture confirms or corrects it. A reply of a
+different length, an ATQA/SAK pair no published table assigns, or a UID field
+that cannot hold the announced UID all fall back to raw bytes with the reason
+shown — no card type, no capacity, no UID split.
+
+Earlier app code read the validity flag from payload byte 1 instead of byte 0,
+which is why it reported no tag for a latched reply. `hf_card_from_payload` in
+`src-tauri/src/reader.rs` now reads byte 0 and hands the raw payload to the
+frontend undecoded.
 
 ### `0x0072` — 125 kHz read (EM4100)
 
@@ -506,7 +538,10 @@ no-tag payloads contain. ATQA/SAK offsets therefore remain **unconfirmed** for
 
 1. **ATQA/SAK offsets** for the HF poll tail. A latched NTAG215 poll was captured
    (above) and its tail does not resemble ATQA/SAK, so ticket 12's capture still
-   has to settle where those fields are — or that they are not transmitted.
+   has to settle where those fields are — or that they are not transmitted. Until
+   it does, the app decodes the hypothesised layout in `src/lib/hfDecoder.ts` and
+   marks every decoded value provisional; a reply whose pair does not resolve
+   falls back to raw bytes.
 2. **Writing to a factory-blank NTAG.** The one tag available was password
    protected (`AUTH0 = 0x04`), so the write path was refused with status `32`
    before any page was attempted. Whether `0x0082` writes on an unprotected tag is
@@ -517,7 +552,7 @@ no-tag payloads contain. ATQA/SAK offsets therefore remain **unconfirmed** for
 5. **What sets the T5577 lock bit.** One write locked a chip; another did not.
    Understanding which payloads are safe would remove the main hazard of the
    `0x0073` path.
-5. **The trailing `0x01`** in the `0x0054` version payload, and whether the
+6. **The trailing `0x01`** in the `0x0054` version payload, and whether the
    revision string ever carries a second component.
 
 Solved: **125 kHz write/clone** — command `0x0073`, see above.

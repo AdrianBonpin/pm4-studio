@@ -10,6 +10,10 @@
 //!   - `LF_WRITE_CONFIRMED` / `LF_WRITE_READBACK` — the working example recorded
 //!     in docs/PROTOCOL.md under `0x0073`, confirmed on hardware by writing a
 //!     tag and reading it back byte-identically.
+//!
+//! There are deliberately no 13.56 MHz fixtures: the poll reply layout is a
+//! hypothesis with no capture behind it, so the HF tests build their synthetic
+//! payloads at the test and say so.
 
 /// 125 kHz read, tag latched. Identity `56 00 53 C7 B3`.
 pub const LF_READ_CARD_PRESENT: &str =
