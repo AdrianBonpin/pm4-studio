@@ -136,6 +136,7 @@ function mount({ drafts = [], card = NTAG_CAPTURE, answers = {} }: MountOptions 
         onModeChange={setMode}
         onPoll={async () => card}
         library={libraryState()}
+        onOpenDraft={() => {}}
       />
     );
   }

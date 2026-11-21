@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import App from "./App";
+import { DraftsProvider } from "./components/DraftsProvider";
 import { fakeBackend, renderUi } from "./test/dom";
 import { libraryView } from "./test/libraryState";
 import { toastStore } from "./lib/toastStore";
@@ -71,6 +72,19 @@ function current(): string | null {
   return marked[0]?.textContent ?? null;
 }
 
+/**
+ * The app as `main.tsx` mounts it: inside the provider that owns the Drafts
+ * queue and the window-close guard. 13.56 MHz reads it (a readout can make a
+ * Draft), so every destination needs it to render.
+ */
+function renderApp() {
+  return renderUi(
+    <DraftsProvider>
+      <App />
+    </DraftsProvider>,
+  );
+}
+
 afterEach(() => {
   toastStore.clear();
 });
@@ -78,7 +92,7 @@ afterEach(() => {
 describe("the sidebar's five destinations", () => {
   it("offers exactly the five, in the order the work happens", () => {
     fakeBackend(noReader());
-    renderUi(<App />);
+    renderApp();
 
     expect(destinations().map((button) => button.textContent)).toEqual(DESTINATIONS);
     // Drafts is not one of them: it is a Collection inside Library (see
@@ -88,7 +102,7 @@ describe("the sidebar's five destinations", () => {
 
   it("marks the destination you are on for assistive technology", async () => {
     fakeBackend(noReader());
-    const { user } = renderUi(<App />);
+    const { user } = renderApp();
 
     expect(current()).toBe("125 kHz");
 
@@ -101,7 +115,7 @@ describe("the sidebar's five destinations", () => {
 
   it("keeps your place when you look somewhere else and come back", async () => {
     fakeBackend(noReader());
-    const { user } = renderUi(<App />);
+    const { user } = renderApp();
 
     await user.click(within(sidebar()).getByRole("button", { name: "Library" }));
     await user.click(within(sidebar()).getByRole("button", { name: "Tools" }));
@@ -114,7 +128,7 @@ describe("the sidebar's five destinations", () => {
 
   it("renders every destination with no Reader attached", async () => {
     fakeBackend(noReader());
-    const { user } = renderUi(<App />);
+    const { user } = renderApp();
 
     for (const destination of DESTINATIONS) {
       await user.click(within(sidebar()).getByRole("button", { name: destination }));
@@ -133,7 +147,7 @@ describe("the sidebar's five destinations", () => {
 describe("the sidebar is navigation and connection, not preferences", () => {
   it("carries no beep control", () => {
     fakeBackend(noReader());
-    renderUi(<App />);
+    renderApp();
 
     // The preference lives in Settings → Feedback, where it does not care
     // whether the Reader is plugged in.
@@ -143,7 +157,7 @@ describe("the sidebar is navigation and connection, not preferences", () => {
 
   it("keeps the Reader, its status, its firmware and Connect available from anywhere", async () => {
     fakeBackend({ ...noReader(), connect: () => READER, firmware_version: () => "H00S07" });
-    const { user } = renderUi(<App />);
+    const { user } = renderApp();
 
     await waitFor(() => {
       expect(within(sidebar()).getByText("NFC-PM4")).toBeTruthy();
@@ -158,7 +172,7 @@ describe("the sidebar is navigation and connection, not preferences", () => {
 describe("the credits that used to repeat on every page", () => {
   it("are gone from the page flow, and live in Settings → About instead", async () => {
     fakeBackend(noReader());
-    const { user } = renderUi(<App />);
+    const { user } = renderApp();
 
     for (const destination of DESTINATIONS) {
       await user.click(within(sidebar()).getByRole("button", { name: destination }));
@@ -178,7 +192,7 @@ describe("the credits that used to repeat on every page", () => {
 describe("the beeper test in Settings", () => {
   it("sounds through the outcome seam, and says so on screen", async () => {
     const backend = fakeBackend({ ...noReader(), connect: () => READER, firmware_version: () => "H00S07" });
-    const { user } = renderUi(<App />);
+    const { user } = renderApp();
 
     await user.click(within(sidebar()).getByRole("button", { name: "Settings" }));
     await user.click(screen.getByRole("button", { name: "Beep test" }));

@@ -10,6 +10,7 @@ import { WriteDraftToTag } from "../components/WriteDraftToTag";
 import { LibraryProblemBanner } from "../components/LibraryProblemBanner";
 import { MigrationWarning } from "../components/MigrationWarning";
 import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
+import { claimPendingDraft, pendingDraft } from "../lib/draftHandoff";
 import { snapshotRecords } from "../lib/hfSnapshot";
 import { describeDeviceFailure } from "../lib/readerIdentity";
 import {
@@ -58,9 +59,31 @@ type Collection = "snapshots" | "drafts";
  * another Snapshot swaps the pane and leaves the list exactly where it was, so
  * the page no longer reflows under the pointer and the list no longer carries a
  * row's editor inside it. Drafts is the same shape in `DraftsCollection`.
+ *
+ * The page also arrives with a Draft when a reading produced one: *Edit as Draft*
+ * on a 13.56 MHz readout creates the Draft and asks the shell for this
+ * destination, and the shell hands the id over through `lib/draftHandoff`. An
+ * arrival like that opens on the Drafts collection and on that Draft — the one
+ * place in this app where one page's action decides another page's first frame.
  */
 export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
-  const [collection, setCollection] = useState<Collection>("snapshots");
+  /**
+   * The Draft a reading just produced, if this page is being opened for one.
+   *
+   * Read once, at arrival, because that is when it means something: the press
+   * created the Draft and changed destination, so this mount is the arrival. The
+   * intent is peeked while rendering and claimed by the effect, because React's
+   * development double invocation would otherwise spend it before the page could
+   * use it (`lib/draftHandoff`). Claiming it is also what keeps a later visit
+   * opening on Snapshots, as every visit did before.
+   */
+  const [openDraftId] = useState<string | null>(() => pendingDraft());
+  const [collection, setCollection] = useState<Collection>(
+    openDraftId === null ? "snapshots" : "drafts",
+  );
+  useEffect(() => {
+    claimPendingDraft();
+  }, []);
   // The library's own file, its export and import, and the action that clears
   // everything saved are Settings → Data: this page browses what is in the
   // library, and `reload` is here only because watching a Snapshot's copy count
@@ -117,7 +140,7 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
     return (
       <div className="flex flex-col gap-8">
         <CollectionSwitch value={collection} onChange={setCollection} />
-        <DraftsCollection connected={connected} />
+        <DraftsCollection connected={connected} openDraftId={openDraftId} />
       </div>
     );
   }

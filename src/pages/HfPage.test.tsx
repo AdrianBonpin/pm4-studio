@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { screen, waitFor, within } from "@testing-library/react";
 import { HfPage } from "./HfPage";
+import { DraftsProvider } from "../components/DraftsProvider";
 import { fakeBackend, renderUi } from "../test/dom";
 import { MESSAGE, NTAG_CAPTURE, NTAG_UID, recordsRead } from "../test/hfState";
 import { libraryState, libraryView } from "../test/libraryState";
@@ -68,14 +69,20 @@ async function readTag(
 ) {
   const backend = fakeBackend(answers);
   const { symbols, stop } = hearSignals();
+  // Inside the provider that owns the Drafts queue: the page's Edit as Draft
+  // action creates a Draft, and there is one queue for the app rather than one
+  // per page.
   const { user } = renderUi(
-    <HfPage
-      connected
-      mode="read"
-      onModeChange={() => {}}
-      onPoll={async () => card}
-      library={libraryState()}
-    />,
+    <DraftsProvider>
+      <HfPage
+        connected
+        mode="read"
+        onModeChange={() => {}}
+        onPoll={async () => card}
+        library={libraryState()}
+        onOpenDraft={() => {}}
+      />
+    </DraftsProvider>,
   );
   await user.click(screen.getByRole("button", { name: "Read tag" }));
   return { backend, user, symbols, stop };
@@ -284,13 +291,16 @@ describe("keeping a 13.56 MHz read in the library", () => {
     const { symbols, stop } = hearSignals();
     const library = libraryState({ saveHf });
     const { user } = renderUi(
-      <HfPage
-        connected
-        mode="read"
-        onModeChange={() => {}}
-        onPoll={async () => NTAG_CAPTURE}
-        library={library}
-      />,
+      <DraftsProvider>
+        <HfPage
+          connected
+          mode="read"
+          onModeChange={() => {}}
+          onPoll={async () => NTAG_CAPTURE}
+          library={library}
+          onOpenDraft={() => {}}
+        />
+      </DraftsProvider>,
     );
     await user.click(screen.getByRole("button", { name: "Read tag" }));
     await readout().findByText(NTAG_UID);
@@ -370,13 +380,16 @@ describe("keeping a 13.56 MHz read in the library", () => {
   it("offers the save only once something has been decoded", async () => {
     fakeBackend({});
     const { user } = renderUi(
-      <HfPage
-        connected
-        mode="read"
-        onModeChange={() => {}}
-        onPoll={async () => UNKNOWN_CAPTURE}
-        library={libraryState()}
-      />,
+      <DraftsProvider>
+        <HfPage
+          connected
+          mode="read"
+          onModeChange={() => {}}
+          onPoll={async () => UNKNOWN_CAPTURE}
+          library={libraryState()}
+          onOpenDraft={() => {}}
+        />
+      </DraftsProvider>,
     );
 
     const before = screen.getByRole("button", { name: "Save to library" }) as HTMLButtonElement;

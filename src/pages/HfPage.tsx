@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Check } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { CopyMessage } from "../components/CopyMessage";
+import { useDraftsState } from "../components/DraftsProvider";
 import { EraseNdef } from "../components/EraseNdef";
 import { MemoryDumpPanel } from "../components/MemoryDumpPanel";
 import { WriteDraftMode } from "../components/WriteDraftMode";
@@ -24,6 +25,7 @@ import {
   type HfMessageState,
   type HfRead,
 } from "../lib/hfRead";
+import { draftNameFromRead } from "../lib/drafts";
 import { hfSnapshotSave } from "../lib/hfSnapshot";
 import { report, outcomes, type Outcome } from "../lib/outcome";
 import type { LibraryState } from "../hooks/useLibrary";
@@ -42,6 +44,27 @@ interface HfPageProps {
   onModeChange: (mode: HfMode) => void;
   /** Snapshots live in a file, so keeping a read is a call into the Rust store. */
   library: LibraryState;
+  /**
+   * Open a Draft in Library's Drafts collection. The shell owns the
+   * destination, so it is told which Draft to show rather than navigating from
+   * here; the page owns the Draft itself, because the press is the operation.
+   */
+  onOpenDraft: (draftId: string) => void;
+}
+
+/**
+ * The action a readout with Records offers: turn this message into a Draft.
+ *
+ * It is handed to the message half rather than sitting in the panel's header
+ * beside Save to library, because it belongs to the Records: a header action
+ * would be there on a readout whose Records could not be fetched, where there is
+ * nothing to copy.
+ */
+interface DraftAction {
+  readonly busy: boolean;
+  /** Set when the library file cannot be written, with the reason to show. */
+  readonly locked: string | null;
+  readonly run: () => void;
 }
 
 /** Short label per fallback reason. The sentence under it says what happened. */
@@ -184,9 +207,36 @@ function RecordsTable({ message }: { message: HfMessage }) {
   );
 }
 
-/** The message half: the Records as rows, or the honest reason there are none. */
-function MessageSection({ message }: { message: HfMessage }) {
-  if (message.state === "records") return <RecordsTable message={message} />;
+/**
+ * The message half: the Records as rows, or the honest reason there are none.
+ *
+ * `draft` is offered only where there are Records: on a readout whose message
+ * could not be read, or which holds none, there is nothing to copy, so the action
+ * is absent rather than disabled. An absent control is the honest rendering of an
+ * operation with no subject.
+ */
+function MessageSection({ message, draft }: { message: HfMessage; draft: DraftAction }) {
+  if (message.state === "records") {
+    return (
+      <div className="flex flex-col gap-3">
+        <RecordsTable message={message} />
+        <div className="flex flex-col items-start gap-1">
+          <Button
+            variant="secondary"
+            disabled={draft.busy || draft.locked !== null}
+            title={draft.locked ?? "Copy this message into a Draft you can edit"}
+            onClick={draft.run}
+          >
+            {draft.busy ? "Creating Draft…" : "Edit as Draft"}
+          </Button>
+          <p className="max-w-prose text-xs leading-relaxed text-text-muted">
+            Copies this message into a new Draft, named after the Tag, and opens it in Library.
+            The Tag is not written to.
+          </p>
+        </div>
+      </div>
+    );
+  }
   if (message.state === "undecoded-reply" || message.state === "nothing-latched") return null;
 
   const state = MESSAGE_STATE[message.state];
@@ -209,7 +259,7 @@ function MessageSection({ message }: { message: HfMessage }) {
 }
 
 /** One resolved reading, and everything the two transactions settled about it. */
-function HfReadout({ read }: { read: HfRead }) {
+function HfReadout({ read, draft }: { read: HfRead; draft: DraftAction }) {
   if (read.reading === null) {
     return <Readout placeholder="No tag in the field." />;
   }
@@ -258,7 +308,7 @@ function HfReadout({ read }: { read: HfRead }) {
 
       <p className="max-w-prose text-xs leading-relaxed text-text-muted">{read.ndef.note}</p>
 
-      <MessageSection message={read.message} />
+      <MessageSection message={read.message} draft={draft} />
 
       <RawPayload raw={reading.raw} />
     </div>
@@ -288,9 +338,24 @@ function HfReadout({ read }: { read: HfRead }) {
  * shows what was obtained and says why anything is missing
  * (`lib/hfRead.ts` owns that decision). Exactly one outcome is reported for the
  * whole action, so the sound and the message cannot disagree.
+ *
+ * Editing what a Tag holds no longer begins with a trip to another page: a
+ * readout that has Records offers *Edit as Draft*, which copies them into a Draft
+ * and opens it in Library's Drafts collection. The action is offered only where
+ * there is something to copy, it writes nothing to the Tag, and it reports its
+ * own outcome like every other operation.
  */
-export function HfPage({ connected, onPoll, mode, onModeChange, library }: HfPageProps) {
+export function HfPage({
+  connected,
+  onPoll,
+  mode,
+  onModeChange,
+  library,
+  onOpenDraft,
+}: HfPageProps) {
+  const drafts = useDraftsState();
   const [busy, setBusy] = useState(false);
+  const [drafting, setDrafting] = useState(false);
   const [read, setRead] = useState<HfRead | null>(null);
   const [polled, setPolled] = useState(false);
   /** What keeping this read in the library came to. */
@@ -355,7 +420,50 @@ export function HfPage({ connected, onPoll, mode, onModeChange, library }: HfPag
     setSaveNote(noteOf(answer));
   };
 
+  /**
+   * The message on the readout becomes a Draft, and the user lands in it.
+   *
+   * One press, one Draft: the Records go over as they were read, in the Tag's
+   * order, and they are already in it when it is created (`createWith`), so there
+   * is never an empty Draft on disk under the reading's name. Nothing here reads
+   * or writes the Tag — the Draft is this machine's own file — so the action
+   * cannot modify the Tag it came from.
+   *
+   * It reports its own outcome, like every other operation on this page, because
+   * the press is one: a success sounds the same done chirp everything else does,
+   * and a library file that would not take the Draft is reported as the failure
+   * it is rather than as a silent no-op.
+   */
+  const editAsDraft = async () => {
+    const half = read?.message;
+    const reading = read?.reading;
+    // The action is only rendered where there are Records, so this guard is the
+    // render condition restated rather than a state a user can reach.
+    if (half === undefined || half.state !== "records") return;
+    if (reading === null || reading === undefined || reading.state !== "decoded") return;
+
+    setDrafting(true);
+    try {
+      const created = await drafts.createWith(draftNameFromRead(reading.uid), [...half.records]);
+      if (created === null) {
+        report(outcomes.draftNotCreated());
+        return;
+      }
+      report(outcomes.draftedFromRead(reading.uid, half.records.length));
+      onOpenDraft(created.id);
+    } finally {
+      setDrafting(false);
+    }
+  };
+
   const savable = read !== null && hfSnapshotSave(read) !== null;
+
+  // The library file's own state, in the action's terms: a Draft cannot be
+  // written to a file that will not be written, and the control says so.
+  const draftLocked =
+    drafts.problem === null
+      ? null
+      : "The library file cannot be written to, so a Draft cannot be saved";
 
   return (
     <div className="flex flex-col gap-8">
@@ -397,7 +505,10 @@ export function HfPage({ connected, onPoll, mode, onModeChange, library }: HfPag
           {read === null ? (
             <Readout placeholder={polled ? "No tag in the field." : "No tag read yet."} />
           ) : (
-            <HfReadout read={read} />
+            <HfReadout
+              read={read}
+              draft={{ busy: drafting, locked: draftLocked, run: () => void editAsDraft() }}
+            />
           )}
           <SaveNoteLine note={saveNote} />
         </Section>
