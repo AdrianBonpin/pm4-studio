@@ -29,8 +29,12 @@ export type HfCard = {
  *
  * Only `verified` is a confirmed copy: `refused` was stopped by the guard before
  * anything was sent, `unverified` was sent but could not be read back (the tag's
- * state is unknown), and `failed` never reached the device. */
-export type WriteOutcome = "refused" | "verified" | "unverified" | "failed";
+ * state is unknown), and `failed` never reached the device.
+ *
+ * `blanked` belongs to the blanking path: the write was sent with the neutral
+ * Identity and the re-read found no Identity at all. It is a destruction, never
+ * a copy, and it must not be worded as "verified". */
+export type WriteOutcome = "refused" | "verified" | "blanked" | "unverified" | "failed";
 
 export type WriteResult = {
   customer: number;
@@ -46,6 +50,26 @@ export type WriteResult = {
   confirmedCopies: number | null;
   /** Set when the count could not be written to the library file. */
   countProblem: string | null;
+};
+
+/** What became of one blanking attempt.
+ *
+ * `blanked` means the re-read found no Identity, which is the success condition
+ * for blanking — a blanked tag reads as empty. `failed` means either the write
+ * never reached the device or the tag still presents an Identity afterwards;
+ * `unverified` means the write was sent and could not be read back at all. */
+export type BlankResult = {
+  /** The Identity the user confirmed, which is what was blanked. */
+  customer: number;
+  data32: number;
+  /** See `src/lib/blankTag.ts` for the wording of each outcome. */
+  outcome: "refused" | "blanked" | "unverified" | "failed";
+  /** True only when the re-read found no Identity. Never a "verified" claim. */
+  blanked: boolean;
+  /** The Identity the tag still presents, when it still presents one. */
+  stillIdentifies: string | null;
+  /** Why the tag was not blanked, when it was not. */
+  message: string | null;
 };
 
 export type RawResponse = {

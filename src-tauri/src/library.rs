@@ -1269,6 +1269,33 @@ mod tests {
     }
 
     #[test]
+    fn a_blanking_write_never_adds_a_confirmed_copy() {
+        // Blanking destroys an Identity instead of copying one. The Snapshot
+        // that describes it must not gain a copy, and nothing about the Tag's
+        // value may be edited: a Snapshot records what a Tag held when it was
+        // read, not what a Tag holds now.
+        let mut library = Library::empty();
+        let snapshot = with_identity(&mut library, 0x0084_8212);
+        let identity = Identity {
+            customer: 0x55,
+            data32: 0x0084_8212,
+        };
+        let before = library.snapshots[0].clone();
+
+        let outcome = library.record_write(&identity, WriteOutcome::Blanked);
+        assert_eq!(
+            outcome,
+            WriteCountOutcome::Unchanged {
+                id: snapshot.id.clone(),
+                write_count: 0
+            }
+        );
+        assert!(!outcome.incremented());
+        assert_eq!(library.snapshots[0].write_count, 0);
+        assert_eq!(library.snapshots[0], before);
+    }
+
+    #[test]
     fn a_failed_write_leaves_the_count_alone() {
         let mut library = Library::empty();
         let snapshot = with_identity(&mut library, 0x0084_8212);
