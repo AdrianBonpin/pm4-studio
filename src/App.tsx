@@ -1,16 +1,14 @@
-import { useState } from "react";
-import { FileText, Library as LibraryIcon, Nfc, Radio, Terminal, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { FileText, Library as LibraryIcon, Nfc, Radio, Terminal } from "lucide-react";
 import { Badge, type BadgeTone } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
 import { Toggle } from "./components/ui/Toggle";
+import { ToastViewport } from "./components/ToastViewport";
 import { useBeep } from "./hooks/useBeep";
 import { useLibrary } from "./hooks/useLibrary";
 import { useReader, type Status } from "./hooks/useReader";
-import {
-  classifyDeviceFailure,
-  deviceFailureNotice,
-  formatFirmwareRevision,
-} from "./lib/readerIdentity";
+import { outcomes, report } from "./lib/outcome";
+import { formatFirmwareRevision } from "./lib/readerIdentity";
 import { isMacOS, isTauri } from "./lib/platform";
 import { PAGES, type PageId } from "./lib/pageCopy";
 import { HfPage } from "./pages/HfPage";
@@ -34,13 +32,6 @@ const STATUS_TONE: Record<Status, BadgeTone> = {
   error: "err",
 };
 
-/** Left-rule tone per classified failure. Hardware faults carry the remedy. */
-const NOTICE_TONE = {
-  muted: { box: "border-border-hover bg-surface/50", title: "text-text" },
-  warn: { box: "border-warn bg-warn/5", title: "text-warn" },
-  error: { box: "border-err bg-err/5", title: "text-err" },
-} as const;
-
 /** The sidebar icon per page. The words are in `lib/pageCopy`. */
 const PAGE_ICON: Record<PageId, typeof Nfc> = {
   lf: Nfc,
@@ -58,8 +49,30 @@ export default function App() {
 
   const current = PAGES.find((p) => p.id === page) ?? PAGES[0];
   const connected = reader.connected;
-  const failure = reader.error ? classifyDeviceFailure(reader.error) : "unknown";
-  const notice = reader.error ? deviceFailureNotice(failure) : null;
+
+  // The device-failure strip that used to sit at the top of the content column is
+  // gone. The same news now arrives as a message in the corner the user chose,
+  // carrying the two controls the strip carried: a reconnect and a dismiss.
+  //
+  // Reported once per distinct failure rather than once per render, so a re-render
+  // (or React's development double-invoke) cannot duplicate it. Dismissing the
+  // message clears the error behind it, which is what "dismiss" meant on the
+  // strip, and leaves the next identical failure free to be reported again.
+  const reportedFailure = useRef<string | null>(null);
+  useEffect(() => {
+    if (!reader.error) {
+      reportedFailure.current = null;
+      return;
+    }
+    if (reportedFailure.current === reader.error) return;
+    reportedFailure.current = reader.error;
+    report(
+      outcomes.readerFailure(reader.error, {
+        action: { label: "Reconnect", run: () => void reader.connect() },
+        onDismiss: () => reader.setError(null),
+      }),
+    );
+  }, [reader.error, reader.connect, reader.setError]);
 
   return (
     <div className="flex h-svh flex-col overflow-hidden bg-canvas text-text select-none">
@@ -145,48 +158,6 @@ export default function App() {
                 <p className="text-sm text-text-muted">{current.subtitle}</p>
               </header>
 
-              {reader.error && notice && (
-                <div
-                  className={`flex items-start justify-between gap-3 border-l-2 px-3 py-2 ${NOTICE_TONE[notice.tone].box}`}
-                >
-                  <div className="min-w-0">
-                    {failure === "unknown" ? (
-                      <p className="text-sm text-err">{reader.error}</p>
-                    ) : (
-                      <>
-                        <p className={`text-sm ${NOTICE_TONE[notice.tone].title}`}>
-                          {notice.title}
-                        </p>
-                        <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
-                          {notice.detail}
-                        </p>
-                        <p className="mt-1 select-text break-all font-mono text-[11px] text-text-muted">
-                          {reader.error}
-                        </p>
-                      </>
-                    )}
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {failure !== "unknown" && (
-                      <Button
-                        variant="ghost"
-                        className="text-xs"
-                        onClick={() => void reader.connect()}
-                      >
-                        Reconnect
-                      </Button>
-                    )}
-                    <button
-                      aria-label="Dismiss"
-                      onClick={() => reader.setError(null)}
-                      className="cursor-pointer opacity-70 transition-opacity hover:opacity-100"
-                    >
-                      <X size={15} />
-                    </button>
-                  </div>
-                </div>
-              )}
-
               {page === "lf" && (
                 <LfPage
                   connected={connected}
@@ -233,6 +204,9 @@ export default function App() {
           </div>
         </main>
       </div>
+
+      {/* Outside the page flow, so a message never moves the content under it. */}
+      <ToastViewport />
     </div>
   );
 }
