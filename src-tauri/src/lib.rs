@@ -2,6 +2,7 @@
 
 pub mod identity;
 pub mod library;
+pub mod library_io;
 pub mod reader;
 pub mod write_guard;
 #[cfg(test)]
@@ -9,10 +10,13 @@ mod test_frames;
 
 use identity::Identity;
 use library::{InsertOutcome, Library, LibraryProblem, LibraryStore, SaveError, Snapshot};
+use library_io::{FileError, ImportPreview};
 use reader::{DeviceInfo, Frame, HfCard, LfCard, Reader, REPORT_LEN};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
+use tauri_plugin_dialog::DialogExt;
 
 pub struct AppState {
     reader: Mutex<Option<Reader>>,
@@ -388,6 +392,112 @@ fn library_delete(app: AppHandle, id: String) -> Result<LibraryView, String> {
     Ok(loaded_view(&store, library))
 }
 
+/// What the file dialog is being opened for.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+enum PickMode {
+    /// Choose an existing file to read.
+    Open,
+    /// Choose where a file is to be written.
+    Save,
+}
+
+/// Ask the user for a file path with the system dialog.
+///
+/// `null` means the dialog was cancelled, and the caller must change nothing.
+/// The dialog is driven from here rather than from the webview, so the plugin's
+/// IPC commands are never invoked and no capability permission beyond the
+/// window's own is needed for it.
+#[tauri::command]
+async fn library_pick_file(
+    app: AppHandle,
+    mode: PickMode,
+    suggested_name: Option<String>,
+) -> Result<Option<String>, String> {
+    // The dialog answers on the main thread, which is not allowed to block, so
+    // the answer comes back through a channel this command awaits instead.
+    let (tx, mut answer) = tauri::async_runtime::channel(1);
+    let mut dialog = app
+        .dialog()
+        .file()
+        .set_title("PM4 Studio library")
+        .add_filter("Library file", &["json"]);
+    if let Ok(downloads) = app.path().download_dir() {
+        dialog = dialog.set_directory(downloads);
+    }
+    match mode {
+        PickMode::Save => {
+            if let Some(name) = suggested_name {
+                dialog = dialog.set_file_name(name);
+            }
+            dialog.save_file(move |chosen| {
+                let _ = tx.try_send(chosen);
+            });
+        }
+        PickMode::Open => dialog.pick_file(move |chosen| {
+            let _ = tx.try_send(chosen);
+        }),
+    }
+    let chosen = answer
+        .recv()
+        .await
+        .ok_or_else(|| "the file dialog closed without choosing anything".to_string())?;
+    Ok(chosen
+        .and_then(|file| file.into_path().ok())
+        .map(|path| path.display().to_string()))
+}
+
+/// What an export wrote, so the UI can say where it went and how much is in it.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExportView {
+    pub path: String,
+    pub snapshots: usize,
+    pub drafts: usize,
+}
+
+/// Write the whole library to a file the user chose. The file is a library
+/// file, so importing it back restores the library exactly.
+#[tauri::command]
+fn library_export(app: AppHandle, path: String) -> Result<ExportView, String> {
+    let store = library_store(&app)?;
+    let document = library_io::export(&store, Path::new(&path)).map_err(|e| e.message())?;
+    Ok(ExportView {
+        path,
+        snapshots: document.library.snapshots.len(),
+        drafts: document.draft_count(),
+    })
+}
+
+/// Say what importing a file would add, without writing anything. Cancelling an
+/// import is simply not calling the apply below.
+#[tauri::command]
+fn library_import_preview(app: AppHandle, path: String) -> Result<ImportPreview, String> {
+    let store = library_store(&app)?;
+    library_io::preview(&store, Path::new(&path)).map_err(|e: FileError| e.message())
+}
+
+/// What an import changed.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportView {
+    pub preview: ImportPreview,
+    pub library: LibraryView,
+}
+
+/// Merge a file the user chose into the library. Entries already here are kept,
+/// so an import neither duplicates nor destroys anything.
+#[tauri::command]
+fn library_import_apply(app: AppHandle, path: String) -> Result<ImportView, String> {
+    let store = library_store(&app)?;
+    let (document, preview) =
+        library_io::apply(&store, Path::new(&path)).map_err(|e: FileError| e.message())?;
+    Ok(ImportView {
+        preview,
+        library: loaded_view(&store, document.library),
+    })
+}
+
 pub fn run() {
     tauri::Builder::default()
         // Must be the first plugin registered. A second launch raises the
@@ -400,6 +510,10 @@ pub fn run() {
                 let _ = window.set_focus();
             }
         }))
+        // Registered for the file dialogs the library exports and imports with.
+        // They are driven from Rust, so nothing here is reachable from the
+        // webview and no additional capability permission is granted for it.
+        .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             connect,
@@ -416,7 +530,11 @@ pub fn run() {
             library_load,
             library_save_lf,
             library_rename,
-            library_delete
+            library_delete,
+            library_export,
+            library_import_preview,
+            library_import_apply,
+            library_pick_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running PM4 Studio");

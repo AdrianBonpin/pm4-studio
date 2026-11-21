@@ -11,7 +11,15 @@ import {
   snapshotDetail,
   snapshotTitle,
 } from "../lib/library";
+import {
+  describeExport,
+  describeImportApplied,
+  describeImportPreview,
+  nothingToAdd,
+  suggestedExportName,
+} from "../lib/libraryFiles";
 import type { LibraryState } from "../hooks/useLibrary";
+import type { ImportPreview } from "../lib/libraryFiles";
 import type { Snapshot } from "../lib/library";
 import type { WriteResult } from "../types";
 
@@ -27,7 +35,8 @@ interface LibraryPageProps {
  * writing one back to a Tag is the only part that needs hardware.
  */
 export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
-  const { view, error, loading, rename, remove } = library;
+  const { view, error, loading, rename, remove, pickPath, exportTo, previewImport, applyImport } =
+    library;
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState("");
@@ -36,8 +45,67 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
   const [writeResult, setWriteResult] = useState<WriteResult | null>(null);
   const [writeErr, setWriteErr] = useState<string | null>(null);
 
+  // Export and import. The chosen path is held only until the import is
+  // applied or cancelled; nothing is written before that.
+  const [fileBusy, setFileBusy] = useState(false);
+  const [fileNote, setFileNote] = useState<{ text: string; path?: string } | null>(null);
+  const [importPath, setImportPath] = useState<string | null>(null);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
+
   const snapshots = view?.snapshots ?? [];
   const problem = view?.problem ?? null;
+
+  const resetImport = () => {
+    setImportPath(null);
+    setImportPreview(null);
+  };
+
+  const exportLibrary = async () => {
+    setFileNote(null);
+    resetImport();
+    setFileBusy(true);
+    try {
+      const path = await pickPath("save", suggestedExportName(new Date()));
+      // Cancelled: nothing was written, so there is nothing to report.
+      if (!path) return;
+      const result = await exportTo(path);
+      if (result) setFileNote({ text: describeExport(result), path: result.path });
+    } finally {
+      setFileBusy(false);
+    }
+  };
+
+  const chooseImport = async () => {
+    setFileNote(null);
+    resetImport();
+    setFileBusy(true);
+    try {
+      const path = await pickPath("open");
+      // Cancelled: the library has not been read or written.
+      if (!path) return;
+      const preview = await previewImport(path);
+      if (preview) {
+        setImportPath(path);
+        setImportPreview(preview);
+      }
+    } finally {
+      setFileBusy(false);
+    }
+  };
+
+  const confirmImport = async () => {
+    if (!importPath) return;
+    setFileBusy(true);
+    try {
+      const result = await applyImport(importPath);
+      if (result) {
+        setFileNote({ text: describeImportApplied(result.preview) });
+        resetImport();
+      }
+    } finally {
+      setFileBusy(false);
+    }
+  };
 
   const commitRename = (snapshot: Snapshot, name: string) => {
     setEditingId(null);
@@ -245,6 +313,66 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
               <p className="text-xs text-ok">
                 Verified — the tag now reads {writeResult.readback?.id}.
               </p>
+            )}
+          </div>
+        )}
+      </Section>
+
+      <Section
+        title="Export and import"
+        hint="The whole library in one file: back it up, or move it to another machine. An import adds what is missing and leaves every Snapshot already here exactly as it is."
+      >
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="secondary"
+            disabled={problem !== null || fileBusy}
+            onClick={() => void exportLibrary()}
+          >
+            Export library…
+          </Button>
+          <Button
+            variant="secondary"
+            disabled={problem !== null || fileBusy}
+            onClick={() => void chooseImport()}
+          >
+            Import library…
+          </Button>
+        </div>
+
+        {importPreview && importPath && (
+          <div className="mt-4 flex flex-col gap-3 border-l-2 border-accent bg-accent/5 px-3 py-3">
+            <p className="text-sm leading-relaxed text-text">
+              {describeImportPreview(importPreview)}
+            </p>
+            <code className="select-text break-all font-mono text-[11px] text-text-muted">
+              {importPath}
+            </code>
+            <p className="text-xs leading-relaxed text-text-muted">
+              Nothing has been written yet. Add to library applies the import; Cancel leaves the
+              library exactly as it is.
+            </p>
+            <div className="flex gap-2">
+              <Button
+                variant="primary"
+                disabled={fileBusy || nothingToAdd(importPreview)}
+                onClick={() => void confirmImport()}
+              >
+                {fileBusy ? "Adding…" : "Add to library"}
+              </Button>
+              <Button variant="ghost" disabled={fileBusy} onClick={resetImport}>
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {fileNote && (
+          <div className="mt-3">
+            <p className="text-xs leading-relaxed text-ok">{fileNote.text}</p>
+            {fileNote.path && (
+              <code className="mt-1 block select-text break-all font-mono text-[11px] text-text-muted">
+                {fileNote.path}
+              </code>
             )}
           </div>
         )}
