@@ -10,6 +10,13 @@
  *
  * Every label is `whitespace-nowrap`, because a control that wraps onto a second
  * line at the 900 × 700 minimum window is a defect here rather than a tight fit.
+ *
+ * The shape is the switch's own and is set once, here: a 4px corner (`rounded`),
+ * 2px above and below the label and 10px beside it, 14px Outfit, a hairline
+ * border, and a raised surface inside an accent border when the option is
+ * pressed. It is what separates a **Switcher** from a button at a glance — the
+ * pill was never the switch's shape and is now the Toggle's alone — so a call
+ * site that overrides the padding is the defect this file exists to prevent.
  */
 
 /** One button: the value it sets, and the words it shows. */
@@ -52,7 +59,7 @@ export function Segmented<T extends string>({
             type="button"
             aria-pressed={active}
             onClick={() => onChange(option.value)}
-            className={`flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded-full border px-3 py-1.5 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+            className={`flex cursor-pointer items-center justify-center gap-1.5 whitespace-nowrap rounded border px-2.5 py-0.5 text-sm transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
               active
                 ? "border-accent bg-surface-raised text-text"
                 : "border-border bg-transparent text-text-muted hover:border-border-hover hover:text-text"

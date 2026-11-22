@@ -64,19 +64,28 @@ components:
   button-primary:
     backgroundColor: "{colors.accent}"
     textColor: "{colors.text}"
-    rounded: "{rounded.full}"
+    rounded: "{rounded.md}"
     padding: "6px 12px"
     typography: "{typography.body}"
   button-secondary:
     backgroundColor: "{colors.surface-raised}"
     textColor: "{colors.text-muted}"
-    rounded: "{rounded.full}"
+    rounded: "{rounded.md}"
     padding: "6px 12px"
   button-danger:
     backgroundColor: "{colors.err}"
     textColor: "{colors.text}"
-    rounded: "{rounded.full}"
+    rounded: "{rounded.md}"
     padding: "6px 12px"
+  switcher-option:
+    backgroundColor: "{colors.surface-raised}"
+    textColor: "{colors.text}"
+    rounded: "{rounded.sm}"
+    padding: "2px 10px"
+    typography: "{typography.body}"
+  toggle:
+    backgroundColor: "{colors.accent}"
+    rounded: "{rounded.full}"
   input:
     backgroundColor: "{colors.surface}"
     textColor: "{colors.text}"
@@ -239,9 +248,10 @@ background, it gets a hairline. A drop shadow is a different world's vocabulary.
 
 ## Shapes
 
-- **Radii:** `rounded` 4px for badges, 6px (`rounded-md`) for small controls, 8px
-  (`rounded-lg`) for inputs, 12px (`rounded-xl`) for cards, and `full` for buttons
-  and toggles. Buttons are pills; containers are not.
+- **Radii:** `rounded` 4px for badges and for every option in a switcher, 6px
+  (`rounded-md`) for every button, 8px (`rounded-lg`) for inputs, 12px
+  (`rounded-xl`) for cards, and `full` for the Toggle alone. A button is a
+  rectangle and a switcher is a chip; containers are neither.
 - **Borders:** one pixel, `--color-border`, brightening to `--color-border-hover`
   on hover. A focus ring is `ring-1`/`ring-2` in the accent, never a border colour
   change alone.
@@ -252,18 +262,38 @@ background, it gets a hairline. A drop shadow is a different world's vocabulary.
 cards: nesting bordered surfaces is the pattern this world refuses, and spacing or
 a hairline does the grouping instead.
 
+**The One Pill Rule.** The Toggle is the only fully rounded control in the
+interface, because a switch is a physical affordance and reads as one; its track
+and its knob share the shape for the same reason. A switcher is 4px and a button
+is 6px: the pill is the switch's shape, not the button's.
+
 ## Components
 
 ### Buttons
 
-Pill-shaped, 6×12 padding, 14px Outfit, one-pixel border. Four variants:
-**primary** (accent fill), **secondary** (raised surface, muted ink), **ghost**
-(transparent), **danger** (error tint with an error border). The danger variant is
+A 6px rectangle (`rounded-md`), 6×12 padding, 14px Outfit, one-pixel border. Four
+variants: **primary** (accent fill), **secondary** (raised surface, muted ink),
+**ghost** (transparent), **danger** (error tint with an error border). The four are
+told apart by fill, border and ink, never by corner: the radius says "this is a
+button" and says it identically in all four, so the shape never carries a meaning
+it cannot carry. The danger variant is
 for an action that destroys something — a Destroy, an Erase, a delete — so the
 irreversible control is never the one that looks like every other control — which
 is also why the everyday Clear is a primary button and its neighbouring Destroy is
 not. A
 button never wraps onto a second line at any supported window size.
+
+### The switcher
+
+`rounded` 4px, 2px above and below the label and 10px beside it, 14px Outfit, a
+hairline border; every label is `nowrap`. The pressed option sits on
+`--color-surface-raised` inside an accent border, so "which one is current?" is
+answered without reading a word. `src/components/ui/Segmented.tsx` is the one
+rendering of it — a band page's modes, Library's Collections, Settings' groups, the
+Quiet level, the corner the messages appear in and the two ways of entering an
+Identity are all this control — so the shape is set once there and never overridden
+at a call site. It is a group of toggle buttons and not a tab strip: it owns no
+panel and hides nothing from find-in-page, and it holds one row at 900×700.
 
 ### Badges
 
@@ -327,12 +357,14 @@ that could be dismissed keeps its dismiss control, named for what it dismisses.
 - Reach for a hairline, spacing, or a tonal step before reaching for a container.
 - State an absence in words: "not determined", "no tag in the field", "this Reader
   cannot tell you which".
-- Keep one primary action per visible mode, pill-shaped, never wrapping.
+- Keep one primary action per visible mode, and never let it wrap.
 - Use mono for measurement and sans for speech.
 
 ### Don't:
 
 - Don't nest cards, or wrap a section in a container it does not need.
+- Don't give a control a shape that is not its own: a switcher is 4px, a button
+  is 6px, and the pill belongs to the Toggle.
 - Don't add a badge, a chip or an icon that carries no meaning.
 - Don't write a sentence that restates the heading or the control above it.
 - Don't announce a message only with a coloured bar down one side of a box: a
