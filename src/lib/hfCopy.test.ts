@@ -28,6 +28,7 @@ import { bytesToHex, type NdefWriteResult } from "./tagWrite";
 import { decodeHfPayload } from "./hfDecoder";
 import { dump } from "../test/hfState";
 import type { DraftRecord } from "./drafts";
+import type { TagRecordsRead } from "./tagRecords";
 import type { HfCard, NdefTagSnapshot } from "../types";
 
 /**
@@ -67,6 +68,7 @@ function destination(patch: Partial<CopyDestination> = {}): CopyDestination {
   return {
     uid: DESTINATION_UID,
     latched: true,
+    holds: "records",
     message: copyMessage(DESTINATION_UID, OTHER_RECORDS),
     problem: null,
     capacityBytes: 496,
@@ -173,7 +175,14 @@ describe("the destination guard", () => {
     const decision = copyDecision({
       step: "destination",
       source: source(),
-      destination: { uid: null, latched: false, message: null, problem: null, capacityBytes: null },
+      destination: {
+        uid: null,
+        latched: false,
+        holds: "nothing-latched",
+        message: null,
+        problem: null,
+        capacityBytes: null,
+      },
       acknowledgedUnknownFit: false,
     });
 
@@ -217,6 +226,122 @@ describe("the destination guard", () => {
     expect(decision.kind).toBe("refused");
     if (decision.kind !== "refused") throw new Error("expected a refusal");
     expect(decision.refusal.condition).toBe("destination-unreadable");
+  });
+
+  // A destination that answered every command and simply holds nothing is the
+  // ordinary destination for a Copy — the second tag a copy is being put on. It
+  // is not a read failure, and the guard must not refuse it as one.
+  it.each(["empty-message", "no-ndef-tlv"] as const)(
+    "proceeds onto a destination that read fine and holds no message (%s)",
+    (holds) => {
+      const held = source();
+      const decision = copyDecision({
+        step: "destination",
+        source: held,
+        destination: destination({
+          message: null,
+          holds,
+          problem: "The tag is NDEF formatted and holds an empty message (an NDEF TLV of length zero), so it has zero Records and there is nothing to load.",
+        }),
+        acknowledgedUnknownFit: false,
+      });
+
+      // Zero Records to be replaced, and the capacity is still weighed.
+      expect(decision).toEqual({
+        kind: "proceed",
+        fit: { kind: "known", requiredBytes: tlvBytes(held), capacityBytes: 496 },
+      });
+    },
+  );
+
+  // The other side of the same distinction: a read that genuinely failed stays
+  // a refusal, whatever the destination's own sentence says.
+  it.each([
+    "unreadable",
+    "undecodable",
+    "read-failed",
+    "undecoded-reply",
+    "other-tag",
+    "not-ndef-capable",
+  ] as const)("keeps a destination that could not be read a refusal (%s)", (holds) => {
+    const decision = copyDecision({
+      step: "destination",
+      source: source(),
+      destination: destination({
+        uid: null,
+        message: null,
+        holds,
+        problem: "the message read did not complete",
+      }),
+      acknowledgedUnknownFit: false,
+    });
+
+    expect(decision.kind).toBe("refused");
+    if (decision.kind !== "refused") throw new Error("expected a refusal");
+    expect(decision.refusal.condition).toBe("destination-unreadable");
+    expect(decision.refusal.detail).toContain("the message read did not complete");
+  });
+
+  it("refuses a destination that is not NDEF formatted, naming formatting rather than a read failure", () => {
+    const decision = copyDecision({
+      step: "destination",
+      source: source(),
+      destination: destination({
+        message: null,
+        holds: "not-formatted",
+        problem:
+          "The tag is not NDEF formatted, so there is no message to read: page 3 does not hold a Type 2 Capability Container.",
+      }),
+      acknowledgedUnknownFit: false,
+    });
+
+    expect(decision.kind).toBe("refused");
+    if (decision.kind !== "refused") throw new Error("expected a refusal");
+    // Formatting is its own answer: neither a message to replace nor a failed read.
+    expect(decision.refusal.condition).toBe("destination-not-formatted");
+    expect(decision.refusal.message).toContain("not NDEF formatted");
+    expect(decision.refusal.message).not.toContain("could not be read");
+    expect(decision.refusal.detail.toLowerCase()).toContain("format");
+  });
+
+  it("refuses an empty destination that is too small for the size, not for the emptiness", () => {
+    const held = source();
+    const decision = copyDecision({
+      step: "destination",
+      source: held,
+      destination: destination({ message: null, holds: "empty-message", capacityBytes: 8 }),
+      acknowledgedUnknownFit: false,
+    });
+
+    expect(decision.kind).toBe("refused");
+    if (decision.kind !== "refused") throw new Error("expected a refusal");
+    expect(decision.refusal.condition).toBe("message-too-large");
+    expect(decision.refusal.message).toContain(`${tlvBytes(held)} bytes`);
+    expect(decision.refusal.message).toContain("8 bytes");
+  });
+
+  it("asks for the acknowledgement on an empty destination whose capacity is unknown, and proceeds once it has it", () => {
+    const held = source();
+    const ask = copyDecision({
+      step: "destination",
+      source: held,
+      destination: destination({ message: null, holds: "no-ndef-tlv", capacityBytes: null }),
+      acknowledgedUnknownFit: false,
+    });
+    const acknowledged = copyDecision({
+      step: "destination",
+      source: held,
+      destination: destination({ message: null, holds: "no-ndef-tlv", capacityBytes: null }),
+      acknowledgedUnknownFit: true,
+    });
+
+    expect(ask.kind).toBe("refused");
+    if (ask.kind !== "refused") throw new Error("expected a refusal");
+    expect(ask.refusal.condition).toBe("fit-unknown-unacknowledged");
+    expect(acknowledged).toEqual({
+      kind: "proceed",
+      fit: { kind: "unknown", requiredBytes: tlvBytes(held) },
+    });
   });
 
   it("refuses a destination that already holds the whole message, because there is nothing to copy", () => {
@@ -570,6 +695,7 @@ describe("reading the flow's own values", () => {
 
     expect(destination.latched).toBe(true);
     expect(destination.uid).toBe(DESTINATION_UID);
+    expect(destination.holds).toBe("records");
     expect(destination.message?.records).toEqual(OTHER_RECORDS);
     expect(destination.capacityBytes).toBe(496);
   });
@@ -577,13 +703,94 @@ describe("reading the flow's own values", () => {
   it("takes no destination from a read that latched nothing", () => {
     const destination = copyDestination(assembleHfRead(null, { state: "not-attempted" }));
 
+    // `holds` is the read's own state for an empty field, so the whole value is
+    // still asserted: nothing latched, no message, no reason, no capacity.
     expect(destination).toEqual({
       uid: null,
       latched: false,
+      holds: "nothing-latched",
       message: null,
       problem: null,
       capacityBytes: null,
     });
+  });
+
+  it("takes 'holds nothing' from the read model rather than calling an empty Tag unreadable", () => {
+    const read = assembleHfRead(decodeHfPayload(cardPayload(DESTINATION_UID).payload), {
+      state: "read",
+      read: noMessageReadFor(DESTINATION_UID, "empty"),
+    });
+    const destination = copyDestination(read);
+
+    // The read said the Tag is NDEF formatted with an empty message. That is a
+    // complete read, and it is carried across rather than re-derived here.
+    expect(destination.holds).toBe("empty-message");
+    expect(destination.message).toBeNull();
+    // So the guard may offer the copy: zero Records to be replaced.
+    expect(
+      copyDecision({
+        step: "destination",
+        source: source(),
+        destination,
+        acknowledgedUnknownFit: false,
+      }),
+    ).toEqual({
+      kind: "proceed",
+      fit: { kind: "known", requiredBytes: tlvBytes(source()), capacityBytes: 496 },
+    });
+  });
+
+  it("takes a Tag with no NDEF TLV as holds-nothing too, not as a failed read", () => {
+    const read = assembleHfRead(decodeHfPayload(cardPayload(DESTINATION_UID).payload), {
+      state: "read",
+      read: noMessageReadFor(DESTINATION_UID, "missing"),
+    });
+
+    expect(copyDestination(read).holds).toBe("no-ndef-tlv");
+    expect(
+      copyDecision({
+        step: "destination",
+        source: source(),
+        destination: copyDestination(read),
+        acknowledgedUnknownFit: false,
+      }).kind,
+    ).toBe("proceed");
+  });
+
+  it("keeps a Tag that is not NDEF formatted a distinct refusal, and a failed read a refusal", () => {
+    const unformatted = copyDestination(
+      assembleHfRead(decodeHfPayload(cardPayload(DESTINATION_UID).payload), {
+        state: "read",
+        read: noMessageReadFor(DESTINATION_UID, "notFormatted"),
+      }),
+    );
+    const unreadable = copyDestination(
+      assembleHfRead(decodeHfPayload(cardPayload(DESTINATION_UID).payload), {
+        state: "read",
+        read: noMessageReadFor(DESTINATION_UID, "unreadable"),
+      }),
+    );
+
+    expect(unformatted.holds).toBe("not-formatted");
+    expect(unreadable.holds).toBe("unreadable");
+
+    const unformattedDecision = copyDecision({
+      step: "destination",
+      source: source(),
+      destination: unformatted,
+      acknowledgedUnknownFit: false,
+    });
+    const unreadableDecision = copyDecision({
+      step: "destination",
+      source: source(),
+      destination: unreadable,
+      acknowledgedUnknownFit: false,
+    });
+
+    if (unformattedDecision.kind !== "refused") throw new Error("expected a refusal");
+    if (unreadableDecision.kind !== "refused") throw new Error("expected a refusal");
+    expect(unformattedDecision.refusal.condition).toBe("destination-not-formatted");
+    expect(unreadableDecision.refusal.condition).toBe("destination-unreadable");
   });
 
   it("takes the read-back message from the write's own result", () => {
@@ -680,6 +887,35 @@ function recordsReadFor(uid: string, records: readonly DraftRecord[]) {
       userPages: 124,
       capabilityContainerHex: "E1 10 3E 00",
       reason: null,
+    },
+  };
+}
+
+/** What `ntag_records_read` answers for a Tag with nothing to read, by outcome. */
+function noMessageReadFor(
+  uid: string,
+  outcome: "empty" | "missing" | "notFormatted" | "unreadable",
+): TagRecordsRead {
+  const reason =
+    outcome === "empty"
+      ? "the tag is NDEF formatted and its NDEF TLV is empty (03 00), so it holds no message"
+      : outcome === "missing"
+        ? "the tag is NDEF formatted but its user memory holds no 0x03 NDEF TLV, so it holds no message"
+        : outcome === "notFormatted"
+          ? "the tag is not NDEF formatted: page 3 is not a Type 2 Capability Container"
+          : "the NDEF TLV does not parse";
+  return {
+    dump: dump(uid),
+    ndef: {
+      outcome,
+      messageHex: "",
+      messageBytes: 0,
+      userMemoryHex: "03 00 FE",
+      userMemoryBytes: 496,
+      capacityBytes: outcome === "notFormatted" ? null : 496,
+      userPages: 124,
+      capabilityContainerHex: outcome === "notFormatted" ? "00 00 00 00" : "E1 10 3E 00",
+      reason,
     },
   };
 }

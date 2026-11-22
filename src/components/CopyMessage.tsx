@@ -271,8 +271,6 @@ export function CopyMessage({ connected, onPoll }: CopyMessageProps) {
 
   const destinationRecords =
     destination !== null && destination.message !== null ? destination.message.records : [];
-  const destinationBytes =
-    destination !== null && destination.message !== null ? messageBytes(destination.message) : 0;
   const unknownFit = fit?.kind === "unknown";
 
   return (
@@ -380,9 +378,9 @@ export function CopyMessage({ connected, onPoll }: CopyMessageProps) {
             title={`Replace what tag ${destination.uid ?? "unknown"} holds?`}
           >
             <p className="max-w-prose text-sm leading-relaxed text-text">
-              Copying writes {recordsLabel(held?.records ?? [])} onto this tag, replacing what it
-              holds now: {recordsLabel(destinationRecords)}, {destinationBytes}{" "}
-              {destinationBytes === 1 ? "byte" : "bytes"}.
+              Copying writes {recordsLabel(held?.records ?? [])} onto this tag, {
+                replacementClause(destination)
+              }.
             </p>
             {destinationRecords.length > 0 && (
               <ol className="flex flex-col gap-1">
@@ -485,6 +483,26 @@ function fitSentence(fit: CopyFit): string {
     return `The message needs ${fit.requiredBytes} of this tag's ${fit.capacityBytes} bytes. A write replaces the whole message; nothing is appended.`;
   }
   return `This tag's capacity could not be determined, so whether the message's ${fit.requiredBytes} bytes fit is unknown.`;
+}
+
+/**
+ * What the copy replaces, said as what the destination actually holds.
+ *
+ * A destination that read fine and holds nothing is the ordinary case for a
+ * Copy, so the confirmation says there is nothing to replace. It never says "0
+ * Records, 0 bytes", which reads like a message of zero size, and it never
+ * echoes a read's complaint: the guard has already refused every destination
+ * whose content could not be read.
+ */
+function replacementClause(destination: CopyDestination): string {
+  const records = destination.message?.records ?? [];
+  if (records.length === 0) {
+    return "replacing nothing, because the tag holds no message";
+  }
+  const bytes = destination.message === null ? 0 : messageBytes(destination.message);
+  return `replacing what it holds now: ${recordsLabel(records)}, ${bytes} ${
+    bytes === 1 ? "byte" : "bytes"
+  }`;
 }
 
 /** The message read that follows a poll: the one `0x0081` transaction, once. */

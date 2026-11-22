@@ -171,6 +171,43 @@ describe("Copy's flow", () => {
     expect(signals[signals.length - 1]).toBe("done");
   });
 
+  it("offers a destination that read fine and holds nothing, saying there is nothing to replace", async () => {
+    // An NDEF formatted tag holding an empty message is the ordinary destination
+    // for a Copy. It must reach the confirmation, and the confirmation must say
+    // what is actually there rather than quoting a read complaint.
+    const mounted = mount();
+    mounted.destinationHolds(
+      recordsRead(
+        { outcome: "empty", messageHex: "", messageBytes: 0 },
+        DESTINATION_UID,
+        DESTINATION_MESSAGE,
+      ),
+    );
+
+    await mounted.ui.user.click(screen.getByRole("button", { name: "Read source tag" }));
+    await screen.findByText("Source message held");
+
+    mounted.field(null);
+    await mounted.ui.user.click(screen.getByRole("button", { name: "Check the field" }));
+    await screen.findByText(/Nothing is latched/);
+
+    mounted.field(DESTINATION_CARD);
+    await mounted.ui.user.click(screen.getByRole("button", { name: "Read destination tag" }));
+
+    await screen.findByText(/Replace what tag/);
+    expect(screen.getByText(/replacing nothing/)).toBeTruthy();
+    expect(screen.queryByText(/could not be read/)).toBeNull();
+    // Nothing is written before the confirmation, as for any other destination.
+    expect(mounted.backend.callsTo("hf_ndef_write")).toHaveLength(0);
+
+    await mounted.ui.user.click(screen.getByRole("button", { name: "Copy to this tag" }));
+    await waitFor(() => {
+      expect(mounted.backend.callsTo("hf_ndef_write")).toHaveLength(1);
+    });
+    await screen.findByText("Copied");
+    expect(mounted.signals[mounted.signals.length - 1]).toBe("done");
+  });
+
   it("refuses to go on while the source is still in the write position", async () => {
     const mounted = mount();
     await mounted.ui.user.click(screen.getByRole("button", { name: "Read source tag" }));
