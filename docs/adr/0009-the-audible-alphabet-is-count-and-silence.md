@@ -35,7 +35,7 @@ Four symbols, distinguished by count and by absence.
 |---|---|
 | one chirp | **Done** — completed and confirmed good |
 | two chirps | **Needs you** — completed, but the result needs checking |
-| three chirps | **Attention** — failed, refused, or nothing was changed |
+| three chirps | **Attention** — failed, refused, or nothing completed |
 | silence | **Nothing happened** — no tag latched, nothing to act on; not an error |
 
 The gap between chirps is a tuned constant: **400 ms**, measured by ear on the

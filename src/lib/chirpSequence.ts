@@ -15,7 +15,8 @@
  * |---|---|---|
  * | `done` | 1 | Completed and confirmed good. |
  * | `needs-you` | 2 | Completed, but the result needs checking. |
- * | `attention` | 3 | Failed, refused, or nothing changed; the LED is held on. |
+ * | `attention` | 3 | Failed, refused, or nothing completed — do not rely on the
+ * | | | result; the LED is held on. |
  * | `silent` | 0 | Nothing happened: no tag, nothing to act on. Not an error. |
  *
  * There is no fourth count. Three is the loudest, because a fourth is not

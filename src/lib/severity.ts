@@ -109,8 +109,8 @@ export type OutcomeKind =
    * No Reader attached **at rest**.
    *
    * A **state**, not the result of an operation: an unplugged Reader is the normal
-   * condition of an app whose hardware is optional (`hooks/useReader` says so, and
-   * `deviceFailureNotice("absent").tone` has always been the quiet one). So it is
+   * condition of an app whose hardware is optional (`hooks/useReader` says so: an
+   * unplugged Reader is a normal state, not a fault). So it is
    * said on screen — with the plug-in remedy, the reconnect control and the
    * dismiss — and it is **silent**. The spec's silent symbol is "nothing happened:
    * no tag latched, nothing to act on — not an error", which is exactly this: the
@@ -142,9 +142,9 @@ export type OutcomeKind =
    * The Reader stopped answering until it is physically replugged.
    *
    * Also a state, but not a quiet one: the hardware is present and broken, only a
-   * replug clears it, and every operation attempted meanwhile fails. That is
-   * "failed, nothing changed", so it is attention — one symbol per distinct
-   * failure, not a burst: `App.tsx` reports a given message once.
+   * replug clears it, and every operation attempted meanwhile fails. That is the
+   * Attention symbol — nothing completed — one symbol per distinct failure, not a
+   * burst: `App.tsx` reports a given message once.
    */
   | "reader-wedged"
   /** The Reader failed in a way none of the above name. */

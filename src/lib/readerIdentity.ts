@@ -17,8 +17,10 @@
  *     hardware is optional, so it is said on screen and it is silent.
  *   - `gone` is an **event**: an operation was running against a Reader the app
  *     was talking to, and the Reader stopped being there, so that operation did
- *     not complete. Nothing may be claimed about the Tag it was working on. That
- *     is "failed, nothing changed" (ADR 0009), so it sounds three chirps.
+ *     not complete. Nothing may be claimed about the Tag it was working on — not
+ *     even that the Tag is unchanged, because a write may have been partly sent.
+ *     That is the Attention symbol, whose meaning is "nothing completed": see the
+ *     note on the wording in ADR 0009.
  *
  * The classification of a message alone cannot tell them apart — the text is the
  * same — so the distinction is made by the caller that knows whether an operation

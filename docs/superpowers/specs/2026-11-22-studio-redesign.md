@@ -74,8 +74,9 @@ autosave, the poll loop — reports nothing.
 
 **An audible alphabet that distinguishes failure from success.** One chirp means
 *done*. Two mean *needs you* — the operation completed but the result wants
-checking. Three mean *attention* — it failed or was refused, and nothing changed;
-the LED is held on for two seconds so the message survives a noisy room. Silence
+checking. Three mean *attention* — it failed or was refused, and nothing
+completed, so the result is not to be relied on; the LED is held on for two
+seconds so the message survives a noisy room. Silence
 means *nothing happened*. Silent versus distinct-from-success is the whole point:
 today a failure and a success sound the same. A three-way quiet level replaces the
 on/off switch, so *errors and warnings only* is a real daily setting and *off* is
@@ -375,8 +376,10 @@ One typed value describes what an operation did, and it is the only input both c
 |---|---|---|
 | 1 chirp | **Done** | operation completed and confirmed good |
 | 2 chirps | **Needs you** | completed, result needs checking: unverified write, raw-only decode, a mode waiting for the next step |
-| 3 chirps | **Attention** | failed, refused, or the tag will not accept the write; nothing changed |
+| 3 chirps | **Attention** | failed, refused, or the tag will not accept the write; nothing completed, so do not rely on the outcome |
 | silence | **Nothing happened** | no tag latched, nothing to act on — not an error |
+
+**On the word "completed" rather than "changed".** The first draft of this table said *nothing changed*, which is true of a refusal and of a chip that will not accept a write — nothing was sent, or the write was refused before transmission. It is **not** true when the Reader goes away mid-operation: a write may have been partly sent, and the app cannot say what the tag now holds. The symbol is the same because the instruction to the user is the same — nothing completed, go and check — but the claim it licenses is weaker, and the interface says so in words: the `gone` case tells the user to check the tag before relying on what was on it. One symbol, one instruction, two different certainties behind it.
 
 Gaps between chirps are a tuned constant, 400 ms, measured by ear on hardware — the 120 ms first written here ran two chirps together, so *needs you* was indistinguishable from *done*; the actual chirp duration is firmware-controlled and unknown to the host. On an Attention signal the LED is turned on for two seconds and then off. Signals are queued and played in order; the queue holds eight, drops the oldest rather than blocking, and coalesces identical adjacent outcomes.
 
