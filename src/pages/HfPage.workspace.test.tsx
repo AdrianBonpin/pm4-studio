@@ -175,7 +175,7 @@ describe("the 13.56 MHz workspace's shape", () => {
     // Read is the mode that is showing, and it is the only one.
     expect(screen.getByText("Read a tag")).toBeTruthy();
     expect(screen.queryByText("Memory dump")).toBeNull();
-    expect(screen.queryByRole("combobox", { name: "Draft to write" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Draft to write" })).toBeNull();
     expect(screen.queryByText("Copy a message to another tag")).toBeNull();
     expect(screen.queryByText("Erase a tag's content")).toBeNull();
   });
@@ -192,16 +192,16 @@ describe("the 13.56 MHz workspace's shape", () => {
     expect(screen.queryByText("Erase a tag's content")).toBeNull();
 
     await ui.user.click(modeButton("write"));
-    expect(screen.getByRole("combobox", { name: "Draft to write" })).toBeTruthy();
+    expect(screen.getByRole("group", { name: "Draft to write" })).toBeTruthy();
     expect(screen.queryByText("Memory dump")).toBeNull();
 
     await ui.user.click(modeButton("copy"));
     expect(screen.getByText("Copy a message to another tag")).toBeTruthy();
-    expect(screen.queryByRole("combobox", { name: "Draft to write" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Draft to write" })).toBeNull();
 
     await ui.user.click(modeButton("read"));
     expect(screen.getByText("Read a tag")).toBeTruthy();
-    expect(screen.queryByRole("combobox", { name: "Draft to write" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Draft to write" })).toBeNull();
   });
 
   it("takes the fifth mode in the same row, without relayout", () => {
@@ -314,9 +314,10 @@ describe("Write in its mode", () => {
     });
 
     await ui.user.click(modeButton("write"));
-    await ui.user.selectOptions(
-      screen.getByRole("combobox", { name: "Draft to write" }),
-      DRAFT.id,
+    await ui.user.click(
+      within(screen.getByRole("group", { name: "Draft to write" })).getByRole("button", {
+        name: /Loading bay sign/,
+      }),
     );
 
     await ui.user.click(screen.getByRole("button", { name: "Check tag" }));
@@ -348,9 +349,10 @@ describe("Write in its mode", () => {
     });
 
     await ui.user.click(modeButton("write"));
-    await ui.user.selectOptions(
-      screen.getByRole("combobox", { name: "Draft to write" }),
-      DRAFT.id,
+    await ui.user.click(
+      within(screen.getByRole("group", { name: "Draft to write" })).getByRole("button", {
+        name: /Loading bay sign/,
+      }),
     );
     await ui.user.click(screen.getByRole("button", { name: "Check tag" }));
 
@@ -367,6 +369,6 @@ describe("Write in its mode", () => {
 
     expect(screen.getByText("No Drafts to write")).toBeTruthy();
     expect(screen.getByText(/Library/)).toBeTruthy();
-    expect(screen.queryByRole("combobox", { name: "Draft to write" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Draft to write" })).toBeNull();
   });
 });
