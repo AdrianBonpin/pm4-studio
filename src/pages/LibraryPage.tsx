@@ -220,7 +220,7 @@ export function LibraryPage({ connected, library }: LibraryPageProps) {
         )}
 
         {all.length > 0 && snapshots.length === 0 && (
-          <p className="text-sm text-text-muted">
+          <p className="max-w-prose text-sm text-text-muted">
             No Snapshot matches “{query.trim()}”. Names, Identities and UIDs are all searched.
           </p>
         )}
@@ -512,7 +512,7 @@ function SnapshotDetail({
                     onCountChanged={() => void reload()}
                   />
                 ) : (
-                  <p className="text-xs leading-relaxed text-text-muted">
+                  <p className="max-w-prose text-xs leading-relaxed text-text-muted">
                     {snapshotRecords(snapshot) === null
                       ? "This Snapshot records no list of Records, so there is no message to write back. It is not an empty message: nothing was read."
                       : "This Snapshot's Tag carried no Records, so there is no message to write back."}
