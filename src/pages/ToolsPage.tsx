@@ -144,15 +144,20 @@ export function ToolsPage({ connected }: ToolsPageProps) {
           </Button>
         </div>
 
+        {/* Presets are actions, not choices: each one types its frame into the
+            box above and sends nothing. They are ghost buttons because that is
+            what they are — an operation with no primary weight to it — and
+            because the row no longer resembles the switch that chooses a mode. */}
         <div className="mt-3 flex flex-wrap gap-2">
           {PRESETS.map(([label, hex]) => (
-            <button
+            <Button
               key={label}
+              variant="ghost"
+              className="whitespace-nowrap font-mono text-[11px]"
               onClick={() => setRawHex(hex)}
-              className="cursor-pointer whitespace-nowrap rounded-full border border-border px-2.5 py-1 font-mono text-[11px] text-text-muted transition-colors hover:border-border-hover hover:text-text"
             >
               {label}
-            </button>
+            </Button>
           ))}
         </div>
 
