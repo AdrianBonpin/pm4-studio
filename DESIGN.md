@@ -216,13 +216,21 @@ drops below 12px, and no text is set below 10px at any size.
 
 - The window minimum is **900×700**, and that is the layout's real constraint: every
   page's primary action is reachable without scrolling at 900×700.
-- No page is capped at one narrow column. Prose keeps a readable measure; a
-  collection's list-and-detail, a table, or a two-pane workspace uses the full
-  content width.
-- A band page shows one operation at a time through a segmented control. The
-  sidebar is navigation and connection state; it is not a place for preferences.
+- No page is capped at one narrow column: the shell applies one **24px horizontal
+  inset** (`PAGE_INSET`) to the pane a page scrolls in, so a page's header and its
+  section bodies share that inset by construction rather than by agreement. A
+  collection's list-and-detail, a table or a two-pane workspace uses the full
+  content width; a form group or a prose block keeps a readable measure, because
+  using the width is never permission to stretch a measurement.
+- A band page shows one operation at a time through the switcher. The sidebar is
+  navigation and connection state; it is not a place for preferences.
 - Rhythm comes from the spacing scale (8 / 16 / 24 / 32) and hairline dividers.
-  Sections are separated by a `border-t` hairline, not by cards.
+  Sections are separated by a `border-t` hairline, not by cards, and the rule is the
+  page's rather than the section's: a section's rule spans the content area while its
+  words stay at the inset (`PAGE_RULE` cancels the inset and re-applies it to the
+  section's own content), so a page reads as one panel instead of a column of rules
+  floating in the window. A rule *inside* a section body is drawn by the body and
+  stays at that body's inset, so it divides what is under the heading.
 - The shell never rubber-bands (`overscroll-behavior: none`) and the window does
   not scroll as a whole where a pane can scroll instead.
 
