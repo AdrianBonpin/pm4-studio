@@ -121,9 +121,9 @@ export const CLEAR_FACTS: readonly TagFact[] = [
       "It is given a placeholder Identity that no building system issues, so it will not open anything on its own.",
   },
   {
-    title: "The tag stays a tag, and stays writable here",
+    title: "The tag stays a tag, and stays readable",
     detail:
-      "Clearing leaves a live tag that still reads, so it can be written again from this app: clone an Identity onto it, or author one. Whether that next write is accepted is the tag's answer, as it is for any write.",
+      "Clearing leaves a live tag that still reads, so you can try to write it again from this app: clone an Identity onto it, or author one. Whether that next write is accepted is the tag's answer, as it is for any write — and every tag tested with this Reader accepted one write and then refused the next.",
   },
   {
     title: "This Reader cannot tell whether a tag will accept a write",

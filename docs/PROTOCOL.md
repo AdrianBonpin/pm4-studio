@@ -1034,6 +1034,34 @@ would have shown `0S07` as part of a bank card.
    Until that runs, **no claim that Clear is safer than Destroy is evidence-based** —
    the payload shape argument does not survive a single-write tag.
 
+   **Answered 2026-11-22 — the flags are innocent, and the tags are single-write.**
+   A factory T5577 (reading `00 00 00 15 C9`) was written with the `01 01` pair
+   **cleared**, and the write took: it read back `00 00 00 15 CA`. A second write,
+   same cleared payload, was refused; a third attempt three seconds later was
+   refused too, and the tag still reads `00 00 00 15 CA`. So a payload without the
+   flags locks a tag exactly as the app's payload does, and **the leading pair is
+   not the lock bit's carrier on this hardware.**
+
+   Five tags have now been observed, and every one accepted at most **one** write
+   from this Reader and then refused forever while continuing to answer reads: three
+   cleared with an all-zero identity, one carrying `55 00 84 82 12`, and this one.
+
+   **What is still unknown** is *why*, and the two candidates cannot be separated
+   with one Reader: either these blanks are one-time-programmable (cheap
+   T5577-compatible parts with the OTP bit already set), or the Reader's firmware
+   sets the block lock bits itself on every `0x0073` and our 24 bytes are only the
+   data. A genuine T5577 is rated for 100,000 erase/write cycles, so if these are
+   genuine the cause is the firmware and no payload this app sends can avoid it. A
+   second, known-good writer would settle it.
+
+   **Consequence the app must not misstate:** a Clear cannot leave a tag that this
+   Reader will write again. Clear's confirmation said it could; that promise is
+   withdrawn — see `docs/tickets/studio-redesign-followups/clearing-a-tag-must-leave-it-usable.md`
+   for the wording decision still open. Clear and Destroy therefore differ only in
+   what the tag is left carrying, not in whether it survives: Clear leaves a
+   placeholder Identity that still reads and that no system issues, Destroy leaves
+   nothing.
+
 Solved: **125 kHz write/clone** — command `0x0073`, see above.
 Solved: **multi-report reassembly** — verified in both directions, with real
 boundaries, see "Multi-report frames".

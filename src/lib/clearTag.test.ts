@@ -78,14 +78,18 @@ describe("Clear's confirmation", () => {
     expect(copy).toMatch(/will not open anything/i);
   });
 
-  it("says the tag stays a tag and can be written again from this app", () => {
-    // The user's requirement in their own terms: a cleared tag must be able to be
-    // rewritten. The confirmation promises the *app's* half — a legal write
-    // position and a flow that accepts it — and leaves the chip's answer to the
-    // chip, because that is the only honest split.
-    expect(copy).toMatch(/stays writable here|written again from this app/i);
+  it("promises the tag stays readable, and no more than that", () => {
+    // Measured on hardware after this was first written: every tag tested with
+    // this Reader accepted exactly one write and then refused the next, including
+    // one written with the payload's flags cleared. So the app may promise the
+    // *app's* half — a legal write position and a flow that accepts it — and must
+    // not promise the chip's. It used to say "stays writable here"; that came off
+    // when the measurement refuted it.
+    expect(copy).toMatch(/stays readable/i);
     expect(copy).toMatch(/clone an Identity onto it, or author one/i);
     expect(copy).toMatch(/the tag's answer/i);
+    expect(copy).toMatch(/one write and then refused/i);
+    expect(copy).not.toMatch(/stays writable here|can be written again/i);
   });
 
   // ADR 0007: a writability test is a write, and the confirmation says so before
