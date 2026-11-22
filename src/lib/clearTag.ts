@@ -375,14 +375,26 @@ export function reReadNotice(
       text: `Still on the tag: ${read.id}, the placeholder this app wrote.`,
     };
   }
+  if (operation === "clear") {
+    // A clear aims at a value, so anything else on the tag — including nothing at
+    // all, above — is a write that may not have landed. The wording never borrows
+    // Destroy's: "it kept what it had, so it will not accept writes" is a verdict
+    // about a chip, and a re-read alone cannot reach it.
+    return {
+      tone: "warn",
+      text:
+        `This tag reads as ${read.id}. ` +
+        (expected === null
+          ? "The clearing write was not confirmed, so there is no placeholder to compare it " +
+            "with: read it again to see what it holds."
+          : `That is not the placeholder this app wrote (${expected}), so the clearing write may ` +
+            "not have landed."),
+    };
+  }
   return {
     tone: "warn",
     text:
-      `This tag reads as ${read.id}.` +
-      (operation === "clear" && expected !== null
-        ? ` That is not the placeholder this app wrote (${expected}), so the clearing write may ` +
-          "not have landed."
-        : " If this is the tag the write was sent to, it kept what it had, which means it will " +
-          "not accept writes."),
+      `This tag reads as ${read.id}. If this is the tag the write was sent to, it kept what it ` +
+      "had, which means it will not accept writes.",
   };
 }
