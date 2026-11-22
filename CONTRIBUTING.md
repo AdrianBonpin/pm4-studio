@@ -78,7 +78,7 @@ A scope is **optional**. It names the part of the app a commit moves, and it is
 drawn from this app's own vocabulary:
 
 `lf` · `hf` · `library` · `drafts` · `settings` · `tools` · `reader` ·
-`protocol` · `ui` · `design` · `docs`
+`protocol` · `ui` · `design` · `docs` · `e2e`
 
 ```
 feat(lf): read the EM4100 facility code from the trailing bytes
@@ -90,9 +90,10 @@ chore: bump the Tauri toolchain
 `lf` and `hf` are the two band modes. `reader` is the USB HID transport and the
 device layer. `protocol` is the frame format and the command set. `library`,
 `drafts`, `settings` and `tools` are destinations. `ui` is the shared interface
-components, `design` is the gridline tokens and `DESIGN.md`, and `docs` is the
-documentation, ADRs and tickets. If no scope fits, leave it out — an empty scope
-is better than an invented one.
+components, `design` is the gridline tokens and `DESIGN.md`, `docs` is the
+documentation, ADRs and tickets, and `e2e` is the verification corpus — the
+reports and screenshots under `docs/superpowers/e2e/`. If no scope fits, leave it
+out — an empty scope is better than an invented one.
 
 ### The subject
 
