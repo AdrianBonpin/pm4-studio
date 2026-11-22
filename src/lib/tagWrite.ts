@@ -17,6 +17,7 @@ import type { DraftRecord } from "./drafts";
 import { recordKindLabel, recordSummary } from "./drafts";
 import { encodeRecords, decodeRecords } from "./ndef";
 import type { NdefTagSnapshot, WriteOutcome } from "../types";
+import { ndefWriteKind, severityOf, toneForSeverity } from "./severity";
 import type { WriteNotice } from "./writeOutcome";
 
 /** One Tag as the backend read it. One definition, in `types.ts`, so the write
@@ -53,6 +54,22 @@ export interface NdefWriteResult {
   wrotePages: number[];
   /** Pages the firmware reported writing. */
   acceptedPages: number[];
+  /**
+   * Confirmed copies of the Snapshot these Records came from, after the write.
+   * `null` when the write named no Snapshot — a Draft is attached to no Tag, so
+   * it has no count — or when the library holds no Snapshot under that id.
+   */
+  confirmedCopies?: number | null;
+  /**
+   * True only when the confirmed-copy count actually rose, which is exactly one
+   * verified write of a Snapshot's Records. False for a Draft and for every
+   * outcome that is not a confirmed copy, so a caller reloads the library only
+   * when there is something new to read.
+   */
+  countChanged?: boolean;
+  /** Set when the copy count could not be written to the library file. The Tag
+   *  was written either way, so this never fails the write. */
+  countProblem?: string | null;
 }
 
 /** A Draft's Records as the one NDEF message they encode to, in hex. */
@@ -157,17 +174,20 @@ export function pagesLabel(pages: readonly number[]): string {
  * right message and discarding it would be the wrong move.
  */
 export function writeNotice(result: NdefWriteResult): WriteNotice {
+  // The severity is the seam's, so the notice beside the result cannot be
+  // drawn in a calmer tone than the sound the same result made (ADR 0008).
+  const tone = toneForSeverity(severityOf(ndefWriteKind(result.outcome)));
   const wrote =
     result.wrotePages.length === 0 ? "" : ` One request wrote ${pagesLabel(result.wrotePages)}.`;
   switch (result.outcome) {
     case "verified":
       return {
-        tone: "ok",
+        tone,
         text: `Verified — the tag reads back this message.${wrote}`,
       };
     case "unverified":
       return {
-        tone: "warn",
+        tone,
         text:
           "Unknown: the write was sent but the tag did not read back as this message, so its " +
           "contents cannot be confirmed. Read the tag on 13.56 MHz to see what it holds before " +
@@ -176,31 +196,33 @@ export function writeNotice(result: NdefWriteResult): WriteNotice {
       };
     case "refused":
       return {
-        tone: "err",
+        tone,
         text: `Not written: ${result.message ?? "the write was not attempted"}.`,
       };
     case "failed":
       return {
-        tone: "err",
+        tone,
         text: `Not written: the write could not be sent${
           result.message ? ` (${result.message})` : ""
         }. The tag was not changed.`,
       };
-    case "blanked":
-      // An NDEF write replaces a message and can never blank a Tag. Reaching
-      // here is a bug worth naming rather than a result worth wording.
+    case "cleared":
+    case "destroyed":
+      // An NDEF write replaces a message and can never clear or destroy a 125 kHz
+      // Identity. Reaching here is a bug worth naming rather than a result worth
+      // wording.
       return {
-        tone: "warn",
+        tone,
         text:
-          "Unexpected outcome: this write reported a blanked tag, which writing an NDEF " +
-          "message cannot do. Re-read the tag before trusting what it holds.",
+          "Unexpected outcome: this write reported a cleared or destroyed tag, which writing " +
+          "an NDEF message cannot do. Re-read the tag before trusting what it holds.",
       };
     case "erased":
       // Erasing is its own operation with its own word and its own notice; see
       // `lib/eraseTag.ts`. A Draft write never clears content, so reaching here
       // is a bug worth naming rather than a result worth wording.
       return {
-        tone: "warn",
+        tone,
         text:
           "Unexpected outcome: this write reported an erased tag, which writing an NDEF " +
           "message cannot do. Re-read the tag before trusting what it holds.",

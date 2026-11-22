@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
+import { Notice } from "./ui/Notice";
 import { Toggle } from "./ui/Toggle";
 import { Field, Readout, Section } from "./Section";
 import {
@@ -37,29 +38,23 @@ import {
   type AuthorMode,
 } from "../lib/authorIdentity";
 import { classifyDeviceFailure, describeDeviceFailure } from "../lib/readerIdentity";
+import { outcomes, report } from "../lib/outcome";
 import {
   replacementConfirmation,
   type WritePosition,
 } from "../lib/replacement";
-import { NOTICE_TONE_CLASS, type WriteNotice } from "../lib/writeOutcome";
+import { NOTICE_TONE_CLASS, type NoticeTone } from "../lib/noticeTone";
+import type { WriteNotice } from "../lib/writeOutcome";
 import type { LibraryState } from "../hooks/useLibrary";
 import type { IdentityPreview, LfCard, WriteResult } from "../types";
 
 type Phase = "entry" | "confirm" | "reading" | "replacing" | "writing" | "done";
 
 /** What a Snapshot save did. A repeat is neither a fault nor a success. */
-type LibraryNote = { tone: "ok" | "muted" | "warn" | "err"; text: string };
-
-const LIBRARY_NOTE_TONE: Record<LibraryNote["tone"], string> = {
-  ok: "text-ok",
-  muted: "text-text-muted",
-  warn: "text-warn",
-  err: "text-err",
-};
+type LibraryNote = { tone: NoticeTone; text: string };
 
 interface AuthorIdentityProps {
   connected: boolean;
-  onChirp: () => void;
   /** Snapshots live in a file, so keeping one is a call into the Rust store. */
   library: LibraryState;
   /** Surfaces a dead or wedged Reader in the shell's notice strip. */
@@ -93,7 +88,7 @@ interface AuthorIdentityProps {
  * carrying this Identity is refused, and neither refusal is a prompt. There is no
  * override in this component, and there is not meant to be one.
  */
-export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: AuthorIdentityProps) {
+export function AuthorIdentity({ connected, library, onDeviceError }: AuthorIdentityProps) {
   const [phase, setPhase] = useState<Phase>("entry");
   const [mode, setMode] = useState<AuthorMode>("parts");
   const [entry, setEntry] = useState<AuthorEntry>(EMPTY_ENTRY);
@@ -230,8 +225,12 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
         });
         setResult(written);
         setNotice(authorWriteNotice(written, target.id));
+        // Whatever the write came to, in the write vocabulary's own words: a
+        // verified write, a refusal the guard reported, a sent write the read-back
+        // could not confirm, or a failure. One outcome, reported once, so the
+        // notice beside the form and the message in the corner cannot disagree.
+        report(outcomes.write("write", written));
         if (written.verified) {
-          onChirp();
           // One action: a kept Identity is saved from the read-back that proved
           // the write, so the Snapshot records what the Tag really holds.
           if (keepSnapshot) await keepInLibrary(written);
@@ -239,15 +238,14 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
       } catch (e) {
         // A wedged, absent or claimed Reader is reported with its remedy, never
         // as a write that happened.
-        const text = describeDeviceFailure(e);
-        setNotice({ tone: "err", text });
-        if (classifyDeviceFailure(String(e)) !== "unknown") onDeviceError?.(text);
+        setNotice({ tone: "err", text: describeDeviceFailure(e) });
+        report(outcomes.readerFailure(e));
       } finally {
         setBusy(false);
         setPhase("done");
       }
     },
-    [keepSnapshot, keepInLibrary, onChirp, onDeviceError],
+    [keepSnapshot, keepInLibrary, onDeviceError],
   );
 
   const confirmation = preview ? authorConfirmation(preview, keepSnapshot) : null;
@@ -345,16 +343,15 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
             </p>
           </details>
 
-          <div className="border-l-2 border-border bg-surface/40 px-3 py-2">
-            <p className="text-sm text-text">{confirmation.title}</p>
-            <ul className="mt-2 flex flex-col gap-2">
+          <Notice tone="muted" label="Nothing written yet" title={confirmation.title}>
+            <ul className="flex flex-col gap-2">
               {confirmation.facts.map((fact) => (
                 <li key={fact.title} className="text-xs leading-relaxed text-text-muted">
                   <span className="text-text">{fact.title}.</span> {fact.detail}
                 </li>
               ))}
             </ul>
-          </div>
+          </Notice>
 
           <p className="max-w-prose text-xs leading-relaxed text-text-muted">
             {confirmation.blankHint}
@@ -458,7 +455,7 @@ export function AuthorIdentity({ connected, onChirp, library, onDeviceError }: A
 
           {snapshotNote && (
             <p
-              className={`flex items-start gap-1.5 text-xs ${LIBRARY_NOTE_TONE[snapshotNote.tone]}`}
+              className={`flex items-start gap-1.5 text-xs ${NOTICE_TONE_CLASS[snapshotNote.tone]}`}
             >
               <BookmarkPlus size={12} className="mt-0.5 shrink-0" />
               <span className="select-text">{snapshotNote.text}</span>

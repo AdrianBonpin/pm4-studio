@@ -106,13 +106,7 @@ OUT  55 00 51 00 01 01 FE 01
 IN   55 00 51 00 01 01 FE 01
 ```
 
-### `0x0055` — beep
-
-```
-OUT  55 00 55 00 00 FF 00
-```
-
-### `0x0053` — beep (and LED on)
+### `0x0053` — chirp, and LED on
 
 Confirmed on hardware: chirps once and drives the LED **off → on** as a side
 effect. Fire-and-forget — the firmware sends **no reply**, so do not wait for one
@@ -123,7 +117,8 @@ OUT  55 00 53 00 00 FF 00
 ```
 
 An earlier build of this app had `0x0055` wired to the beeper, so the beep never
-fired and only the LED reacted.
+fired and only the LED reacted. `0x0055` is the LED-off frame (below), not a
+beep.
 
 ### `0x0054` — firmware version — VERIFIED
 
@@ -158,53 +153,63 @@ OUT  55 00 55 00 00 FF 00
 
 No LED-on-only command has been found; `0x0053` lights it but always beeps too.
 
-### `0x0069` — 13.56 MHz poll (ISO14443-A)
+### `0x0069` — 13.56 MHz poll (ISO14443-A) — VERIFIED, two families
 
 ```
 OUT  55 00 69 00 00 FF 00
-IN   55 00 69 00 13 ST 01 [UID(4)] …tail…
+IN   55 00 69 00 13 ST 01 [UID buffer (10)] LEN ATQA(2) SAK CASCADE ??
 ```
 
-- payload length `0x13` (19)
-- `ST` = validity flag: `0x01` card latched, `0x00` nothing (UID field is then
-  garbage and must be ignored)
-- UID at payload offset 2..6
+- payload length `0x13` (19), in one USB report, so nothing needs reassembling
+- `ST` = validity flag: `0x01` card latched, `0x00` nothing (everything after it
+  is then garbage and must be ignored)
 
-**Not verified — the tail offsets are a hypothesis.** Upstream reports `ATQA
-0x0004, SAK 0x08` (MIFARE Classic 1K) for one card, but we have not reproduced
-this on real HF hardware. Nothing below is backed by a capture from this
-Reader; it comes from third-party client source:
+Two captures from this Reader, one MIFARE Classic 1K and one NTAG215, establish
+the layout below. Their ATQA and SAK values agree with the published NXP
+assignments for those families, which is what makes this a measurement rather
+than a fit:
 
-| Payload offset | Meaning (hypothesis) |
-|---|---|
-| 0 | validity flag (`0x01` latched) — the byte right after the header |
-| 1 | constant `0x01`, carries nothing |
-| 2..6 | UID, 4 bytes |
-| 6..14 | unconfirmed |
-| 14..16 | ATQA, byte-swapped relative to how NXP quotes it |
-| 16 | unconfirmed |
-| 17 | SAK of the last cascade level |
-| 18 | unconfirmed |
+```
+MIFARE Classic 1K  UID 31 F3 0E 0A
+  01 01 31 F3 0E 0A 00 00 00 00 00 00 |04| 04 00 |08| 01 10 00
+NTAG215            UID 04 43 8A 01 22 09 03
+  01 01 04 43 8A 01 22 09 03 1D 00 20 |07| 44 00 |00| 02 00 00
+```
 
-> **Counter-evidence from a real capture.** A latched NTAG215 was captured — see
-> "`0x0069` payloads, for the record" below. Its payload carries a **7-byte UID
-> at offsets 2..9**, and the tail after that UID does not resemble ATQA/SAK. For
-> that Tag the hypothesis above yields no resolvable ATQA/SAK pair, so the
-> readout correctly falls back to raw bytes with the reason shown instead of
-> naming a family. This is one more reason the decoded values below stay
-> provisional until ticket 12.
+| Payload offset | Meaning | Status |
+|---|---|---|
+| 0 | validity flag (`0x01` latched) — the byte right after the header | verified, two families |
+| 1 | constant `0x01`, carries nothing | verified, two families |
+| 2..12 | UID buffer, ten bytes; only the first `LEN` are the UID | verified, two families |
+| 12 | UID length in bytes: `04`, `07` or `10` | verified, two families |
+| 13..15 | ATQA in **transmission order** (LSByte first): `04 00` = 0x0004, `44 00` = 0x0044 | verified, two families |
+| 15 | SAK of the last cascade level: `08` = MIFARE Classic 1K, `00` = NTAG21x | verified, two families |
+| 16 | cascade level count: `01` for a 4-byte UID, `02` for a 7-byte UID | consistent with both captures, **not established** |
+| 17..19 | **unexplained** | documented as unknown |
 
-The whole reply is 19 bytes in one USB report, so nothing needs reassembling.
-The app decodes this layout in `src/lib/hfDecoder.ts` and **labels every decoded
-value provisional** until a real capture confirms or corrects it. A reply of a
-different length, an ATQA/SAK pair no published table assigns, or a UID field
-that cannot hold the announced UID all fall back to raw bytes with the reason
-shown — no card type, no capacity, no UID split.
+**The UID length byte is what makes the layout self-describing.** The UID is the
+first `LEN` bytes of the ten-byte buffer, so 4-, 7- and 10-byte UIDs all decode
+and no width is ever inferred from ATQA bits. Bytes between the UID and `LEN` are
+**stale buffer residue**, not Tag data: the same Reader returned different values
+for them across captures of one Tag, and zeros when the buffer was clean. The
+NTAG215 capture's `1D 00 20` are such residue and must never be presented as part
+of the UID or as content.
 
-Earlier app code read the validity flag from payload byte 1 instead of byte 0,
-which is why it reported no tag for a latched reply. `hf_card_from_payload` in
-`src-tauri/src/reader.rs` now reads byte 0 and hands the raw payload to the
-frontend undecoded.
+Nothing else is decoded. Byte 16 is recorded because it agrees with both
+captures, but nothing is read out of it; bytes 17..18 have no meaning assigned,
+and none is invented for them.
+
+The app decodes this layout in `src/lib/hfDecoder.ts`. A reply of a different
+length, a UID length byte other than 4, 7 or 10, an ATQA/SAK pair no published
+table assigns, and an all-zero UID each fall back to raw bytes with their own
+reason shown — no card type, no capacity, no UID split.
+
+Earlier app code read a 4-byte UID at 2..6 with ATQA at 14..16 and SAK at 17.
+That table was one byte off, which is why a real MIFARE Classic 1K capture
+matched no published pair. Earlier app code also read the validity flag from
+payload byte 1 instead of byte 0, which is why it reported no tag for a latched
+reply. `hf_card_from_payload` in `src-tauri/src/reader.rs` reads byte 0 and hands
+the raw payload to the frontend undecoded.
 
 ### `0x0072` — 125 kHz read (EM4100)
 
@@ -283,31 +288,87 @@ source badge.
    behaviour. Treat each blank as single-use until proven otherwise, and never
    experiment on a tag you care about.
 
-#### Blanking — writing no Identity — IMPLEMENTED, HARDWARE UNVERIFIED
+#### Two payloads for two purposes — Clear and Destroy — IMPLEMENTED, ONE HARDWARE-CONFIRMED
 
-Blanking writes the neutral Identity: customer `0x00`, data32 `0x00000000`, in
-the usual 24-byte `0x0073` payload (`00 01 01` then all zeros). It is not a
-factory reset and it does not unlock a locked chip; neither is reachable over
-this protocol.
+The app writes **the same `0x0073` frame with two different data payloads**, for
+two different operations. They are not interchangeable, and which is which is the
+whole of the split:
+
+| Operation | customer | facility | card | data32 | What it leaves |
+|---|---|---|---|---|---|
+| **Clear** | `0x00` | `0xFF` | `0xFFFF` | `0x00FF_FFFF` | A live, rewritable Tag carrying a placeholder no system issues |
+| **Destroy** | `0x00` | — | — | `0x00000000` | A Tag that answers every reader and refuses all further data |
+
+Both are 24-byte payloads with the firmware's `00 01 01` enable flags, and both
+are **not** a factory reset and **not** an unlock; neither is reachable over this
+protocol. The two values are defined once each, in `Identity::CLEARED` and
+`Identity::BLANK` (`src-tauri/src/identity.rs`), with the reasoning that chose
+them.
+
+**Clear's safety argument is the payload's shape, not its value.** Clear's payload
+is *clone-shaped*: customer at `[8]` and `[12]`, data32 at `[16..20]`, exactly the
+layout every routine clone write uses — and clone writes have never locked a chip.
+The all-zero payload is the one payload no clone ever writes, and it is the one
+that locked chips. That is stronger evidence than "the value is non-zero" and still
+weaker than a hardware confirmation: no fresh T5577 has been cleared and then
+written again, because none is left (see the follow-up ticket).
+
+#### Destroy — writing no Identity — MEASURED: IT PERMANENTLY DISABLES A T5577
+
+Destroy writes the neutral Identity: customer `0x00`, data32 `0x00000000`, in the
+usual 24-byte `0x0073` payload (`00 01 01` then all zeros).
+
+**Measured 2026-11-22, three instances — this payload disables the chip.** On a
+factory T5577 the write lands: the tag stops presenting an Identity, which is why
+the app reports *destroyed*. The chip then **locks**. It still latches and
+modulates, so every reader reaches it, but it accepts no further data. Two
+`0x0073` writes were acknowledged by the device and ignored by the chip, the second
+one after lifting the tag off the Reader and re-presenting it to force a re-latch.
+Presence came back as `TagPresence::Blank` before and after both attempts. The
+same happened on two further chips.
+
+The consequence is not the one this section used to describe. A destroyed T5577 is
+not "empty"; it is a tag that reads as nothing, forever, while looking alive to
+every reader it meets. **"The tag went dead" is the wrong diagnosis** in any future
+bug report: a Tag that still answers the field is exactly what a destroyed one
+looks like, and a reply is not evidence of life.
 
 The read path cannot confirm it the way a clone is confirmed. An all-zero data
-field decodes as "no reading", so a Tag that has been blanked reads as **empty**
-— the same as no Tag at all. That is why the app reports `blanked` rather than
-`verified` (ADR 0003): the success condition of a blanking write is the absence
-of an Identity, which the codec reports as `None`.
+field decodes as "no reading", so a Tag that has been destroyed reads as **empty**
+— the same as no Tag at all to the combined decoder. That is why the app reports
+`destroyed` rather than `verified` (ADR 0003): the success condition of a destroying
+write is the absence of an Identity. The presence-aware decode
+(`TagPresence::from_read_payload`) keeps that apart from a genuinely empty field:
+the destroyed Tag **is latched**, it simply carries an empty data field.
 
-Probe: `cargo run --example blankprobe -- read` (reads only) and
-`cargo run --example blankprobe -- blank` (writes the neutral Identity to the Tag
-on the Reader, consuming it).
+**Observed on hardware, 2026-11-22.** `0x0073` with the neutral payload reports
+`destroyed`, and the Tag afterwards reads as `tag present, NO identity (data field
+empty)` — latched and modulating, with a zero data field, which is what
+`clearprobe -- read` prints. So the neutral write does land, and what follows it is
+permanent.
 
-**No blanking write has been observed on hardware yet.** What has been observed:
-the Reader opens and answers (wake, `0x0069` poll, `0x0072` read all reply), and
-the 125 kHz field was empty on every attempt — three separate
-`blankprobe -- read` runs each reported `no tag latched`, so there was nothing to
-blank. The write path is therefore proven only by unit tests over the codec, the
-guard and the read-back scan; whether `0x0073` with the neutral payload blanks a
-T5577, what it reads as afterwards, and whether it can trigger the lock bit in
-open problem 7 are all still open. Record the probe's output here when it runs.
+Probe: `cargo run --example clearprobe -- read` (reads only),
+`cargo run --example clearprobe -- clear` (writes the placeholder to the Tag on the
+Reader) and `cargo run --example clearprobe -- destroy` (writes the neutral
+Identity, permanently disabling the Tag). It uses the shipping guard and verdict,
+so what it prints is what the app does.
+
+#### Clear — writing the placeholder — IMPLEMENTED, NOT HARDWARE-CONFIRMED
+
+Clear writes customer `0x00`, facility `0xFF`, card `0xFFFF` — data32
+`0x00FF_FFFF` — and the re-read is expected to present exactly that value. Unlike
+Destroy, its success condition is **positive**: the read-back carries the
+placeholder, so the Tag is visible as an object and remains a legal write position
+for the next Clone or authored Identity.
+
+**Not yet confirmed on hardware.** The placeholder has never been written to a
+fresh T5577, because no fresh T5577 is left. What is known: the payload is
+clone-shaped, and clone-shaped writes have never locked a chip; the value is
+non-zero and reads back as an Identity rather than as an empty field. What is not
+known: whether `0x00FF_FFFF` is accepted and left rewritable by this chip family.
+Until a fresh tag is cleared and then written again, that is the one open claim —
+see `docs/tickets/studio-redesign-followups/clearing-a-tag-must-leave-it-usable.md`,
+whose hardware criterion is deliberately unticked.
 
 ### Multi-report frames — VERIFIED (spike 16, 2026-11-21)
 
@@ -831,24 +892,66 @@ IN   55 00 69 00 13 00 01 00 00 DB 96 00 08 90 1D 00 20 00 27 00 20 00 00 00 <ck
 That is the strongest available confirmation that `ST = 0x00` means "ignore the
 rest": the values drift between polls while no tag is present.
 
-**Tag latched.** `ST = 0x01` at payload offset 0, and the payload carries the
-**full 7-byte UID** at offsets 2..9, not just four bytes:
+**Tag latched.** `ST = 0x01` at payload offset 0, and the reply is
+self-describing: the ten-byte UID buffer at offsets 2..11 holds the UID, and
+offset 12 says how many of those bytes are real.
+
+NTAG215, 7-byte UID:
 
 ```
 IN   55 00 69 00 13 01 01 04 43 8A 01 22 09 03 1D 00 20 07 44 00 00 02 00 00 67 98
-     [0]=01 ST  [2..9]=04 43 8A 01 22 09 03  UID (7 bytes, NTAG215)
+     [0]=01 ST  [2..9]=04 43 8A 01 22 09 03 UID  [9..12]=1D 00 20 residue
+     [12]=07 UID length  [13..14]=44 00 ATQA 0x0044  [15]=00 SAK
+     [16]=02 cascade count  [17..18]=00 00 unexplained
 ```
 
-The tail after the UID (`1D 00 20 07 44 00 00 02 00 00`) does not look like ATQA
-and SAK: it contains values shaped like firmware pointers, the same shape the
-no-tag payloads contain. ATQA/SAK offsets therefore remain **unconfirmed** for
-13.56 MHz, and the app must keep treating that tail as raw bytes.
+MIFARE Classic 1K, 4-byte UID:
+
+```
+IN   55 00 69 00 13 01 01 31 F3 0E 0A 00 00 00 00 00 00 04 04 00 08 01 10 00 ..
+     [0]=01 ST  [2..6]=31 F3 0E 0A UID  [6..12]=00 00 00 00 00 00 residue
+     [12]=04 UID length  [13..14]=04 00 ATQA 0x0004  [15]=08 SAK
+     [16]=01 cascade count  [17..18]=10 00 unexplained
+```
+
+The `1D 00 20` after the NTAG215's UID and the zeros after the Classic's are
+buffer residue, not Tag data — repeat captures of one Tag returned different
+residue across captures, and the Classic capture above shows the buffer clean.
+`0x0044` / `0x00` is the NTAG21x pair and `0x0004` / `0x08` the MIFARE Classic 1K
+pair, both per NXP AN10833 Tables 3-4 and the NTAG213/215/216 data sheet Tables
+24-25.
+
+### The residue holds whatever the buffer held last — measured 2026-11-22
+
+A later capture of the **same** MIFARE Classic 1K, on a Reader reporting firmware
+`H00S07`, returned the same UID, ATQA, SAK, length byte and cascade count with
+different residue:
+
+```
+IN   ... 01 01 31 F3 0E 0A 30 53 30 37 00 00 04 04 00 08 01 10 00
+                             └──────────┘
+                             [6..11] residue = "0S07" + two NULs
+```
+
+`30 53 30 37` is ASCII `0S07` — the last four characters of the firmware string
+`H00S07` that the `0x0053`-family identification reports. The bytes between the
+UID and the length byte are therefore a stale copy of whatever the Reader last
+wrote into that buffer, not tag data and not random.
+
+This is the clearest evidence for the rule the app follows: **it is why those
+bytes must never be presented as UID or as content.** Residue that happens to be
+printable ASCII is indistinguishable from data by inspection, so the decoder
+never reads them at all — the UID is exactly the first `LEN` bytes of the buffer
+and nothing else. A decoder that guessed "ASCII after the UID is a name field"
+would have shown `0S07` as part of a bank card.
 
 ## Open problems
 
-1. **ATQA/SAK offsets** for the HF poll tail. A latched NTAG215 poll was captured
-   (above) and its tail does not resemble ATQA/SAK, so ticket 12's capture still
-   has to settle where those fields are — or that they are not transmitted.
+1. **HF poll bytes 16..18.** The offsets are now measured (see `0x0069` above),
+   but byte 16 tracks the cascade level count only by agreement with a 4-byte and
+   a 7-byte capture, and bytes 17..18 still have no assigned meaning. A capture
+   from a 10-byte-UID Tag would settle byte 16; nothing should be decoded from it
+   until one exists.
 2. **Multi-page writes — CONFIRMED 2026-11-22.** Ticket 18 marked up to 13 consecutive
    pages in one request and a separate process read every byte back, but the
    request and reply frames were not recorded, so the observation cannot be
@@ -871,8 +974,93 @@ no-tag payloads contain. ATQA/SAK offsets therefore remain **unconfirmed** for
 6. **`C8 42`** meaning in the LF read payload.
 7. **What sets the T5577 lock bit.** One write locked a chip; another did not.
    Understanding which payloads are safe would remove the main hazard of the
-   `0x0073` path. Blanking writes a payload unlike any tried so far, so whether
-   it is safe is unknown; `blankprobe` is the probe that would say.
+   `0x0073` path. Destroy's all-zero payload is the one that has locked chips;
+   `clearprobe` is the probe that would settle whether Clear's does.
+
+   **The chip mechanism is now documented, and it is a lock rather than wear.**
+   From the T5577/ATA5577C/ATA5577M1330C datasheets:
+
+   - The part is rated for **100,000 erase/write cycles**. Rewriting is its
+     designed purpose; it is not a single-use part, so the three chips this app
+     consumed were not worn out.
+   - It has 11 blocks of (32 data bits + **1 lock bit**), and *"once locked, the
+     block (including the lock bit itself) is not re-programmable via the RF
+     field."*
+   - The lock bit travels in **the same command as the data**: *"standard write
+     needs the opcode, the lock bit, 32 data bits and the 3-bit address (38 bits
+     total)."*
+   - There is also an OTP bit that makes every block behave as if locked, and, with
+     master key 6, a mode of operation that locks the part forever.
+
+   That last point is the measured behaviour exactly: a locked chip still latches
+   and modulates, so every reader reaches it, while it refuses all data — which is
+   what the three chips do.
+
+   **The measured correlation on this hardware** is payload *shape*, not payload
+   value: the **all-zero** payload locks (three instances, one after a field
+   re-seat), while **clone-shaped** payloads — customer at `[8]` and `[12]`, data32
+   at `[16..20]`, as every routine Clone writes — have never locked one. Which of
+   the 24 payload bytes carries the lock bit is still unknown.
+
+   **The consequence for this app:** a locked chip is alive and visible to every
+   reader and permanently refuses data, so "the tag went dead" is the wrong
+   diagnosis in any future bug report.
+
+   **The standing task:** if the lock-bit position in the `0x0073` payload is ever
+   identified, **Destroy** should set it deliberately — one command, a certain
+   result — and **Clear** must then be proven to leave it clear. Until then this
+   app must not claim it sets the lock bit, because it does not know which byte
+   would.
+
+   **Measured 2026-11-22 — the leading `01 01` pair is a suspect, and this test
+   did not clear it.** The write payload is built in one place and always carries
+   `payload[1] = 0x01, payload[2] = 0x01`, for Clone, Write, Clear and Destroy
+   alike; the datasheet puts the per-block lock bit inside the same standard-write
+   command as the data. So a payload constant that lands on the lock bit would make
+   **every** write single-use. `examples/lockprobe.rs` exists to test exactly that:
+   it writes identity A, re-reads, writes identity B, re-reads, and can send the
+   payload with the `01 01` pair cleared.
+
+   The first tag tried read as `55 00 84 82 12` and refused writes **both** with
+   the flags and with them cleared — so on that tag the flags are not what refuses,
+   and the tag is unwritable by any payload. That is the ADR 0007 ambiguity shown
+   empirically: a read-only EM4100 fob and a locked T5577 are indistinguishable from
+   this Reader, and nothing here says which it was.
+
+   **Still open, and it needs one writable T5577:** clear the flags, write A, write
+   B. If B takes, the `01 01` pair is the lock and every tag this app has ever
+   written was made single-use by the app rather than by the chip. If B is refused,
+   the flags are innocent and these tags lock after one write for their own reasons.
+   Until that runs, **no claim that Clear is safer than Destroy is evidence-based** —
+   the payload shape argument does not survive a single-write tag.
+
+   **Answered 2026-11-22 — the flags are innocent, and the tags are single-write.**
+   A factory T5577 (reading `00 00 00 15 C9`) was written with the `01 01` pair
+   **cleared**, and the write took: it read back `00 00 00 15 CA`. A second write,
+   same cleared payload, was refused; a third attempt three seconds later was
+   refused too, and the tag still reads `00 00 00 15 CA`. So a payload without the
+   flags locks a tag exactly as the app's payload does, and **the leading pair is
+   not the lock bit's carrier on this hardware.**
+
+   Five tags have now been observed, and every one accepted at most **one** write
+   from this Reader and then refused forever while continuing to answer reads: three
+   cleared with an all-zero identity, one carrying `55 00 84 82 12`, and this one.
+
+   **What is still unknown** is *why*, and the two candidates cannot be separated
+   with one Reader: either these blanks are one-time-programmable (cheap
+   T5577-compatible parts with the OTP bit already set), or the Reader's firmware
+   sets the block lock bits itself on every `0x0073` and our 24 bytes are only the
+   data. A genuine T5577 is rated for 100,000 erase/write cycles, so if these are
+   genuine the cause is the firmware and no payload this app sends can avoid it. A
+   second, known-good writer would settle it.
+
+   **Consequence the app must not misstate:** a Clear cannot leave a tag that this
+   Reader will write again. Clear's confirmation said it could; that promise is
+   withdrawn — see `docs/tickets/studio-redesign-followups/clearing-a-tag-must-leave-it-usable.md`
+   for the wording decision still open. Clear and Destroy therefore differ only in
+   what the tag is left carrying, not in whether it survives: Clear leaves a
+   placeholder Identity that still reads and that no system issues, Destroy leaves
+   nothing.
 
 Solved: **125 kHz write/clone** — command `0x0073`, see above.
 Solved: **multi-report reassembly** — verified in both directions, with real

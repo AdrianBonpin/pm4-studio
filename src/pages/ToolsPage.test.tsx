@@ -183,3 +183,20 @@ describe("the raw console in a development build", () => {
     expect(screen.queryByText(BUILD_REFUSAL_LABEL)).toBeNull();
   });
 });
+
+describe("Tools holds the console and nothing else", () => {
+  it("carries no indicator test and no capability limits, because both moved to Settings", async () => {
+    // ADR 0006 keeps Tools a visible destination so the release console's
+    // honesty is not buried. What it does not keep is everything else that used
+    // to be piled on it: the indicator test and the Reader's limits now live in
+    // Settings → Diagnostics, where a limitation is stated once.
+    const { backend } = mountConsole(READ_ONLY);
+    await screen.findByText(READ_ONLY_TITLE);
+
+    expect(screen.queryByText("Indicator")).toBeNull();
+    expect(screen.queryByText("Capability limits")).toBeNull();
+    // Nothing on this page sends the LED-off frame any more; the frame is still
+    // typable into the console, which is the point of the console.
+    expect(backend.callsTo("led_off")).toHaveLength(0);
+  });
+});

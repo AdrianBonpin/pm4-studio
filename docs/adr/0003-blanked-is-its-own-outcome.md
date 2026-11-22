@@ -1,6 +1,6 @@
 # 0003: A blanked write is its own outcome, not a failed verification
 
-**Status:** Accepted
+**Status:** Accepted — **amended 2026-11-22** (see "Amendment" at the end)
 **Date:** 2026-11-21
 
 ## Context
@@ -84,11 +84,53 @@ own T5577 blanks is already permanently locked from an earlier experiment.
   A blanked Tag and a Tag lifted off the Reader look identical in the read path,
   so the app says "the tag no longer presents an Identity" and offers a read
   rather than promising the chip is on the Reader.
-- A Tag that already reads as empty cannot be blanked again through this path,
-  because the guard cannot read it as a Tag. That is a refusal with an
-  explanation, not a silent no-op.
+- A Tag that already reads as empty cannot be blanked again through this path:
+  the presence-aware read sees it as a Tag carrying no Identity, so the guard
+  refuses with `RefuseNothingToBlank` — there is nothing to destroy. Nothing is
+  transmitted, so this is a refusal and not `WillNotAcceptWrites` (which needs a
+  write that was sent). That is a refusal with an explanation, not a silent
+  no-op.
 - Whether a blanking write lands, and whether it triggers the T5577 lock bit, is
   still a hardware question. `src-tauri/examples/blankprobe.rs` is the repeatable
-  probe; until it has run on a sacrificial blank, the write is implemented and
-  its logic proven but not observed on a chip. Recording that gap is the point of
-  the outcome model: nothing here claims more than the app saw.
+  probe. Measured 2026-11-22: the neutral write lands, and the Tag afterwards
+  reads as `tag present, NO identity (data field empty)`. That same Tag then
+  accepted no new Identity, transmitted twice, so whether the neutral payload
+  leaves the chip locked is the open question in
+  `docs/tickets/studio-redesign-followups/resets-refusal-was-never-seen-on-hardware.md`.
+  Recording that gap is the point of the outcome model: nothing here claims more
+  than the app saw.
+
+## Amendment (2026-11-22) — one outcome became two, and one operation became two
+
+This ADR's decision — an Identity-overwriting write is judged by its own rule, not
+by the copy rule — is unchanged, and so is its reasoning. Three of its names are
+not:
+
+- **`Blanked` is now `Destroyed`.** The operation that writes the neutral Identity
+  is called **Destroy**, and its outcome is named for it. Nothing else about the
+  judgment changed.
+- **A second outcome, `Cleared`, exists beside it.** The everyday operation,
+  **Clear**, writes a *non-zero* placeholder Identity, so its success condition is
+  positive rather than inverted: the read-back presents the placeholder. The
+  inversion this ADR introduced still governs Destroy alone; Clear is judged like
+  a copy, against a target that happens to be a placeholder nobody issued.
+- **`classify_blank` split into `classify_clear` and `classify_destroy`,** because
+  one function with a flag would let a destruction be worded as a clear. A test
+  asserts neither classifier can produce the other's outcome.
+
+Two consequences this ADR recorded are also now measured rather than open, and one
+is corrected:
+
+- The "whether it triggers the T5577 lock bit" question has a documented mechanism:
+  a **per-block lock bit carried in the same 38-bit standard write as the data**, on
+  a part rated for 100,000 erase/write cycles. The chips this app consumed were
+  **locked, not worn out**, which is why they still latch and modulate. The payload
+  byte that carries the lock bit is still unidentified, so the app does not claim to
+  set it (`docs/PROTOCOL.md`, open problem 7).
+- The third consequence — "a Tag that already reads as empty cannot be blanked
+  again; the guard refuses with `RefuseNothingToBlank`" — now applies to **Destroy
+  only** (`RefuseNothingToDestroy`). **Clear proceeds** on such a Tag: it has a
+  placeholder to give it and nothing of the user's to lose, which is also what
+  makes a cleared Tag a legal write position for the next Clone.
+- `src-tauri/examples/blankprobe.rs` was replaced by `clearprobe.rs`, which probes
+  both payloads.

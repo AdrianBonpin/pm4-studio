@@ -1,4 +1,4 @@
-import { AlertTriangle } from "lucide-react";
+import { Notice, type NoticeTone } from "./ui/Notice";
 import { Readout } from "./Section";
 import type { ReplacementConfirmation as ReplacementConfirmationData } from "../lib/replacement";
 
@@ -16,22 +16,33 @@ import type { ReplacementConfirmation as ReplacementConfirmationData } from "../
  * version of a destructive write learns that the alarm means nothing. So the
  * styling here is a function of `destructive` and of nothing else: neither path
  * can express its own opinion about how serious its write is.
+ *
+ * **The two cases differ in words, not only in hue.** `replacementTone` names the
+ * tone each case is drawn in, and the notice leads with that word beside its own
+ * shape, so a user who cannot tell amber from grey still reads which of the two
+ * they are looking at: "Check this" when something is destroyed, and "Nothing to
+ * replace" when nothing is known to be.
+ *
+ * **This is a condition, not an outcome.** A confirmation the user has not answered
+ * is a state the page is in, so it has no `Outcome` and no severity in the seam
+ * (ADR 0008: conditions stay inline, and the toast model draws events). The tone
+ * below is therefore presentation — the ink this condition is drawn in — chosen
+ * here, once, for both callers; it makes no sound and produces no message in the
+ * corner.
  */
 
 /** How a confirmation reads, decided by `destructive` alone. */
 export interface ReplacementTone {
-  /** The block's border and fill. */
-  readonly frame: string;
-  /** The heading's colour. */
-  readonly title: string;
-  /** Whether the warning icon is shown. */
-  readonly icon: boolean;
+  /** The tone the notice is drawn in. Presentation for a condition, not a severity. */
+  readonly tone: NoticeTone;
+  /** That tone in words — the notice's leading line. */
+  readonly label: string;
 }
 
 export function replacementTone(destructive: boolean): ReplacementTone {
   return destructive
-    ? { frame: "border-warn bg-warn/5", title: "text-warn", icon: true }
-    : { frame: "border-border bg-surface/40", title: "text-text", icon: false };
+    ? { tone: "warn", label: "Check this" }
+    : { tone: "muted", label: "Nothing to replace" };
 }
 
 /**
@@ -53,18 +64,15 @@ export function ReplacementConfirmation({ confirmation }: ReplacementConfirmatio
   return (
     <div className="flex flex-col gap-4">
       <Readout value={confirmation.identity} />
-      <div className={`border-l-2 px-3 py-2 ${tone.frame}`}>
-        <p className={`flex items-center gap-1.5 text-sm ${tone.title}`}>
-          {tone.icon && <AlertTriangle size={14} />} {confirmation.title}
-        </p>
-        <ul className="mt-2 flex flex-col gap-2">
+      <Notice tone={tone.tone} label={tone.label} title={confirmation.title}>
+        <ul className="flex flex-col gap-2">
           {confirmation.facts.map((fact) => (
             <li key={fact.title} className="text-xs leading-relaxed text-text-muted">
               <span className="text-text">{fact.title}.</span> {fact.detail}
             </li>
           ))}
         </ul>
-      </div>
+      </Notice>
     </div>
   );
 }

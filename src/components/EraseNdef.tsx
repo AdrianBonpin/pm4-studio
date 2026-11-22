@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Check, Eraser, ScanLine } from "lucide-react";
+import { Eraser, ScanLine } from "lucide-react";
 import { Button } from "./ui/Button";
+import { Notice } from "./ui/Notice";
 import { Field, Readout, Section } from "./Section";
 import { beginDeviceOperation } from "../lib/deviceLock";
 import {
@@ -10,8 +11,7 @@ import {
   erasedPagesLabel,
   type NdefErasePreview,
 } from "../lib/eraseTag";
-import { pagesLabel } from "../lib/tagWrite";
-import { NOTICE_TONE_CLASS } from "../lib/writeOutcome";
+import { outcomes, report } from "../lib/outcome";
 import type { EraseResult } from "../types";
 
 type Phase = "idle" | "reading" | "confirm" | "erasing";
@@ -66,10 +66,18 @@ export function EraseNdef({ connected }: EraseNdefProps) {
     setPhase("erasing");
     const release = beginDeviceOperation();
     try {
-      setResult(await invoke<EraseResult>("hf_ndef_erase"));
+      const erased = await invoke<EraseResult>("hf_ndef_erase");
+      setResult(erased);
       setPreview(null);
+      // The erase is the operation the user confirmed, so it reports itself: the
+      // words come from `eraseNotice` and the severity from the outcome's kind,
+      // so the notice on the page and the sound cannot disagree.
+      report(outcomes.erase(erased));
     } catch (e) {
       setError(String(e));
+      // A Reader that could not send the erase is its own news, with its own
+      // remedy — never an erase that did not happen.
+      report(outcomes.readerFailure(e));
     } finally {
       release();
       setPhase("idle");
@@ -107,19 +115,18 @@ export function EraseNdef({ connected }: EraseNdefProps) {
         )}
 
         {error && (
-          <p className="border-l-2 border-err bg-err/5 px-3 py-2 text-xs leading-relaxed text-err">
-            {error}
-          </p>
+          <Notice tone="err" label="Failed">
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">{error}</p>
+          </Notice>
         )}
 
         {preview && !preview.canErase && (
-          <div className="border-l-2 border-warn bg-warn/5 px-3 py-2">
-            <p className="text-sm text-warn">Not erased</p>
-            <p className="mt-0.5 max-w-prose text-xs leading-relaxed text-text-muted">
+          <Notice tone="warn" label="Not erased" onDismiss={cancel}>
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">
               {preview.refusal ?? "an erase would be refused"}.
             </p>
             {preview.tag && (
-              <p className="mt-1 font-mono text-[11px] text-text-muted">
+              <p className="font-mono text-[11px] text-text-muted">
                 tag {preview.tag.uid}
                 {preview.tag.existing.state === "empty"
                   ? " · reads back with no Records"
@@ -128,46 +135,32 @@ export function EraseNdef({ connected }: EraseNdefProps) {
                     : " · content unreadable"}
               </p>
             )}
-            <div className="mt-2">
-              <Button variant="secondary" onClick={cancel}>
-                Dismiss
-              </Button>
-            </div>
-          </div>
+          </Notice>
         )}
 
         {preview && confirmation && (
-          <div className="border-l-2 border-warn bg-warn/5 px-3 py-2">
-            <p className="flex items-center gap-1.5 text-sm text-warn">
-              <AlertTriangle size={14} /> {confirmation.title}
-            </p>
-            <p className="mt-1 max-w-prose text-sm leading-relaxed text-text">
+          <Notice tone="warn" label="Check this" title={confirmation.title}>
+            <p className="max-w-prose text-sm leading-relaxed text-text">
               {confirmation.sentence}
             </p>
-            <p className="mt-1 max-w-prose text-xs leading-relaxed text-text-muted">
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">
               {confirmation.where}
             </p>
-            <ul className="mt-2 flex flex-col gap-2">
+            <ul className="flex flex-col gap-2">
               {confirmation.facts.map((fact) => (
                 <li key={fact.title} className="text-xs leading-relaxed text-text-muted">
                   <span className="text-text">{fact.title}.</span> {fact.detail}
                 </li>
               ))}
             </ul>
-            <p className="mt-2 max-w-prose text-xs leading-relaxed text-text-muted">
-              {confirmation.notReadOnly}
+            {/* The two limits, as one sentence each and one paragraph between them:
+                a single destructive action does not need nine blocks of prose, and
+                at 900×700 it needs its own buttons on screen (follow-up ticket
+                "The Erase confirmation is taller than the window"). */}
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">
+              {confirmation.notReadOnly} {confirmation.notPasswordRemoval}
             </p>
-            <p className="mt-1 max-w-prose text-xs leading-relaxed text-text-muted">
-              {confirmation.notPasswordRemoval}
-            </p>
-            {preview.tag && (
-              <p className="mt-2 font-mono text-[11px] text-text-muted">
-                tag {preview.tag.uid} · clears {preview.clearsBytes}{" "}
-                {preview.clearsBytes === 1 ? "byte" : "bytes"} ·{" "}
-                {pagesLabel(preview.pages)} of user memory
-              </p>
-            )}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button variant="danger" disabled={busy} onClick={() => void erase()}>
                 <Eraser size={13} />{" "}
                 {phase === "erasing" ? "Erasing…" : confirmation.action}
@@ -175,36 +168,28 @@ export function EraseNdef({ connected }: EraseNdefProps) {
               <Button variant="ghost" disabled={busy} onClick={cancel}>
                 Keep the content
               </Button>
+              <span className="text-[11px] leading-relaxed text-text-muted">
+                Keep the tag on the Reader until the result appears.
+              </span>
             </div>
-            <p className="mt-2 text-[11px] leading-relaxed text-text-muted">
-              Keep the tag on the Reader until the result appears. Polling is suspended while
-              the erase runs.
-            </p>
-          </div>
+          </Notice>
         )}
 
         {notice && result && (
-          <div
-            className={`border-l-2 px-3 py-2 ${
-              notice.tone === "ok"
-                ? "border-ok bg-ok/5"
-                : notice.tone === "warn"
-                  ? "border-warn bg-warn/5"
-                  : "border-err bg-err/5"
-            }`}
-          >
-            <p className={`flex items-center gap-1.5 text-sm ${NOTICE_TONE_CLASS[notice.tone]}`}>
-              {notice.tone === "ok" ? <Check size={14} /> : <AlertTriangle size={14} />}
-              {result.outcome === "erased"
+          <Notice
+            tone={notice.tone}
+            label={
+              result.outcome === "erased"
                 ? "Erased"
                 : notice.tone === "warn"
                   ? "Unconfirmed"
-                  : "Not erased"}
-            </p>
-            <p className="mt-0.5 max-w-prose text-xs leading-relaxed text-text-muted">
+                  : "Not erased"
+            }
+          >
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">
               {notice.text}
             </p>
-            <div className="mt-2 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
+            <div className="grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-4">
               <Field
                 label="Reads back"
                 value={result.after ? result.after.existing.state : "no read-back"}
@@ -234,11 +219,11 @@ export function EraseNdef({ connected }: EraseNdefProps) {
               <Readout value={result.before.uid} />
             )}
             {result.writtenHex !== "" && (
-              <code className="mt-2 block select-text break-all rounded-lg border border-border bg-canvas px-3 py-2 font-mono text-[11px] leading-relaxed text-accent-muted">
+              <code className="block select-text break-all rounded-lg border border-border bg-canvas px-3 py-2 font-mono text-[11px] leading-relaxed text-accent-muted">
                 {result.writtenHex}
               </code>
             )}
-            <div className="mt-3 flex flex-wrap items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <Button variant="secondary" disabled={!connected || busy} onClick={() => void check()}>
                 <ScanLine size={13} /> Check the tag again
               </Button>
@@ -246,7 +231,7 @@ export function EraseNdef({ connected }: EraseNdefProps) {
                 Done
               </Button>
             </div>
-          </div>
+          </Notice>
         )}
 
         {!preview && !notice && !error && (

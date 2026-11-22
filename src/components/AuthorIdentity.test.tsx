@@ -48,6 +48,7 @@ const WRITTEN: WriteResult = {
   outcome: "verified",
   verified: true,
   message: null,
+  refusalCause: null,
   confirmedCopies: null,
   countProblem: null,
 };
@@ -65,7 +66,6 @@ async function upToConfirmation() {
   const { user, container } = renderUi(
     <AuthorIdentity
       connected
-      onChirp={() => {}}
       library={libraryState()}
       onDeviceError={() => {}}
     />,
@@ -96,7 +96,8 @@ describe("authoring an Identity", () => {
     expect(screen.getByText(`Writing ${PREVIEW.id} replaces ${DEST.id}`)).toBeTruthy();
     // Rendered by the shared component, in its destructive tone: this path and
     // the clone path show one confirmation, not two opinions about one.
-    expect(container.querySelector(".bg-warn\\/5")).toBeTruthy();
+    expect(container.querySelector('[data-tone="warn"]')).toBeTruthy();
+    expect(container.querySelector('[data-tone="warn"]')?.textContent).toContain("Check this");
 
     await user.click(screen.getByRole("button", { name: "Back" }));
 

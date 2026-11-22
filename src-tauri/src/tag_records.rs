@@ -502,8 +502,19 @@ mod tests {
         // exactly as it was after its Records are loaded into a new Draft.
         let read = recorded();
         let mut library = Library::empty();
-        let InsertOutcome::Added(snapshot) = library.add_hf(NTAG215_UID, RECORDED_TLV, CAPTURED_AT)
-        else {
+        let InsertOutcome::Added(snapshot) = library.add_hf(
+            crate::library::HfFields {
+                uid: NTAG215_UID.to_string(),
+                raw: RECORDED_TLV.to_string(),
+                atqa: None,
+                sak: None,
+                card_type: None,
+                capacity_bytes: None,
+                ndef_formatted: None,
+                records: None,
+            },
+            CAPTURED_AT,
+        ) else {
             panic!("the first Snapshot of a tag is added");
         };
         let before = snapshot.clone();

@@ -28,6 +28,7 @@ import {
   recordsLabel,
   type NdefTagView,
 } from "./tagWrite";
+import { eraseKind, severityOf, toneForSeverity } from "./severity";
 import type { WriteNotice } from "./writeOutcome";
 
 /** What erasing the Tag would clear, as the backend read it. Read-only. */
@@ -69,12 +70,16 @@ export const ERASE_FACTS: readonly EraseFact[] = [
     detail:
       "Erasing clears content, it does not destroy the tag or change its format. The UID, the Capability Container and the memory size are left as they are, so the tag can be written again straight away.",
   },
-  {
-    title: "Only the message area is written",
-    detail:
-      "Pages 4 onwards are written. Pages 0 to 3 — the UID, lock bytes and Capability Container — are never written, which is what keeps the tag's format intact.",
-  },
 ];
+
+/**
+ * What erasing the Tag's content is *not*, in the words the confirmation uses.
+ *
+ * Two limits of this Reader that a user about to erase a Tag could reasonably
+ * expect to trip, so they are stated before the button and not only in the
+ * capability limits — one sentence each, because a confirmation for one
+ * destructive action should not run to eight paragraphs (spec, "too much text").
+ */
 
 /**
  * The denial the ticket requires, stated as plainly as the facts above it.
@@ -82,10 +87,10 @@ export const ERASE_FACTS: readonly EraseFact[] = [
  * offered rather than after.
  */
 export const ERASE_IS_NOT_READ_ONLY =
-  "Erasing does not make this tag read-only. Locking a tag so it refuses further writes is not possible with this Reader, and clearing content gives no protection: the tag can be written again immediately.";
+  "Erasing does not make this tag read-only and does not lock it: locking is not possible with this Reader, so the tag can be written again immediately.";
 
 export const ERASE_IS_NOT_PASSWORD_REMOVAL =
-  "Erasing does not remove password protection. It neither sets nor clears a password, and a tag whose password is unknown stays unrecoverable. Password set and remove is a separate operation.";
+  "It does not remove password protection: a password this Reader cannot set is one it cannot clear, so a password-protected tag stays unrecoverable.";
 
 /** The confirmation, ready to render. */
 export interface EraseConfirmation {
@@ -136,7 +141,14 @@ export function eraseWhere(preview: NdefErasePreview): string {
   if (preview.pages.length === 0) {
     return "Nothing to write.";
   }
-  return `An erase writes ${pagesLabel(preview.pages)}: an empty NDEF message over the content that is there now.`;
+  const bytes =
+    preview.clearsBytes === 0
+      ? ""
+      : `, ${preview.clearsBytes} ${preview.clearsBytes === 1 ? "byte" : "bytes"} cleared`;
+  return (
+    `It writes ${pagesLabel(preview.pages)}${bytes}: an empty NDEF message over the content ` +
+    "that is there now. Pages 0 to 3 — the UID, lock bytes and Capability Container — are never written."
+  );
 }
 
 /**
@@ -170,6 +182,9 @@ export function eraseConfirmation(preview: NdefErasePreview): EraseConfirmation 
  * already be clean and discarding it would be the wrong move.
  */
 export function eraseNotice(result: EraseResult): WriteNotice {
+  // The severity is the seam's, so the notice beside the result cannot be
+  // drawn in a calmer tone than the sound the same result made (ADR 0008).
+  const tone = toneForSeverity(severityOf(eraseKind(result.outcome)));
   const bytes =
     result.clearedBytes === 0
       ? ""
@@ -177,7 +192,7 @@ export function eraseNotice(result: EraseResult): WriteNotice {
   switch (result.outcome) {
     case "erased":
       return {
-        tone: "ok",
+        tone,
         text:
           "Erased — the tag reads back as present with no Records. Its UID, Capability " +
           "Container and capacity are unchanged, so it is ready to be written again." +
@@ -187,12 +202,12 @@ export function eraseNotice(result: EraseResult): WriteNotice {
       };
     case "refused":
       return {
-        tone: "err",
+        tone,
         text: `Not erased: ${result.message ?? "the erase was not attempted"}.`,
       };
     case "unverified":
       return {
-        tone: "warn",
+        tone,
         text:
           "Unknown: the erase was sent but the tag did not read back, so what it holds " +
           "cannot be confirmed. Read the tag on 13.56 MHz to see whether it carries no " +
@@ -204,7 +219,7 @@ export function eraseNotice(result: EraseResult): WriteNotice {
       // that never reached the tag has nothing to say about what it holds.
       const readable = result.after !== null ? " The tag is still readable." : "";
       return {
-        tone: "err",
+        tone,
         text: `Not erased. ${
           result.message ?? "The erase did not take, so the tag still holds its content."
         }${readable}`,

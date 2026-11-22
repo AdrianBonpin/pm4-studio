@@ -28,7 +28,7 @@ interface RowDeleteConfirmationProps {
  * in, so a page cannot quietly change the confirmation's shape — the label, the
  * dismiss and the `danger` variant are the same wherever a row is destroyed.
  *
- * It exists because `DraftsPage` reproduced `LibraryPage`'s markup token for
+ * It exists because the Drafts page reproduced `LibraryPage`'s markup token for
  * token: the same prompt, the same danger button, the same `Keep`, the same
  * wrapper classes. That is the smell `ReplacementConfirmation` was extracted
  * for, one row down: once the markup exists twice, the copies agree until one

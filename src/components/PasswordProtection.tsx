@@ -1,11 +1,11 @@
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { AlertTriangle, Lock, ScanLine, ShieldOff } from "lucide-react";
+import { Lock, ScanLine } from "lucide-react";
 import { Button } from "./ui/Button";
+import { Notice } from "./ui/Notice";
 import { Field, Section } from "./Section";
 import { beginDeviceOperation } from "../lib/deviceLock";
 import { describeDeviceFailure } from "../lib/readerIdentity";
-import { NOTICE_TONE_CLASS } from "../lib/writeOutcome";
 import {
   ACKNOWLEDGEMENT_LABEL,
   CONFIG_READ_EXPLANATION,
@@ -31,6 +31,13 @@ interface PasswordProtectionProps {
 /**
  * Password protection: set and remove, both refused, and the reason stated
  * plainly rather than left as a disabled button.
+ *
+ * **Not rendered by any page.** Ticket 14 removed this panel from 13.56 MHz: it
+ * was half a screen of explanation in front of two controls that can never work
+ * on this Reader, and the one fact worth keeping is recorded with the other
+ * capability limits in Settings → Diagnostics. The component and its Rust side
+ * are kept because the operations exist in the protocol, and a page that asked
+ * for them again would find the refusal honest rather than new.
  *
  * The shape of this panel is the point of the ticket. There is a warning that a
  * lost password makes the Tag permanently unrecoverable; there is an
@@ -103,15 +110,11 @@ export function PasswordProtection({ connected }: PasswordProtectionProps) {
       }
     >
       <div className="flex flex-col gap-4">
-        <div className="flex items-start gap-2 border-l-2 border-err bg-err/5 px-3 py-2">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0 text-err" />
-          <div className="flex flex-col gap-1">
-            <p className="text-sm text-err">{setConfirmation.warning}</p>
-            <p className="max-w-prose text-xs leading-relaxed text-text-muted">
-              {setConfirmation.unrecorded}
-            </p>
-          </div>
-        </div>
+        <Notice tone="err" label={setConfirmation.warning}>
+          <p className="max-w-prose text-xs leading-relaxed text-text-muted">
+            {setConfirmation.unrecorded}
+          </p>
+        </Notice>
 
         {!connected && (
           <p className="text-xs leading-relaxed text-text-muted">
@@ -121,9 +124,9 @@ export function PasswordProtection({ connected }: PasswordProtectionProps) {
         )}
 
         {error && (
-          <p className="border-l-2 border-err bg-err/5 px-3 py-2 text-xs leading-relaxed text-err">
-            {error}
-          </p>
+          <Notice tone="err" label="Failed">
+            <p className="max-w-prose text-xs leading-relaxed text-text-muted">{error}</p>
+          </Notice>
         )}
 
         {status && (
@@ -154,22 +157,19 @@ export function PasswordProtection({ connected }: PasswordProtectionProps) {
               />
             </div>
 
-            <div className="border-l-2 border-warn bg-warn/5 px-3 py-2">
-              <p className="flex items-center gap-1.5 text-sm text-warn">
-                <ShieldOff size={14} /> {protectionSentence(status.protection)}
-              </p>
-              <p className="mt-1 max-w-prose text-xs leading-relaxed text-text-muted">
+            <Notice tone="warn" label={protectionSentence(status.protection)}>
+              <p className="max-w-prose text-xs leading-relaxed text-text-muted">
                 {status.whyUnknown}
               </p>
               {!status.configurationReal && (
-                <p className="mt-1 max-w-prose text-xs leading-relaxed text-text-muted">
+                <p className="max-w-prose text-xs leading-relaxed text-text-muted">
                   {CONFIG_READ_EXPLANATION}
                 </p>
               )}
-              <p className="mt-1 max-w-prose text-xs leading-relaxed text-text-muted">
+              <p className="max-w-prose text-xs leading-relaxed text-text-muted">
                 {UNKNOWN_PASSWORD_WARNING}
               </p>
-            </div>
+            </Notice>
           </div>
         )}
 
@@ -229,18 +229,13 @@ export function PasswordProtection({ connected }: PasswordProtectionProps) {
         </div>
 
         {attempt && (
-          <div
-            className={`border-l-2 border-border bg-surface-raised/40 px-3 py-2 text-xs leading-relaxed ${
-              NOTICE_TONE_CLASS[passwordNotice(attempt).tone]
-            }`}
-          >
-            <p>{passwordNotice(attempt).text}</p>
-            <p className="mt-1 font-mono text-[11px] text-text-muted">
+          <Notice tone={passwordNotice(attempt).tone} label={passwordNotice(attempt).text}>
+            <p className="font-mono text-[11px] text-text-muted">
               refusal: {attempt.refusal} · {" "}
               {pagesSentence(attempt.wouldWritePages)} · pages written:{" "}
               {attempt.wrotePages.length}
             </p>
-          </div>
+          </Notice>
         )}
       </div>
     </Section>

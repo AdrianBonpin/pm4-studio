@@ -16,8 +16,17 @@ implant). The form factor is never part of the model.
 _Avoid_: card, fob, badge, chip, transponder
 
 **Blank**:
-A Tag that carries no identity and can accept a write. Blankness is a state, not
-a product category — a Tag becomes Blank again only by being written to.
+A Tag that carries no Identity. Blankness is a state, not a product category — a
+Tag becomes Blank again only by being written to. A Blank is not necessarily a
+Tag that will take a write: that is **Writability**, which cannot be observed
+before trying, and a **Destroy** leaves a Tag Blank and permanently unable to
+accept data. A **Clear** leaves a Tag carrying the **Cleared** placeholder, which
+is *not* Blank — it reads as an Identity, which is what keeps it writable.
+
+This is the only survivor of the family of "blank" words in the interface: it is
+a noun for a state a Tag can be in, and it is never a verb. The operation that
+produces the state is **Destroy**, and the operation a user reaches for is
+**Clear**.
 _Avoid_: empty tag, new tag, unwritten tag, virgin tag
 
 **Snapshot**:
@@ -55,19 +64,99 @@ _Avoid_: serial, id, identity
 
 **Clone**:
 Copying one Tag's Identity onto a Blank, producing a Tag that presents the same
-Identity as the source.
+Identity as the source. A Clone is confirmed by comparing an Identity.
 _Avoid_: copy, duplicate, backup, backup tag
 
+**Copy**:
+Moving a whole NDEF message from one 13.56 MHz Tag to another. Confirmed by
+comparing the decoded Records in order, not the bytes, because a Tag may
+legitimately re-encode a message it accepts.
+_Avoid_: clone, duplicate, transfer, backup
+
+**Outcome**:
+What one operation did, as a closed typed value. The single input to both the
+visible message and the audible signal, so the two can never disagree.
+_Avoid_: result, status, response, event
+
+**Signal**:
+The audible report of one Outcome: one, two or three chirps, or their absence.
+Made of chirps, and never the only report of anything.
+_Avoid_: beep, chirp, tone, alarm, sound
+
+**Toast**:
+The transient on-screen report of one Outcome, in the corner the user chose.
+Announces an event, never a condition.
+_Avoid_: notification, alert, banner, snackbar, popup
+
+**Quiet level**:
+The three-way audible-feedback preference: off, errors and warnings only, all.
+_Avoid_: beep toggle, mute, volume
+
+**Writability**:
+Whether a 125 kHz Tag will accept a write. Not observable by reading and not
+exposed by the protocol; discoverable only by attempting a write.
+_Avoid_: blankness, lock state, write protection
+
+**UID length**:
+The byte in the 13.56 MHz poll reply that states how many bytes of the UID buffer
+are real, and therefore what the UID is. Distinct from the UID itself.
+_Avoid_: UID size, uid_len, width
+
+**Collection**:
+One of the Library's two kinds of saved thing: Snapshots or Drafts. They share a
+page and a layout, never a list.
+_Avoid_: tab, section, category, type
+
+**Diagnostics**:
+The read-only inspection surface in Settings: the capability limits and the
+indicator test. The 13.56 MHz memory-dump mode is named Memory, so that "look in
+Diagnostics" has exactly one destination.
+_Avoid_: tools, debug, advanced, inspect
+
+**Clear**:
+Overwriting a Tag's Identity with the **Cleared** placeholder, so the Tag stops
+being a working credential and stays a live, rewritable chip. Clear is the
+everyday operation and the name of the 125 kHz mode that offers it. It does
+**not** restore a factory configuration, it does **not** unlock a locked Tag, and
+it does **not** destroy the Tag: a Cleared Tag reads back as an Identity, so a
+Clone or an authored Identity can be written onto it afterwards. It *is* a write,
+which is why it is also the only way to find out whether a Tag will accept one:
+no cheaper test exists (ADR 0007), and the attempt can fail.
+_Avoid_: wipe, erase, format, factory reset, restore, reset, blank (as a verb)
+
+**Cleared**:
+The state a **Clear** leaves: the Tag carries the placeholder Identity —
+customer `0x00`, facility `0xFF`, card `0xFFFF` — which no building system issues,
+so it opens nothing, and which is non-zero, so the Tag keeps reading and keeps
+accepting writes. The placeholder is defined once, in `Identity::CLEARED`
+(`src-tauri/src/identity.rs`), with the reasoning that chose it.
+
+**Destroy**:
+Overwriting a Tag's Identity with the neutral one — customer `0x00`, data32
+`0x00000000` — which on a T5577 leaves the Tag **permanently disabled**: it keeps
+latching and modulating, so every reader still reaches it, and it refuses all
+further data. Measured three times on 2026-11-22, once after a field re-seat, and
+explained by the chip's per-block lock bit (see `docs/PROTOCOL.md`, open problem
+7). Destroy is deliberate, destructive and never the default; it cannot be
+recovered, reused or unlocked, and there is no factory restore in this protocol.
+_Avoid_: wipe, erase, format, factory reset, restore, reset, recover, reuse
+
 **Reset**:
-Blanking a Tag's Identity so it carries no assigned value. Reset does **not**
-restore a factory configuration, and does **not** unlock a locked Tag.
-_Avoid_: wipe, erase, format, factory reset, restore
+**Not used in the interface.** The word named the single destructive operation
+this app used to offer as its routine one, and it invited exactly the factory-restore
+reading the hardware cannot satisfy. The operation it named is now **Clear**
+(routine, reversible) and **Destroy** (deliberate, destructive), and the interface
+says those words. The word survives only in historical documents — this glossary's
+own history, ADRs and hardware run reports — where it names the operation that
+came before the split.
+_Avoid_: using it for either current operation
 
 **Erase**:
 Clearing a 13.56 MHz Tag's NDEF content by writing an empty NDEF TLV (`03 00 FE`)
 over the message area. An erased Tag is still a Tag: it keeps its UID, its
 Capability Container and its format, and carries no Records. Erase is not a
-format, not a Reset, and does not lock or password-protect anything.
+format, not a Clear and not a Destroy, and does not lock or password-protect
+anything.
 _Avoid_: format, wipe, reset, blank, unlock
 
 **Card type**:
@@ -98,27 +187,52 @@ _Avoid_: phase, stage, milestone, epic
 
 ## Relationships
 
-- A **Snapshot** holds one **Identity** (125 kHz) or one **UID** plus one **NDEF message** (13.56 MHz)
+- A **Snapshot** holds one **Identity** (125 kHz) or one **UID** plus one **NDEF message** (13.56 MHz), never both
+- A **Snapshot**'s 13.56 MHz half carries its **Records**, so a saved read is reviewable with no Reader attached
 - A **Draft** holds zero or more **Records**
+- A **Collection** holds either **Snapshots** or **Drafts**, never both in one list
 - A **Clone** consumes one **Blank** and the **Identity** from one **Snapshot**
-- A **Reset** consumes one non-**Blank** Tag and leaves a **Blank**
-- An **Erase** leaves a **Tag** present with no **Records**; it is not a **Reset**
-  and does not make the Tag **Blank**
+- A **Copy** consumes one 13.56 MHz Tag's **NDEF message** and replaces another Tag's
+- A **Clear** consumes one non-**Blank** Tag and leaves it **Cleared**: still a Tag, still writable, carrying a placeholder no system issues
+- A **Destroy** consumes one non-**Blank** Tag and leaves it **Blank** and permanently unable to accept data
+- An **Erase** leaves a **Tag** present with no **Records**; it is neither a
+  **Clear** nor a **Destroy**, and it does not make the Tag **Blank**
 - A **Frame** carries exactly one **Command**
 - A **Slice** may be gated on a **Spike**
+- An **Outcome** reports one operation and produces exactly one **Toast** and at most one **Signal**
+- A **Signal** is made of one to three chirps
+- A **Quiet level** governs which **Signals** are emitted
 
 ## Flagged ambiguities
 
 - "badge" was used for both the user's building credential and any arbitrary tag.
   Resolved: the object is a **Tag**; "badge" is no longer used.
 - "reset" was used for three different operations — restoring a factory
-  configuration, blanking an identity, and unlocking a chip that refuses writes.
-  Resolved: **Reset** means blanking the Identity only. The other two are not
-  possible over this protocol.
+  configuration, overwriting an Identity with the neutral one, and unlocking a chip
+  that refuses writes. Resolved: the word is retired from the interface. The second
+  operation split into **Clear** (writes a placeholder; the Tag stays usable) and
+  **Destroy** (writes the neutral Identity; the Tag is permanently disabled), and
+  the other two are not possible over this protocol.
 - "record" was used for both a library entry and an NDEF record. Resolved: a
   library entry is a **Snapshot**; an NDEF record is a **Record**.
 - "clone" was used for both copying an Identity and copying an NDEF message.
-  Resolved: **Clone** is reserved for Identity copying on 125 kHz; copying an
-  NDEF message between 13.56 MHz Tags is **Copy** and is out of scope for now.
+  Resolved: **Clone** is Identity copying on 125 kHz; **Copy** is whole-message
+  copying on 13.56 MHz. Both are in scope, and the distinction survives because
+  the two verify differently.
 - "blank" was used as both a noun for a product you buy and a state a Tag is in.
-  Resolved: **Blank** is a state.
+  Resolved: **Blank** is a state. It is never a verb, and it is not a word the
+  Clear/Destroy panel uses at all — the operations are **Clear** and **Destroy**.
+- "diagnostics" meant both the 13.56 MHz memory-dump mode and the Settings group
+  holding the capability limits. Resolved: the mode is **Memory**; the Settings
+  group is **Diagnostics**.
+- "beep", "notification" and "alert" were used interchangeably for three
+  different things. Resolved: a **Signal** is audible, a **Toast** is on screen,
+  and an **Outcome** is neither — it is what both are derived from.
+- "provisional" appeared in the interface for a decoded 13.56 MHz reading whose
+  byte offsets had never been measured. Resolved: the offsets are now measured
+  against two tag families, so the interface no longer claims provisionality and
+  the word must not be reused for a claim that is still a guess.
+- a **UID** was previously taken at a fixed width that padded a short UID with
+  zeros, which made a MIFARE Classic 1K read as a seven-byte NTAG215. Resolved:
+  the reply states its own **UID length**, and no surface names a family it has
+  not resolved.

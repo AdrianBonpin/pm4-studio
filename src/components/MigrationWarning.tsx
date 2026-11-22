@@ -1,4 +1,4 @@
-import { AlertTriangle } from "lucide-react";
+import { Notice } from "./ui/Notice";
 
 interface MigrationWarningProps {
   /**
@@ -15,7 +15,7 @@ interface MigrationWarningProps {
  * The same warning is shown wherever a page can be the first to see the lifted
  * library, so it is one component rather than one copy per page. It already
  * drifted once: `LibraryPage` rendered it with the warning icon and a
- * `flex items-start gap-3` frame while `DraftsPage` rendered the same prose
+ * `flex items-start gap-3` frame while the Drafts page rendered the same prose
  * without either, so the same state of the same file was two different things
  * to look at depending on which page the user happened to open first.
  *
@@ -25,18 +25,25 @@ interface MigrationWarningProps {
  * controls stay usable. A page that wants to say something different about a
  * lift should be changing the store's message, not adding a second sentence
  * about the same event.
+ *
+ * **This one is a warning and the lock beside it is not.** Both are notices about
+ * the same file, so the pair is the case the treatment has to keep apart: this
+ * says "check this" and "saving is still on", the lock says "saving is off". That
+ * distinction is carried by the leading words and by two different icon shapes,
+ * so it survives a user who cannot tell amber from red.
  */
 export function MigrationWarning({ detail }: MigrationWarningProps) {
   return (
-    <div className="mb-4 flex items-start gap-3 border-l-2 border-warn bg-warn/5 px-3 py-2">
-      <AlertTriangle size={15} className="mt-0.5 shrink-0 text-warn" />
-      <div className="min-w-0">
-        <p className="text-sm text-warn">This library was upgraded from an older version</p>
-        <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
-          {detail} Saving is still on: a save writes the upgraded library and corrects the
-          version the file claims.
-        </p>
-      </div>
-    </div>
+    <Notice
+      tone="warn"
+      label="Check this"
+      title="This library was upgraded from an older version"
+      className="mb-4"
+    >
+      <p className="text-xs leading-relaxed text-text-muted">
+        {detail} Saving is still on: a save writes the upgraded library and corrects the version
+        the file claims.
+      </p>
+    </Notice>
   );
 }

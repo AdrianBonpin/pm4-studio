@@ -38,8 +38,10 @@ but the command set is vendor-specific.
 - **125 kHz badge write / clone** — writes a scanned badge id onto a blank
   T5577 and verifies by reading it back
 - **13.56 MHz poll** (ISO14443-A) — UID
-- **Optional beeper** — toggle that chirps the reader on every successful read
-  and write, persisted between launches
+- **Audible signals** — one chirp when an operation is confirmed good, two when
+  its result needs checking, three when it fails or is refused, and silence when
+  nothing happened; a three-way quiet level (off, errors and warnings only, all)
+  persisted between launches
 - **Raw command console** — send any hex frame, see the reply and whether the
   checksum verifies
 
@@ -66,6 +68,16 @@ bun install
 bun run tauri:dev      # dev with hot reload
 bun run tauri:build    # .app + .dmg in src-tauri/target/release/bundle/
 ```
+
+Before claiming a change works, run the whole verification battery:
+
+```sh
+bun run verify         # design gate, types, tests, Rust tests
+```
+
+`bun run build` runs the design check first, so a design-rule violation fails the
+build and `verify` alike. The Rust tests are the slow step; `bun run design:check`,
+`bun run typecheck` and `bun run test` are the fast ones to run while iterating.
 
 Headless transport check (read-only, safe with a badge on the reader):
 
@@ -97,7 +109,8 @@ Verified commands:
 | Command | Meaning | Request (hex) |
 |---|---|---|
 | `0x0051` | wake / select (echoes) | `55 00 51 00 01 01 FE 01` |
-| `0x0055` | beep | `55 00 55 00 00 FF 00` |
+| `0x0053` | chirp, and LED on (fire-and-forget) | `55 00 53 00 00 FF 00` |
+| `0x0055` | LED off (not a beep) | `55 00 55 00 00 FF 00` |
 | `0x0069` | 13.56 MHz poll | `55 00 69 00 00 FF 00` |
 | `0x0072` | 125 kHz read | `55 00 72 00 02 00 01 FE 01` |
 | `0x0073` | **125 kHz write (EM4100)** | 24-byte payload, see `docs/PROTOCOL.md` |

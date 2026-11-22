@@ -1,17 +1,23 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Check, Copy, Pencil, Trash2 } from "lucide-react";
+import { Check, Copy } from "lucide-react";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/Input";
+import { Notice } from "../components/ui/Notice";
+import { Segmented } from "../components/ui/Segmented";
 import { Section } from "../components/Section";
+import { HfSnapshotReview } from "../components/HfSnapshotReview";
+import { WriteDraftToTag } from "../components/WriteDraftToTag";
 import { LibraryProblemBanner } from "../components/LibraryProblemBanner";
 import { MigrationWarning } from "../components/MigrationWarning";
 import { RowDeleteConfirmation } from "../components/RowDeleteConfirmation";
+import { claimPendingDraft, pendingDraft } from "../lib/draftHandoff";
+import { snapshotRecords } from "../lib/hfSnapshot";
 import { describeDeviceFailure } from "../lib/readerIdentity";
+import { outcomes, report } from "../lib/outcome";
 import {
   EMPTY_LIBRARY_DETAIL,
   EMPTY_LIBRARY_TITLE,
-  LIBRARY_PLAINTEXT_NOTICE,
   draftIsDirty,
   draftOf,
   filterSnapshots,
@@ -21,56 +27,82 @@ import {
 } from "../lib/library";
 import {
   CONFIRMED_COPIES_HINT,
-  NOTICE_TONE_CLASS,
   confirmedCopiesLabel,
   writeNotice,
 } from "../lib/writeOutcome";
-import {
-  describeExport,
-  describeImportApplied,
-  describeImportPreview,
-  nothingToAdd,
-  suggestedExportName,
-} from "../lib/libraryFiles";
+import { NOTICE_TONE_CLASS } from "../lib/noticeTone";
+import { DraftsCollection } from "./DraftsCollection";
 import type { LibraryState } from "../hooks/useLibrary";
-import type { ImportPreview } from "../lib/libraryFiles";
 import type { Snapshot, SnapshotDraft, SnapshotOrder } from "../lib/library";
 import type { WriteResult } from "../types";
 
 interface LibraryPageProps {
   connected: boolean;
   library: LibraryState;
-  onChirp: () => void;
 }
+
+/** Library's two kinds of saved thing, in the order the switch shows them. */
+type Collection = "snapshots" | "drafts";
 
 /**
  * The library, with no Reader required. Snapshots are read from a file in the
  * app data directory, so they are here whether or not the Reader is plugged in;
  * writing one back to a Tag is the only part that needs hardware.
+ *
+ * Library holds both Collections. Drafts is not a destination any more — the
+ * sidebar is five destinations and Drafts is not one of them — so the second
+ * Collection lives here, and this one switch is what keeps every saved Draft
+ * reachable. Both Collections have the same list-beside-detail shape: the page
+ * has one shape, and a Collection is its contents rather than its layout.
+ *
+ * Snapshots is master-detail: the list is the left column, the open Snapshot is
+ * the right one, and nothing that changes a Snapshot lives in the list. Choosing
+ * another Snapshot swaps the pane and leaves the list exactly where it was, so
+ * the page no longer reflows under the pointer and the list no longer carries a
+ * row's editor inside it. Drafts is the same shape in `DraftsCollection`.
+ *
+ * The page also arrives with a Draft when a reading produced one: *Edit as Draft*
+ * on a 13.56 MHz readout creates the Draft and asks the shell for this
+ * destination, and the shell hands the id over through `lib/draftHandoff`. An
+ * arrival like that opens on the Drafts collection and on that Draft — the one
+ * place in this app where one page's action decides another page's first frame.
  */
-export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
-  const { view, error, loading, edit, remove, pickPath, exportTo, previewImport, applyImport } =
-    library;
+export function LibraryPage({ connected, library }: LibraryPageProps) {
+  /**
+   * The Draft a reading just produced, if this page is being opened for one.
+   *
+   * Read once, at arrival, because that is when it means something: the press
+   * created the Draft and changed destination, so this mount is the arrival. The
+   * intent is peeked while rendering and claimed by the effect, because React's
+   * development double invocation would otherwise spend it before the page could
+   * use it (`lib/draftHandoff`). Claiming it is also what keeps a later visit
+   * opening on Snapshots, as every visit did before.
+   */
+  const [openDraftId] = useState<string | null>(() => pendingDraft());
+  const [collection, setCollection] = useState<Collection>(
+    openDraftId === null ? "snapshots" : "drafts",
+  );
+  useEffect(() => {
+    claimPendingDraft();
+  }, []);
+  // The library's own file, its export and import, and the action that clears
+  // everything saved are Settings → Data: this page browses what is in the
+  // library, and `reload` is here only because watching a Snapshot's copy count
+  // can change the file underneath the list.
+  const { view, error, loading, edit, remove, reload } = library;
 
-  // Which Snapshot is open for editing, and what the user has typed so far. The
-  // draft is a copy: the stored Snapshot is only touched when they confirm it.
-  const [editing, setEditing] = useState<{ id: string; draft: SnapshotDraft } | null>(null);
-  // Deleting is permanent, so it takes a second, deliberate click.
-  const [confirmingId, setConfirmingId] = useState<string | null>(null);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  /**
+   * Which Snapshot the pane is showing.
+   *
+   * `undefined` is "nobody has chosen": the first Snapshot in the list opens on
+   * arrival, because a pane beside the list that starts empty spends half the
+   * window saying nothing and leaves every action in it one click further away.
+   * `null` is "the choice was closed again" — choosing the open Snapshot a second
+   * time shuts it, which is the same toggle the Collection switch above uses.
+   */
+  const [picked, setPicked] = useState<string | null | undefined>(undefined);
   const [query, setQuery] = useState("");
   const [order, setOrder] = useState<SnapshotOrder>("name");
-  const [target, setTarget] = useState<Snapshot | null>(null);
-  const [writeBusy, setWriteBusy] = useState(false);
-  const [writeResult, setWriteResult] = useState<WriteResult | null>(null);
-  const [writeErr, setWriteErr] = useState<string | null>(null);
-
-  // Export and import. The chosen path is held only until the import is applied
-  // or cancelled; nothing is written before that.
-  const [fileBusy, setFileBusy] = useState(false);
-  const [fileNote, setFileNote] = useState<{ text: string; path?: string } | null>(null);
-  const [importPath, setImportPath] = useState<string | null>(null);
-  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
 
   const all = view?.snapshots ?? [];
   // One pass over the Snapshots already in the view per keystroke, reusing their
@@ -83,116 +115,47 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
   const problem = view?.problem ?? null;
   const migrationWarning = view?.migrationWarning ?? null;
   const searching = query.trim().length > 0;
-  const notice = writeResult ? writeNotice(writeResult) : null;
 
-  const commitEdit = (snapshot: Snapshot) => {
-    if (!editing) return;
-    const { draft } = editing;
-    setEditing(null);
-    // Cancelling, or confirming without having typed anything, writes nothing.
-    if (!draftIsDirty(snapshot, draft)) return;
-    void edit(snapshot.id, draft);
+  // The open Snapshot is looked up in the whole library, not in the filtered
+  // list: typing in the search narrows what can be chosen, and hiding the pane's
+  // subject mid-sentence because a keystroke did not match it would throw away
+  // the note being written.
+  const selectedId = picked === undefined ? (snapshots[0]?.id ?? null) : picked;
+  const selected = selectedId === null ? null : (all.find((s) => s.id === selectedId) ?? null);
+
+  const choose = (id: string) => {
+    setPicked(id === selectedId ? null : id);
   };
 
-  const deleteSnapshot = (snapshot: Snapshot) => {
-    setConfirmingId(null);
-    if (target?.id === snapshot.id) setTarget(null);
-    void remove(snapshot.id);
+  const deleteSnapshot = (id: string) => {
+    void remove(id);
+    // The Snapshot that was open is gone, so the pane goes back to opening the
+    // first one rather than pointing at something that no longer exists.
+    setPicked(undefined);
   };
 
-  const copyId = async (id: string) => {
-    try {
-      await navigator.clipboard.writeText(id);
-      setCopiedId(id);
-      setTimeout(() => setCopiedId((c) => (c === id ? null : c)), 1200);
-    } catch {
-      // Clipboard can be unavailable; the id is visible anyway.
-    }
-  };
-
-  const resetImport = () => {
-    setImportPath(null);
-    setImportPreview(null);
-  };
-
-  const exportLibrary = async () => {
-    setFileNote(null);
-    resetImport();
-    setFileBusy(true);
-    try {
-      const path = await pickPath("save", suggestedExportName(new Date()));
-      // Cancelled: nothing was written, so there is nothing to report.
-      if (!path) return;
-      const result = await exportTo(path);
-      if (result) setFileNote({ text: describeExport(result), path: result.path });
-    } finally {
-      setFileBusy(false);
-    }
-  };
-
-  const chooseImport = async () => {
-    setFileNote(null);
-    resetImport();
-    setFileBusy(true);
-    try {
-      const path = await pickPath("open");
-      // Cancelled: the library has not been read or written.
-      if (!path) return;
-      const preview = await previewImport(path);
-      if (preview) {
-        setImportPath(path);
-        setImportPreview(preview);
-      }
-    } finally {
-      setFileBusy(false);
-    }
-  };
-
-  const confirmImport = async () => {
-    if (!importPath) return;
-    setFileBusy(true);
-    try {
-      const result = await applyImport(importPath);
-      if (result) {
-        // The merge keeps every Snapshot already here, so an import never
-        // renames or overwrites one: the applied note says what was added.
-        setFileNote({ text: describeImportApplied(result.preview) });
-        resetImport();
-      }
-    } finally {
-      setFileBusy(false);
-    }
-  };
-
-  const writeSaved = async () => {
-    if (!target?.identity) return;
-    setWriteBusy(true);
-    setWriteErr(null);
-    setWriteResult(null);
-    try {
-      const res = await invoke<WriteResult>("lf_write", {
-        customer: target.identity.customer,
-        data32: target.identity.data32,
-      });
-      setWriteResult(res);
-      // Only a confirmed copy changes the count, so only then is the list stale.
-      if (res.verified) onChirp();
-      if (res.confirmedCopies !== null) void library.reload();
-    } catch (e) {
-      setWriteErr(describeDeviceFailure(e));
-    } finally {
-      setWriteBusy(false);
-    }
-  };
+  // Drafts, the other Collection of this page. It owns its own list and its own
+  // selection, because a Draft's list is not a Snapshot's list and the two are
+  // never one collection of things.
+  if (collection === "drafts") {
+    return (
+      <div className="flex flex-col gap-8">
+        <CollectionSwitch value={collection} onChange={setCollection} />
+        <DraftsCollection connected={connected} openDraftId={openDraftId} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-8">
+      <CollectionSwitch value={collection} onChange={setCollection} />
+
       <Section
         title="Snapshots"
         hint={
           all.length === 0
             ? "Every read you keep, whether or not the Reader is attached."
-            : `${all.length} ${all.length === 1 ? "Snapshot" : "Snapshots"} — click a name to rename it or add a note.`
+            : `${all.length} ${all.length === 1 ? "Snapshot" : "Snapshots"} — kept whether or not the Reader is attached.`
         }
       >
         {migrationWarning && <MigrationWarning detail={migrationWarning} />}
@@ -200,9 +163,9 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
         {problem && <LibraryProblemBanner problem={problem} />}
 
         {error && (
-          <p className="mb-4 border-l-2 border-err bg-err/5 px-3 py-2 text-xs leading-relaxed text-err">
-            {error}
-          </p>
+          <Notice tone="err" label="Failed" className="mb-4">
+            <p className="text-xs leading-relaxed text-text-muted">{error}</p>
+          </Notice>
         )}
 
         {loading && <p className="text-sm text-text-muted">Reading the library…</p>}
@@ -211,6 +174,8 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
           <p className="text-sm text-text-muted">The library could not be read.</p>
         )}
 
+        {/* Empty library: nothing to list, nothing to select, so the page says
+            what a Snapshot is instead of framing an empty pane. */}
         {!loading && view && !problem && all.length === 0 && (
           <div className="flex flex-col items-start gap-2 border border-dashed border-border px-4 py-6">
             <p className="font-heading text-sm text-text">{EMPTY_LIBRARY_TITLE}</p>
@@ -261,187 +226,311 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
         )}
 
         {snapshots.length > 0 && (
-          <ul className="flex flex-col divide-y divide-border">
-            {snapshots.map((snapshot) => {
-              const rowEditing = editing?.id === snapshot.id;
-              const confirming = confirmingId === snapshot.id;
-              const selected = target?.id === snapshot.id;
-              const name = snapshotTitle(snapshot);
-              return (
-                <li
-                  key={snapshot.id}
-                  className={`flex items-start justify-between gap-4 py-3 first:pt-0 ${
-                    selected ? "bg-surface/40" : ""
-                  }`}
-                >
-                  <div className="min-w-0 flex-1">
-                    {confirming ? (
-                      <RowDeleteConfirmation
-                        name={name}
-                        onConfirm={() => deleteSnapshot(snapshot)}
-                        onDismiss={() => setConfirmingId(null)}
-                      >
-                        The Snapshot is removed from the library file and no copy is kept. The Tag
-                        itself is not touched.
-                      </RowDeleteConfirmation>
-                    ) : rowEditing && editing ? (
-                      <div className="flex flex-col gap-2">
-                        <input
-                          autoFocus
-                          value={editing.draft.name}
-                          onChange={(e) =>
-                            setEditing({
-                              id: snapshot.id,
-                              draft: { ...editing.draft, name: e.target.value },
-                            })
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") {
-                              e.preventDefault();
-                              commitEdit(snapshot);
-                            }
-                            if (e.key === "Escape") setEditing(null);
-                          }}
-                          placeholder={snapshot.id}
-                          aria-label={`Name for ${name}`}
-                          disabled={Boolean(problem)}
-                          className="w-full max-w-64 rounded-md border border-accent bg-canvas px-2 py-1 text-sm text-text outline-none disabled:opacity-50"
-                        />
-                        <textarea
-                          value={editing.draft.note}
-                          onChange={(e) =>
-                            setEditing({
-                              id: snapshot.id,
-                              draft: { ...editing.draft, note: e.target.value },
-                            })
-                          }
-                          onKeyDown={(e) => {
-                            if (e.key === "Escape") setEditing(null);
-                          }}
-                          rows={2}
-                          placeholder="Note — what this Tag opens, or which site it is for"
-                          aria-label={`Note for ${name}`}
-                          disabled={Boolean(problem)}
-                          className="w-full resize-y rounded-md border border-border bg-canvas px-2 py-1 text-xs leading-relaxed text-text placeholder-text-muted/60 outline-none focus:border-accent disabled:opacity-50"
-                        />
-                        <div className="flex items-center gap-2">
-                          <Button variant="primary" onClick={() => commitEdit(snapshot)}>
-                            Save
-                          </Button>
-                          <Button variant="ghost" onClick={() => setEditing(null)}>
-                            Cancel
-                          </Button>
-                        </div>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          if (problem) return;
-                          setConfirmingId(null);
-                          setEditing({ id: snapshot.id, draft: draftOf(snapshot) });
-                        }}
-                        aria-label={`Rename ${name} or add a note`}
-                        title={
-                          problem
-                            ? "The library file cannot be written to"
-                            : "Rename, or add a note"
-                        }
-                        className="-mx-1 flex cursor-pointer items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-surface-raised"
-                      >
-                        <span className="truncate text-sm text-text">{name}</span>
-                        {!problem && <Pencil size={11} className="shrink-0 text-text-muted" />}
-                      </button>
-                    )}
-
-                    <div className="mt-1 flex items-center gap-1">
-                      <span className="select-text font-mono text-xs text-accent-muted">
+          <div data-layout="list-detail" className="flex flex-col gap-6 md:flex-row md:items-start">
+            {/* The list column scrolls on its own, so five hundred Snapshots
+                never stretch the page and never move the pane out of reach. */}
+            <ul
+              role="list"
+              className="flex max-h-[55vh] min-w-0 flex-col gap-0.5 overflow-y-auto overscroll-contain pr-1 md:w-56 md:shrink-0"
+            >
+              {snapshots.map((snapshot) => {
+                const isOpen = snapshot.id === selectedId;
+                const name = snapshotTitle(snapshot);
+                return (
+                  <li key={snapshot.id}>
+                    <button
+                      type="button"
+                      aria-label={`${name} — ${snapshot.id}`}
+                      aria-pressed={isOpen}
+                      onClick={() => choose(snapshot.id)}
+                      className={`flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left transition-colors ${
+                        isOpen ? "bg-surface-raised" : "hover:bg-surface/60"
+                      }`}
+                    >
+                      <span className="w-full max-w-full truncate text-sm text-text">{name}</span>
+                      <span className="w-full max-w-full truncate font-mono text-[11px] text-accent-muted">
                         {snapshot.id}
                       </span>
-                      <button
-                        aria-label={`Copy ${snapshot.id}`}
-                        onClick={() => void copyId(snapshot.id)}
-                        className="cursor-pointer rounded-md p-1 text-text-muted transition-colors hover:bg-surface-raised hover:text-text"
-                      >
-                        {copiedId === snapshot.id ? (
-                          <Check size={11} className="text-ok" />
-                        ) : (
-                          <Copy size={11} />
-                        )}
-                      </button>
-                    </div>
-                    <p className="mt-0.5 text-[11px] text-text-muted">
-                      {snapshotDetail(snapshot)}
-                    </p>
-                    {snapshot.note.trim().length > 0 && (
-                      <p className="mt-1 max-w-prose whitespace-pre-wrap border-l border-border pl-2 text-[11px] leading-relaxed text-text-muted">
-                        {snapshot.note}
-                      </p>
-                    )}
-                    {snapshot.identity && (
-                      <p
-                        className="mt-0.5 text-[11px] text-text-muted"
-                        title={CONFIRMED_COPIES_HINT}
-                      >
-                        <span className="border-b border-dotted border-text-muted/40">
-                          {confirmedCopiesLabel(snapshot.writeCount)}
-                        </span>
-                      </p>
-                    )}
-                  </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
 
-                  {!confirming && (
-                    <div className="flex shrink-0 items-center gap-1">
-                      {snapshot.identity && (
-                        <Button
-                          variant={selected ? "primary" : "secondary"}
-                          onClick={() => {
-                            setTarget(selected ? null : snapshot);
-                            setWriteResult(null);
-                            setWriteErr(null);
-                          }}
-                        >
-                          {selected ? "Selected" : "Write"}
-                        </Button>
-                      )}
-                      <button
-                        aria-label={`Delete ${name}`}
-                        title={problem ? "The library file cannot be written to" : "Delete"}
-                        disabled={Boolean(problem)}
-                        onClick={() => {
-                          setEditing(null);
-                          setConfirmingId(snapshot.id);
-                        }}
-                        className="cursor-pointer rounded-md p-1.5 text-text-muted transition-colors hover:bg-surface-raised hover:text-err disabled:cursor-not-allowed disabled:opacity-40"
-                      >
-                        <Trash2 size={13} />
-                      </button>
-                    </div>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-
-        {target?.identity && (
-          <div className="mt-4 flex flex-col gap-3 border-t border-border pt-4">
-            <p className="text-xs leading-relaxed text-text-muted">
-              Writing <span className="font-mono text-text">{target.id}</span>. Put a{" "}
-              <strong className="text-text">blank</strong> tag on the reader — not the original.
-              The write is permanent.
-            </p>
-            <div className="flex gap-2">
-              <Button
-                variant="primary"
-                disabled={!connected || writeBusy}
-                onClick={() => void writeSaved()}
+            {selected ? (
+              <SnapshotDetail
+                // Keyed by the Snapshot: opening another one starts from a fresh
+                // draft and a fresh write report, never the last one's.
+                key={selected.id}
+                snapshot={selected}
+                connected={connected}
+                locked={Boolean(problem)}
+                onEdit={(draft) => void edit(selected.id, draft)}
+                onDelete={() => deleteSnapshot(selected.id)}
+                reload={reload}
+              />
+            ) : (
+              <section
+                role="region"
+                aria-label="Snapshot detail"
+                className="min-w-0 flex-1 md:border-l md:border-border md:pl-6"
               >
-                {writeBusy ? "Writing…" : "Write to tag"}
+                <p className="text-sm text-text">Nothing selected</p>
+                <p className="mt-1 max-w-prose text-xs leading-relaxed text-text-muted">
+                  Choose a Snapshot from the list to rename it, add a note, or write it back to a
+                  tag.
+                </p>
+              </section>
+            )}
+          </div>
+        )}
+      </Section>
+
+      {/* The whole library's file, its export and import, and clearing saved
+          data are Settings → Data: they act on the library rather than on what is
+          being browsed. This page is for finding things. */}
+    </div>
+  );
+}
+
+interface SnapshotDetailProps {
+  /** The Snapshot the pane is showing. Changing it remounts the pane. */
+  snapshot: Snapshot;
+  connected: boolean;
+  /** The library file cannot be written, so nothing that writes to it may run. */
+  locked: boolean;
+  /** Save this draft of the name and note. The caller owns the store. */
+  onEdit: (draft: SnapshotDraft) => void;
+  onDelete: () => void;
+  reload: () => Promise<void>;
+}
+
+/**
+ * The Snapshot the list has open, and everything that changes it.
+ *
+ * The pane is one Snapshot at a time and is remounted when the id changes, so a
+ * half-typed note or a write report can never carry over onto the next Snapshot.
+ * Its text is a draft: the stored Snapshot is written from `onEdit` and from
+ * nowhere else, which is what keeps "cancel" meaning something.
+ */
+function SnapshotDetail({
+  snapshot,
+  connected,
+  locked,
+  onEdit,
+  onDelete,
+  reload,
+}: SnapshotDetailProps) {
+  const [draft, setDraft] = useState<SnapshotDraft>(() => draftOf(snapshot));
+  // The store is the truth: after a save, or a reload that changed the file, the
+  // draft follows what is stored rather than arguing with it.
+  useEffect(() => {
+    setDraft(draftOf(snapshot));
+  }, [snapshot.id, snapshot.name, snapshot.note]);
+
+  // Deleting is permanent, so it takes a second, deliberate click.
+  const [confirming, setConfirming] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [writeBusy, setWriteBusy] = useState(false);
+  const [writeResult, setWriteResult] = useState<WriteResult | null>(null);
+  const [writeErr, setWriteErr] = useState<string | null>(null);
+
+  const name = snapshotTitle(snapshot);
+  const dirty = draftIsDirty(snapshot, draft);
+  const notice = writeResult ? writeNotice(writeResult) : null;
+  const lockedHint = locked ? "The library file cannot be written to" : undefined;
+
+  const copyId = async () => {
+    try {
+      await navigator.clipboard.writeText(snapshot.id);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      // Clipboard can be unavailable; the id is visible and selectable anyway.
+    }
+  };
+
+  const writeSaved = async () => {
+    if (!snapshot.identity) return;
+    setWriteBusy(true);
+    setWriteErr(null);
+    setWriteResult(null);
+    try {
+      const res = await invoke<WriteResult>("lf_write", {
+        customer: snapshot.identity.customer,
+        data32: snapshot.identity.data32,
+      });
+      setWriteResult(res);
+      // One write, one outcome: the same factory the two write paths use, in the
+      // write vocabulary's own words, whatever it came to. A verified write is
+      // heard as done, an unconfirmed one as needs-you, a refusal as attention —
+      // none of that is decided here.
+      report(outcomes.write("write", res));
+      // Only a confirmed copy changes the count, so only then is the list stale.
+      if (res.confirmedCopies !== null) void reload();
+    } catch (e) {
+      setWriteErr(describeDeviceFailure(e));
+      report(outcomes.readerFailure(e));
+    } finally {
+      setWriteBusy(false);
+    }
+  };
+
+  return (
+    <section
+      role="region"
+      aria-label="Snapshot detail"
+      className="flex min-w-0 flex-1 flex-col gap-4 md:border-l md:border-border md:pl-6"
+    >
+      <div className="flex flex-col gap-2">
+        <div className="flex min-w-0 items-center gap-1">
+          <span className="min-w-0 truncate select-text font-mono text-sm text-accent-muted">
+            {snapshot.id}
+          </span>
+          <button
+            type="button"
+            aria-label={`Copy ${snapshot.id}`}
+            onClick={() => void copyId()}
+            className="shrink-0 cursor-pointer rounded-md p-1 text-text-muted transition-colors hover:bg-surface-raised hover:text-text"
+          >
+            {copied ? <Check size={12} className="text-ok" /> : <Copy size={12} />}
+          </button>
+        </div>
+        <p className="text-xs leading-relaxed text-text-muted">{snapshotDetail(snapshot)}</p>
+        {/* A confirmed copy is a copy whichever band it landed on: a 13.56 MHz
+            Snapshot's Records written to another Tag raise the same count. */}
+        <p className="text-xs text-text-muted" title={CONFIRMED_COPIES_HINT}>
+          <span className="border-b border-dotted border-text-muted/40">
+            {confirmedCopiesLabel(snapshot.writeCount)}
+          </span>
+        </p>
+        {/* Everything a 13.56 MHz read kept, reviewable here with no Reader.
+            A 125 kHz Snapshot has no such area, and this component renders
+            nothing for one. */}
+        <HfSnapshotReview snapshot={snapshot} />
+      </div>
+
+      {confirming ? (
+        <div className="border-t border-border pt-4">
+          <RowDeleteConfirmation
+            name={name}
+            onConfirm={() => {
+              setConfirming(false);
+              onDelete();
+            }}
+            onDismiss={() => setConfirming(false)}
+          >
+            The Snapshot is removed from the library file and no copy is kept. The Tag itself is
+            not touched.
+          </RowDeleteConfirmation>
+        </div>
+      ) : (
+        <>
+          <div className="flex flex-col gap-3 border-t border-border pt-4">
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">Name</span>
+              <Input
+                value={draft.name}
+                onChange={(value) => setDraft({ ...draft, name: value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    if (dirty && !locked) onEdit(draft);
+                  }
+                  if (e.key === "Escape") setDraft(draftOf(snapshot));
+                }}
+                placeholder={snapshot.id}
+                aria-label={`Name for ${name}`}
+                disabled={locked}
+              />
+            </label>
+            <label className="flex flex-col gap-1">
+              <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">Note</span>
+              <textarea
+                value={draft.note}
+                onChange={(e) => setDraft({ ...draft, note: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape") setDraft(draftOf(snapshot));
+                }}
+                rows={3}
+                placeholder="Note — what this Tag opens, or which site it is for"
+                aria-label={`Note for ${name}`}
+                disabled={locked}
+                className="w-full resize-y rounded-lg border border-border bg-surface px-4 py-2 text-sm leading-relaxed text-text placeholder-text-muted/60 outline-none transition-colors focus:border-accent disabled:opacity-50"
+              />
+            </label>
+            <div className="flex items-center gap-2">
+              <Button variant="primary" disabled={locked || !dirty} onClick={() => onEdit(draft)}>
+                Save
               </Button>
-              <Button variant="ghost" disabled={writeBusy} onClick={() => setTarget(null)}>
-                Cancel
+              <Button variant="ghost" disabled={!dirty} onClick={() => setDraft(draftOf(snapshot))}>
+                Revert
               </Button>
             </div>
+          </div>
+
+          <div className="flex flex-col gap-3 border-t border-border pt-4">
+            {snapshot.identity ? (
+              <>
+                <p className="text-xs leading-relaxed text-text-muted">
+                  Put a <strong className="text-text">blank</strong> Tag on the reader — not the
+                  original. The write is permanent.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="primary"
+                    disabled={!connected || writeBusy}
+                    onClick={() => void writeSaved()}
+                  >
+                    {writeBusy ? "Writing…" : "Write to tag"}
+                  </Button>
+                  <Button
+                    variant="danger"
+                    aria-label={`Delete ${name}`}
+                    title={lockedHint}
+                    disabled={locked}
+                    onClick={() => setConfirming(true)}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                {/* Writing a Snapshot's Records is the same operation writing a
+                    Draft is — one NDEF message, one confirmation naming what it
+                    replaces, one read-back — so it is the same control. What
+                    differs is provenance: a verified write counts a confirmed
+                    copy on this Snapshot, and a write that is not verified counts
+                    nothing. */}
+                {(snapshotRecords(snapshot)?.length ?? 0) > 0 ? (
+                  <WriteDraftToTag
+                    records={snapshotRecords(snapshot) ?? []}
+                    connected={connected}
+                    snapshotId={snapshot.id}
+                    subject="Snapshot"
+                    onCountChanged={() => void reload()}
+                  />
+                ) : (
+                  <p className="text-xs leading-relaxed text-text-muted">
+                    {snapshotRecords(snapshot) === null
+                      ? "This Snapshot records no list of Records, so there is no message to write back. It is not an empty message: nothing was read."
+                      : "This Snapshot's Tag carried no Records, so there is no message to write back."}
+                  </p>
+                )}
+                <div>
+                  <Button
+                    variant="danger"
+                    aria-label={`Delete ${name}`}
+                    title={lockedHint}
+                    disabled={locked}
+                    onClick={() => setConfirming(true)}
+                  >
+                    Delete
+                  </Button>
+                </div>
+              </>
+            )}
             {writeErr && <p className="text-xs text-err">{writeErr}</p>}
             {notice && (
               <p className={`text-xs leading-relaxed ${NOTICE_TONE_CLASS[notice.tone]}`}>
@@ -454,74 +543,34 @@ export function LibraryPage({ connected, library, onChirp }: LibraryPageProps) {
               </p>
             )}
           </div>
-        )}
-      </Section>
+        </>
+      )}
+    </section>
+  );
+}
 
-      <Section
-        title="Export and import"
-        hint="The whole library in one file: back it up, or move it to another machine. An import adds what is missing and leaves every entry already here exactly as it is."
-      >
-        <div className="flex flex-wrap gap-2">
-          <Button
-            variant="secondary"
-            disabled={problem !== null || fileBusy}
-            onClick={() => void exportLibrary()}
-          >
-            Export library…
-          </Button>
-          <Button
-            variant="secondary"
-            disabled={problem !== null || fileBusy}
-            onClick={() => void chooseImport()}
-          >
-            Import library…
-          </Button>
-        </div>
-
-        {importPreview && importPath && (
-          <div className="mt-4 flex flex-col gap-3 border-l-2 border-accent bg-accent/5 px-3 py-3">
-            <p className="text-sm leading-relaxed text-text">
-              {describeImportPreview(importPreview)}
-            </p>
-            <code className="select-text break-all font-mono text-[11px] text-text-muted">
-              {importPath}
-            </code>
-            <p className="text-xs leading-relaxed text-text-muted">
-              Nothing has been written yet. Add to library applies the import; Cancel leaves the
-              library exactly as it is.
-            </p>
-            <div className="flex gap-2">
-              <Button
-                variant="primary"
-                disabled={fileBusy || nothingToAdd(importPreview)}
-                onClick={() => void confirmImport()}
-              >
-                {fileBusy ? "Adding…" : "Add to library"}
-              </Button>
-              <Button variant="ghost" disabled={fileBusy} onClick={resetImport}>
-                Cancel
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {fileNote && (
-          <div className="mt-3">
-            <p className="text-xs leading-relaxed text-ok">{fileNote.text}</p>
-            {fileNote.path && (
-              <code className="mt-1 block select-text break-all font-mono text-[11px] text-text-muted">
-                {fileNote.path}
-              </code>
-            )}
-          </div>
-        )}
-      </Section>
-
-      <Section title="Where this is kept" hint={LIBRARY_PLAINTEXT_NOTICE}>
-        <code className="block select-text break-all rounded-lg border border-border bg-canvas px-3 py-2 font-mono text-xs leading-relaxed text-text-muted">
-          {view?.path ?? "the app data directory"}
-        </code>
-      </Section>
-    </div>
+/**
+ * The one control that keeps both Collections reachable.
+ *
+ * It sits above the panel rather than inside either one, so switching does not
+ * feel like navigating: it is the same page, showing the other Collection.
+ */
+function CollectionSwitch({
+  value,
+  onChange,
+}: {
+  value: Collection;
+  onChange: (next: Collection) => void;
+}) {
+  return (
+    <Segmented
+      label="Collection"
+      value={value}
+      options={[
+        { value: "snapshots", label: "Snapshots" },
+        { value: "drafts", label: "Drafts" },
+      ]}
+      onChange={onChange}
+    />
   );
 }

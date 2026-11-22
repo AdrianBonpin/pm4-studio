@@ -1168,11 +1168,13 @@ pub fn write_message(reader: &Reader, message: &[u8]) -> NdefWrite {
         WriteOutcome::Failed => report
             .message
             .or_else(|| Some("the write could not be sent".to_string())),
-        // An NDEF write replaces a message; it never blanks a Tag, so this
-        // arm is unreachable. Stated rather than defaulted so a future change
-        // to the shared vocabulary fails loudly here instead of silently.
-        WriteOutcome::Blanked => Some(
-            "the write reported a blanked Tag, which an NDEF write cannot produce".to_string(),
+        // An NDEF write replaces a message; it never clears or destroys a 125 kHz
+        // Identity, so these arms are unreachable. Stated rather than defaulted so
+        // a future change to the shared vocabulary fails loudly here instead of
+        // silently.
+        WriteOutcome::Cleared | WriteOutcome::Destroyed => Some(
+            "the write reported a cleared or destroyed Tag, which an NDEF write cannot produce"
+                .to_string(),
         ),
         // Nor can it erase: `write_message` refuses an empty message, and erasing
         // is `erase_ndef`'s job. Named rather than defaulted for the same reason.
@@ -1185,6 +1187,15 @@ pub fn write_message(reader: &Reader, message: &[u8]) -> NdefWrite {
             Ok(Some(_)) => "the write was sent but the Tag does not read back as the message                             that was written, so what it holds is unknown"
                 .to_string(),
         }),
+        // A Draft write is a copy, so it never concludes a chip refuses writes:
+        // that is Reset's reading of a still-identified Tag after a blanking
+        // write. Named rather than defaulted for the same reason as the two
+        // arms above.
+        WriteOutcome::WillNotAcceptWrites => Some(
+            "the write reported that the tag will not accept writes, which a Draft write cannot \
+             produce"
+                .to_string(),
+        ),
     };
 
     report
@@ -1458,15 +1469,24 @@ pub fn erase_ndef(reader: &Reader) -> EraseReport {
             "the erase was sent but the Tag could not be read back, so what it holds is unknown"
                 .to_string(),
         ),
-        // An erase cannot blank a Tag's 125 kHz Identity, and it does not verify
-        // a copy. Both arms are unreachable; naming them keeps a future change to
-        // the shared vocabulary from silently wording an erase as a write.
-        WriteOutcome::Blanked => Some(
-            "the erase reported a blanked Tag, which clearing NDEF content cannot produce"
+        // An erase cannot clear or destroy a Tag's 125 kHz Identity, and it does
+        // not verify a copy. These arms are unreachable; naming them keeps a
+        // future change to the shared vocabulary from silently wording an erase as
+        // a write.
+        WriteOutcome::Cleared | WriteOutcome::Destroyed => Some(
+            "the erase reported a cleared or destroyed Tag, which clearing NDEF content cannot produce"
                 .to_string(),
         ),
         WriteOutcome::Verified => Some(
             "the erase reported a verified write, which clearing NDEF content cannot produce"
+                .to_string(),
+        ),
+        // Nor can it conclude that a chip refuses writes: that is Reset's
+        // reading of a still-identified Tag after a blanking write. Unreachable
+        // here, and named so the shared vocabulary cannot silently absorb it.
+        WriteOutcome::WillNotAcceptWrites => Some(
+            "the erase reported that the tag will not accept writes, which clearing NDEF \
+             content cannot produce"
                 .to_string(),
         ),
     };
@@ -2529,10 +2549,11 @@ mod tests {
         assert_eq!(info.tag_type, 5);
         assert_eq!(info.uid, RECORDED_UID);
         assert_eq!(info.token, [0xFF; 8]);
-        assert_eq!(
-            info.identity("2026-11-21T09:30:00.000Z").tag_label,
-            "NTAG215"
-        );
+        // The identity a dump carries keeps the reported type as a number. A
+        // dump has no ATQA/SAK pair, so it names no family.
+        let identity = info.identity("2026-11-21T09:30:00.000Z");
+        assert_eq!(identity.tag_type, 5);
+        assert_eq!(identity.uid, RECORDED_UID);
     }
 
     #[test]

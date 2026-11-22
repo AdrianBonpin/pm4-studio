@@ -6,8 +6,28 @@
  * device handle stays in Rust; this module only interprets what Rust returns.
  */
 
-/** What went wrong, in terms a user can act on. */
-export type DeviceFailure = "absent" | "claimed" | "wedged" | "unknown";
+/**
+ * What went wrong, in terms a user can act on.
+ *
+ * `absent` and `gone` are the same wire message — "the Reader is not there" —
+ * reported from two different moments, and they are not the same news:
+ *
+ *   - `absent` is a **state**: nothing was plugged in, nothing was attempted, and
+ *     nothing happened. At rest that is the normal condition of an app whose
+ *     hardware is optional, so it is said on screen and it is silent.
+ *   - `gone` is an **event**: an operation was running against a Reader the app
+ *     was talking to, and the Reader stopped being there, so that operation did
+ *     not complete. Nothing may be claimed about the Tag it was working on — not
+ *     even that the Tag is unchanged, because a write may have been partly sent.
+ *     That is the Attention symbol, whose meaning is "nothing completed": see the
+ *     note on the wording in ADR 0009.
+ *
+ * The classification of a message alone cannot tell them apart — the text is the
+ * same — so the distinction is made by the caller that knows whether an operation
+ * was in flight: `outcome.readerFailure` for an operation, `outcome.readerState`
+ * for the Reader's condition at rest.
+ */
+export type DeviceFailure = "absent" | "gone" | "claimed" | "wedged" | "unknown";
 
 export interface DeviceFailureNotice {
   tone: "muted" | "warn" | "error";
@@ -21,6 +41,12 @@ export interface DeviceFailureNotice {
  * Render this list from one place (`components/ReaderLimits.tsx`) and never
  * repeat an entry against an individual Tag: a missing field is a property of
  * this hardware, not of the Tag being read.
+ *
+ * An entry outlives the work that removes the reason for it, so each claim here
+ * is pinned by the guard in `readerIdentity.test.ts`: a sentence saying a
+ * capability is absent fails the suite once the module that implements it
+ * exists. Correcting an entry is part of shipping the capability, not tidying
+ * that can wait.
  */
 export interface CapabilityLimit {
   readonly id: string;
@@ -33,7 +59,12 @@ export const READER_CAPABILITY_LIMITS: readonly CapabilityLimit[] = [
     id: "ndef",
     label: "NDEF messages",
     detail:
-      "Not readable or writable today. The NTAG commands that carry NDEF have never answered on this Reader, so a 13.56 MHz Tag reports its UID and its raw payload only.",
+      "Available through the Type 2 TLV. A Type 2 Tag's message is read and listed as Records, " +
+      "written back from a Draft, and erased — read, write and erase are each verified on " +
+      "hardware. Copy carries a whole message to a second Tag, though its read-back has not yet " +
+      "been recorded on hardware. MIFARE Classic carries no Type 2 container, so NDEF is not " +
+      "possible there; password protection and APDU passthrough stay unavailable in their own " +
+      "entries.",
   },
   {
     id: "mifare-classic",
@@ -48,16 +79,33 @@ export const READER_CAPABILITY_LIMITS: readonly CapabilityLimit[] = [
       "Not available. Without a transparent APDU channel there is no Signature, authenticated NFC counter, or password-protection status.",
   },
   {
+    id: "password",
+    label: "Password protection",
+    detail:
+      "Not available on a 13.56 MHz Tag. Setting or clearing a password needs authentication this Reader has no command for, so a password cannot be set here and one set by another device cannot be cleared. The operation is absent from the interface rather than offered and refused.",
+  },
+  {
     id: "uid-width",
     label: "7- and 10-byte UIDs",
     detail:
-      "Not decoded. Only 4-byte UIDs are split out; a longer UID is shown as raw bytes.",
+      "Decoded. The reply states its own UID length byte, and 4-, 7- and 10-byte widths are all " +
+      "read from it: a 7-byte UID is presented as seven bytes, with no fallback. The 10-byte " +
+      "width has a decoder but no hardware confirmation yet, because no 10-byte Tag has been " +
+      "tried — an open question rather than a limit.",
   },
   {
     id: "restore",
     label: "Factory restore and unlock",
     detail:
       "Not possible. A T5577 configuration block cannot be written, and a Tag locked by an earlier write cannot be recovered.",
+  },
+  {
+    // Stated once, here, so a missing check reads as a documented limit rather
+    // than a missing feature (ADR 0007). The absence is deliberate and permanent.
+    id: "writability",
+    label: "125 kHz writability",
+    detail:
+      "Cannot be determined without attempting a write. A 125 kHz reply carries no Tag family and no writability flag, so no command can answer whether a Tag will accept a write — and every command that would answer is itself a write. There is therefore no probe, in this app or in the protocol, and none is planned: Clear is the test.",
   },
 ];
 
@@ -113,6 +161,16 @@ export function deviceFailureNotice(failure: DeviceFailure): DeviceFailureNotice
         title: "No Reader attached",
         detail:
           "Plug the NFC-PM4 Reader into a USB port and press Connect. Everything in the library stays usable without it.",
+      };
+    case "gone":
+      // The same absence, one operation later. Never the quiet tone: an operation
+      // was running and did not complete, and whether it left anything on the Tag
+      // is unknown, so the message says to check rather than to relax.
+      return {
+        tone: "error",
+        title: "The Reader went away",
+        detail:
+          "It stopped being available while the operation was running, so the operation did not complete. Plug the NFC-PM4 Reader back in, press Reconnect, and check the Tag before relying on what was on it.",
       };
     case "claimed":
       return {

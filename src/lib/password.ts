@@ -23,7 +23,7 @@
  * wording here and that decision cannot drift apart into a working "set".
  */
 
-import type { NoticeTone, WriteNotice } from "./writeOutcome";
+import type { NoticeTone } from "./noticeTone";
 
 /** The verb this feature uses for itself, setting. */
 export const PASSWORD_ACTION_SET = "Set a password";
@@ -192,6 +192,13 @@ export interface PasswordStatus {
 
 /** What one requested operation came to. */
 export interface PasswordAttempt {
+  /**
+   * The wire name for "this request was declined", and always `refused`.
+   *
+   * It is `lib/password`'s own field, not the seam's `Outcome`: a request the app
+   * will not even attempt is a condition of the panel, drawn inline with the tone
+   * below, and it produces no message in the corner and no sound.
+   */
   outcome: "refused";
   /** "not-acknowledged" | "cannot-authenticate" | "protection-unknown" | ... */
   refusal: string;
@@ -219,11 +226,26 @@ export function protectionSentence(protection: ProtectionState): string {
   }
 }
 
-/** One line about how the outcome is worded, given the refusal code. */
+/** One line about how one attempt is worded, given the refusal code. */
 export function noticeTone(attempt: PasswordAttempt): NoticeTone {
   // Not acknowledging is a user action, not a Tag risk: amber. Everything else
   // is the app declining to touch the Tag: red.
   return attempt.refusal === "not-acknowledged" ? "warn" : "err";
+}
+
+/**
+ * The notice a refused attempt is drawn in: the ink and the sentence.
+ *
+ * Not a `WriteNotice`: a write notice is the words for a write that happened, and
+ * nothing here happened. This is a **condition** — the panel's own state, saying
+ * that the operation is not offered and why — so it carries a presentation tone
+ * chosen here rather than a severity read from the seam (see `lib/noticeTone`, and
+ * ADR 0008's note on conditions). There is no frame behind it and no sound: no
+ * password operation has ever sent one.
+ */
+export interface PasswordNotice {
+  tone: NoticeTone;
+  text: string;
 }
 
 /**
@@ -232,7 +254,7 @@ export function noticeTone(attempt: PasswordAttempt): NoticeTone {
  * Every attempt is a refusal, and the wording says so before it says why: no
  * password operation has ever produced a write frame on this Reader.
  */
-export function passwordNotice(attempt: PasswordAttempt): WriteNotice {
+export function passwordNotice(attempt: PasswordAttempt): PasswordNotice {
   const why = attempt.message.trim();
   return {
     tone: noticeTone(attempt),

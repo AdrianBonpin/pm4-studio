@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { isTauri } from "../lib/platform";
 import { migrateLegacyReads } from "../lib/libraryMigration";
 import type { LibraryView, SaveResult } from "../lib/library";
+import type { HfSnapshotSave } from "../lib/hfSnapshot";
 import type { ExportResult, ImportPreview, ImportResult, PickMode } from "../lib/libraryFiles";
 import type { LfCard } from "../types";
 
@@ -18,6 +19,13 @@ export interface LibraryState {
   loading: boolean;
   /** Save a 125 kHz read. `null` means the call itself failed. */
   saveLf: (card: LfCard) => Promise<SaveResult | null>;
+  /**
+   * Save a 13.56 MHz read, whole: its identity, its family, its capacity, its
+   * NDEF status, its raw reply and its Records. `null` means the call itself
+   * failed; the store's own answer — added, already there, or refused — comes
+   * back inside the result.
+   */
+  saveHf: (read: HfSnapshotSave) => Promise<SaveResult | null>;
   rename: (id: string, name: string) => Promise<void>;
   /** Write the name and note of one Snapshot in a single call, or neither. */
   edit: (id: string, draft: { name: string; note: string }) => Promise<void>;
@@ -80,6 +88,21 @@ export function useLibrary(): LibraryState {
         customer: card.customer,
         data32: card.data32,
         raw: card.raw,
+        capturedAt: new Date().toISOString(),
+      });
+      setView(result.library);
+      setError(null);
+      return result;
+    } catch (e) {
+      setError(String(e));
+      return null;
+    }
+  }, []);
+
+  const saveHf = useCallback(async (read: HfSnapshotSave): Promise<SaveResult | null> => {
+    try {
+      const result = await invoke<SaveResult>("library_save_hf", {
+        hf: read,
         capturedAt: new Date().toISOString(),
       });
       setView(result.library);
@@ -184,6 +207,7 @@ export function useLibrary(): LibraryState {
     error,
     loading,
     saveLf,
+    saveHf,
     rename,
     edit,
     remove,

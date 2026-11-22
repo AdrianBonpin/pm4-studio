@@ -3,7 +3,7 @@
  *
  * Every user-facing string in this app is checked against the same list, and it
  * is checked here rather than in each test, because a guard copied into three
- * tests is three guards that drift. `pageCopy.test.ts`, `blankTag.test.ts` and
+ * tests is three guards that drift. `pageCopy.test.ts`, `clearTag.test.ts` and
  * `eraseTag.test.ts` all call these functions; no test owns a pattern of its own.
  *
  * The vocabulary: a 125 kHz credential is a **Tag**, whatever its form factor,

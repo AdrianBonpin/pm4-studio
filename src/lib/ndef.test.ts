@@ -9,6 +9,7 @@ import {
   encodeUrlPayload,
   recordProblem,
   recordSizeBytes,
+  recordToNdef,
   recordsByteLength,
   textRecord,
   urlIdentifierCode,
@@ -953,5 +954,63 @@ describe("encoded size across the record set", () => {
     const total = everyKind.reduce((sum, record) => sum + recordSizeBytes(record), 0);
     expect(recordsByteLength(everyKind)).toBe(total);
     expect(total).toBe(encodeRecords(everyKind).length);
+  });
+});
+
+/**
+ * A Tag's own message, on its way into a Draft.
+ *
+ * Ticket 16's transfer is this codec and nothing else: the Records a read
+ * obtained are handed to a Draft unchanged, and the Draft's own encoder is what
+ * a later write sends back to a Tag. A Record that loses its kind, one of its
+ * fields, or its place among the others is the failure this exists to catch, so
+ * the expected value is written out in full and compared against what the codec
+ * produced — never against the codec's own idea of what it just did.
+ *
+ * `recordToNdef` is what a read's Records encode through on the way out, and
+ * `decodeRecords` is what they decode through on the way in, so this is the same
+ * pair the readout and the Draft both use.
+ */
+describe("a message carried from a Tag into a Draft", () => {
+  /** One of every kind this build authors, in an order that is not its own. */
+  const ON_THE_TAG: DraftRecord[] = [
+    { kind: "url", fields: { url: "https://devgo.studio/tap" } },
+    { kind: "text", fields: { language: "fr", text: "Bonjour, monde" } },
+    newPhoneRecord("+15550100"),
+    newEmailRecord("front.desk@example.com"),
+    newSmsRecord("+15550100", "Bay 3 is open"),
+    newLocationRecord("51.5074", "-0.1278"),
+    newContactRecord({
+      name: "Ada Lovelace",
+      organization: "Analytical Engines",
+      phone: "+15550100",
+      email: "ada@example.com",
+    }),
+    newWifiRecord({
+      ssid: "Front desk",
+      networkKey: "password123",
+      auth: "wpa2-personal",
+      encryption: "aes",
+    }),
+    newBluetoothRecord("AA:BB:CC:DD:EE:FF"),
+    newMimeRecord("text/plain", "48656C6C6F"),
+    newExternalRecord("devgo.studio:door", "0102FF"),
+  ];
+
+  it("keeps every Record's kind, fields and order exactly", () => {
+    const onTheWire = encodeNdefMessage(ON_THE_TAG.map(recordToNdef));
+
+    // The message the Tag holds, read into the Records a Draft would keep.
+    expect(decodeRecords(onTheWire)).toEqual(ON_THE_TAG);
+  });
+
+  it("encodes back to a message the Tag would accept, and reads the same again", () => {
+    const onTheWire = encodeNdefMessage(ON_THE_TAG.map(recordToNdef));
+    const drafted = decodeRecords(onTheWire);
+
+    // What the Draft's encoder sends is byte for byte the message that came off
+    // the Tag, so a write of the Draft is what the source Tag already accepted.
+    expect(encodeRecords(drafted)).toEqual(onTheWire);
+    expect(decodeRecords(encodeRecords(drafted))).toEqual(ON_THE_TAG);
   });
 });

@@ -36,6 +36,15 @@ Neither refusal is a warning the user can dismiss. The write does not proceed.
 
 ## Consequences
 
+- **A Tag that is present and carries no Identity is not "unreadable".** The
+  combined read folds "no Tag latched" and "a Tag with an empty data field" into
+  the same `None`, which is right for the readout and wrong here. The
+  presence-aware read (`TagPresence`) reports the second as latched with an empty
+  data field, and a write to it is a write to a position the app can see. Only
+  "nothing latched" and "a reply too short to decode" are the blind write this
+  ADR refuses. The guard therefore takes `TagPresence` rather than an optional
+  Identity; folding the two together made every write path refuse a Tag this app
+  had itself blanked.
 - A user who taps a Blank poorly gets a refusal rather than a silent failure.
   The error names the cause ("could not read the tag on the reader") so the fix
   is obvious: re-seat the tag.

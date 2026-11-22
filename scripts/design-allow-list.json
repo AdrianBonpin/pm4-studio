@@ -1,0 +1,13 @@
+{
+  "note": "Rules from the vendored impeccable detector that this project's committed visual world (gridline) overrides. Every entry needs a reason; an entry without one fails `bun run design:check`. An entry whose id is not in the vendored rule set fails too, because a suppression that no longer matches anything is a suppression nobody is checking. Both rules below are charged by rules that need a rendered page, so a source-only scan reports them as zero suppressions; they are listed so that the override is on record and so a rendered scan would not charge them either.",
+  "rules": [
+    {
+      "id": "flat-type-hierarchy",
+      "reason": "gridline sets section headings in Space Mono at body size; the hierarchy is carried by family, case and tracking rather than by a size step, and gridline is the committed world."
+    },
+    {
+      "id": "undersized-ui-text",
+      "reason": "The memory tables set 10px uppercase column labels above 14px values; gridline's committed scale bottoms out at 10px for those labels, and the vendor's 11px floor is overridden there and nowhere else."
+    }
+  ]
+}

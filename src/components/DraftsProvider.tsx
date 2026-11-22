@@ -6,7 +6,7 @@ import { useDrafts, type DraftsState } from "../hooks/useDrafts";
 /**
  * The Drafts queue and the close guard, held above the page that shows them.
  *
- * Both used to live in `DraftsPage`, which meant both ended with the page. The
+ * Both used to live in the Drafts page, which meant both ended with the page. The
  * queue is the lesser half of that: a page that unmounts can still flush, and
  * does, so leaving the section cost nothing. The guard is the half that cannot
  * be fixed from inside the page — story 57 promises that quitting never costs

@@ -1,22 +1,21 @@
-import { useState } from "react";
-import { FileText, Library as LibraryIcon, Nfc, Radio, Terminal, X } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Library as LibraryIcon, Nfc, Radio, Settings as SettingsIcon, Terminal } from "lucide-react";
 import { Badge, type BadgeTone } from "./components/ui/Badge";
 import { Button } from "./components/ui/Button";
-import { Toggle } from "./components/ui/Toggle";
+import { ToastViewport } from "./components/ToastViewport";
 import { useBeep } from "./hooks/useBeep";
 import { useLibrary } from "./hooks/useLibrary";
 import { useReader, type Status } from "./hooks/useReader";
-import {
-  classifyDeviceFailure,
-  deviceFailureNotice,
-  formatFirmwareRevision,
-} from "./lib/readerIdentity";
+import { handOffDraft } from "./lib/draftHandoff";
+import { outcomes, report } from "./lib/outcome";
+import { formatFirmwareRevision } from "./lib/readerIdentity";
 import { isMacOS, isTauri } from "./lib/platform";
 import { PAGES, type PageId } from "./lib/pageCopy";
+import type { HfMode } from "./lib/hfWorkspace";
 import { HfPage } from "./pages/HfPage";
-import { DraftsPage } from "./pages/DraftsPage";
 import { LibraryPage } from "./pages/LibraryPage";
 import { LfPage } from "./pages/LfPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { ToolsPage } from "./pages/ToolsPage";
 
 /**
@@ -34,32 +33,87 @@ const STATUS_TONE: Record<Status, BadgeTone> = {
   error: "err",
 };
 
-/** Left-rule tone per classified failure. Hardware faults carry the remedy. */
-const NOTICE_TONE = {
-  muted: { box: "border-border-hover bg-surface/50", title: "text-text" },
-  warn: { box: "border-warn bg-warn/5", title: "text-warn" },
-  error: { box: "border-err bg-err/5", title: "text-err" },
-} as const;
-
-/** The sidebar icon per page. The words are in `lib/pageCopy`. */
+/** The sidebar icon per destination. The words are in `lib/pageCopy`. */
 const PAGE_ICON: Record<PageId, typeof Nfc> = {
   lf: Nfc,
   hf: Radio,
-  drafts: FileText,
   library: LibraryIcon,
   tools: Terminal,
+  settings: SettingsIcon,
 };
 
+/**
+ * The shell.
+ *
+ * The sidebar is navigation and connection, and nothing else: five destinations
+ * above, the Reader's identity, status, firmware and Connect below. The beep
+ * preference used to sit down there, disabled whenever the Reader was unplugged,
+ * for a value stored on this machine and unrelated to the hardware; it is in
+ * Settings → Feedback now, where it is available with nothing plugged in.
+ *
+ * The destination is the shell's own state, so leaving one for another and coming
+ * back returns to the one you left — within a session, which is what it promises.
+ * It is deliberately not persisted across launches: an app that opens where you
+ * last were is a different decision, and this one is not made here.
+ *
+ * The credits that used to close every page are gone from the page flow. They are
+ * a fact about the project, so they are stated once in Settings → About.
+ *
+ * A band page's mode is the shell's state for the same reason the destination is:
+ * the page unmounts when the user visits another destination, and a mode that
+ * forgot itself on the way would send them back to Read every time. Like the
+ * destination, it lives for the session and no longer.
+ */
 export default function App() {
   const [page, setPage] = useState<PageId>("lf");
+  const [hfMode, setHfMode] = useState<HfMode>("read");
   const reader = useReader();
   const library = useLibrary();
-  const { beepOn, setBeepOn, chirp } = useBeep();
+  const { quietLevel, setQuietLevel } = useBeep();
 
   const current = PAGES.find((p) => p.id === page) ?? PAGES[0];
   const connected = reader.connected;
-  const failure = reader.error ? classifyDeviceFailure(reader.error) : "unknown";
-  const notice = reader.error ? deviceFailureNotice(failure) : null;
+
+  /**
+   * Open a Draft a page has just created, in Library's Drafts collection.
+   *
+   * The id is left where Library will look for it rather than passed as state:
+   * the page that created it is unmounted by this navigation, and the page that
+   * arrives is a fresh mount. That is also why it is a handoff and not a route —
+   * see `lib/draftHandoff`.
+   */
+  const openDraft = useCallback((draftId: string) => {
+    handOffDraft(draftId);
+    setPage("library");
+  }, []);
+
+  // The device-failure strip that used to sit at the top of the content column is
+  // gone. The same news now arrives as a message in the corner the user chose,
+  // carrying the two controls the strip carried: a reconnect and a dismiss.
+  //
+  // Reported once per distinct failure rather than once per render, so a re-render
+  // (or React's development double-invoke) cannot duplicate it. Dismissing the
+  // message clears the error behind it, which is what "dismiss" meant on the
+  // strip, and leaves the next identical failure free to be reported again.
+  const reportedFailure = useRef<string | null>(null);
+  useEffect(() => {
+    if (!reader.error) {
+      reportedFailure.current = null;
+      return;
+    }
+    if (reportedFailure.current === reader.error) return;
+    reportedFailure.current = reader.error;
+    // `readerState`, not `readerFailure`: this is the Reader's condition at rest —
+    // the launch, or a Connect press — where "no Reader attached" is a state and
+    // stays silent. An operation that loses the Reader reports through
+    // `readerFailure`, which sounds attention.
+    report(
+      outcomes.readerState(reader.error, {
+        action: { label: "Reconnect", run: () => void reader.connect() },
+        onDismiss: () => reader.setError(null),
+      }),
+    );
+  }, [reader.error, reader.connect, reader.setError]);
 
   return (
     <div className="flex h-svh flex-col overflow-hidden bg-canvas text-text select-none">
@@ -82,7 +136,7 @@ export default function App() {
             </p>
           </div>
 
-          <nav className="flex flex-col gap-0.5 px-2">
+          <nav aria-label="Destinations" className="flex flex-col gap-0.5 px-2">
             {PAGES.map((p) => {
               const Icon = PAGE_ICON[p.id];
               const active = p.id === page;
@@ -91,7 +145,7 @@ export default function App() {
                   key={p.id}
                   onClick={() => setPage(p.id)}
                   aria-current={active ? "page" : undefined}
-                  className={`flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
+                  className={`flex cursor-pointer items-center gap-2.5 whitespace-nowrap rounded-lg px-2.5 py-2 text-left text-sm transition-colors ${
                     active
                       ? "bg-surface-raised text-text"
                       : "text-text-muted hover:bg-surface hover:text-text"
@@ -122,15 +176,6 @@ export default function App() {
                 {connected ? formatFirmwareRevision(reader.firmware) : "not connected"}
               </span>
             </div>
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs text-text-muted">Beep</span>
-              <Toggle
-                checked={beepOn}
-                onChange={setBeepOn}
-                label="Beep on read and write"
-                disabled={!connected}
-              />
-            </div>
             <Button variant="secondary" className="w-full" onClick={() => void reader.connect()}>
               {connected ? "Reconnect" : "Connect"}
             </Button>
@@ -145,52 +190,9 @@ export default function App() {
                 <p className="text-sm text-text-muted">{current.subtitle}</p>
               </header>
 
-              {reader.error && notice && (
-                <div
-                  className={`flex items-start justify-between gap-3 border-l-2 px-3 py-2 ${NOTICE_TONE[notice.tone].box}`}
-                >
-                  <div className="min-w-0">
-                    {failure === "unknown" ? (
-                      <p className="text-sm text-err">{reader.error}</p>
-                    ) : (
-                      <>
-                        <p className={`text-sm ${NOTICE_TONE[notice.tone].title}`}>
-                          {notice.title}
-                        </p>
-                        <p className="mt-0.5 text-xs leading-relaxed text-text-muted">
-                          {notice.detail}
-                        </p>
-                        <p className="mt-1 select-text break-all font-mono text-[11px] text-text-muted">
-                          {reader.error}
-                        </p>
-                      </>
-                    )}
-                  </div>
-                  <div className="flex shrink-0 items-center gap-1">
-                    {failure !== "unknown" && (
-                      <Button
-                        variant="ghost"
-                        className="text-xs"
-                        onClick={() => void reader.connect()}
-                      >
-                        Reconnect
-                      </Button>
-                    )}
-                    <button
-                      aria-label="Dismiss"
-                      onClick={() => reader.setError(null)}
-                      className="cursor-pointer opacity-70 transition-opacity hover:opacity-100"
-                    >
-                      <X size={15} />
-                    </button>
-                  </div>
-                </div>
-              )}
-
               {page === "lf" && (
                 <LfPage
                   connected={connected}
-                  onChirp={chirp}
                   library={library}
                   onDeviceError={reader.setError}
                 />
@@ -198,41 +200,32 @@ export default function App() {
               {page === "hf" && (
                 <HfPage
                   connected={connected}
+                  mode={hfMode}
+                  onModeChange={setHfMode}
                   onPoll={reader.pollHfOnce}
-                  onChirp={chirp}
+                  library={library}
+                  onOpenDraft={openDraft}
                 />
               )}
-              {page === "drafts" && <DraftsPage connected={connected} />}
               {page === "library" && (
-                <LibraryPage connected={connected} library={library} onChirp={chirp} />
+                <LibraryPage connected={connected} library={library} />
               )}
               {page === "tools" && <ToolsPage connected={connected} />}
-
-              <footer className="border-t border-border pt-4 text-[11px] leading-relaxed text-text-muted">
-                Protocol reverse-engineered from USB captures. Credits:{" "}
-                <a
-                  href="https://github.com/vicrodh/cyb-nfc"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-accent-muted hover:underline"
-                >
-                  vicrodh/cyb-nfc
-                </a>{" "}
-                and{" "}
-                <a
-                  href="https://github.com/journeyman846/nfcx-tool"
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-accent-muted hover:underline"
-                >
-                  journeyman846/nfcx-tool
-                </a>
-                . Not PC/SC, not CCID.
-              </footer>
+              {page === "settings" && (
+                <SettingsPage
+                  reader={{ connected, info: reader.info, firmware: reader.firmware }}
+                  quietLevel={quietLevel}
+                  onQuietLevelChange={setQuietLevel}
+                  library={library}
+                />
+              )}
             </div>
           </div>
         </main>
       </div>
+
+      {/* Outside the page flow, so a message never moves the content under it. */}
+      <ToastViewport />
     </div>
   );
 }

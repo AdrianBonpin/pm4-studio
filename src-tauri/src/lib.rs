@@ -2,8 +2,9 @@
 
 mod atomic_file;
 pub mod author_identity;
+mod clear_data;
 pub mod batch;
-pub mod blank;
+pub mod clear;
 pub mod console;
 pub mod identity;
 pub mod library;
@@ -23,7 +24,7 @@ pub mod write_outcome;
 mod test_frames;
 
 use batch::BatchAttempt;
-use blank::BlankAttempt;
+use clear::ClearAttempt;
 use identity::Identity;
 use library::{
     Draft, InsertOutcome, Library, LibraryProblem, LibraryStore, Open, SaveError, Snapshot,
@@ -37,6 +38,7 @@ use reader::{DeviceInfo, Frame, HfCard, LfCard, LfWriteAttempt, Reader, REPORT_L
 use write_outcome::Evidence;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -95,17 +97,43 @@ pub struct RawResponse {
     pub raw: String,
 }
 
+/// Open the Reader and return what it says about itself.
+///
+/// `async` on purpose. A synchronous command is dispatched on the main thread, so
+/// opening the device there — and `HidApi::new()` enumerates every HID device —
+/// freezes the window: the event loop is inside this call, the pointer turns into
+/// a wait cursor, and nothing repaints until enumeration returns. As an async
+/// command this runs on the runtime instead, and the main thread stays free.
+///
+/// The guard matters for the same reason the freezing was possible: React's
+/// StrictMode mounts effects twice in a development build, so `useReader` used to
+/// ask to connect twice at startup. The first attempt held the reader slot while
+/// it enumerated, and because the second was dispatched on the main thread it
+/// waited on that mutex forever. A concurrent attempt now returns immediately
+/// with a reason instead of queueing, and the slot is only taken once the device
+/// is open — never across the blocking work.
 #[tauri::command]
-fn connect(state: State<'_, AppState>) -> Result<DeviceInfo, String> {
-    let mut slot = state
-        .reader
-        .lock()
-        .map_err(|_| "internal state lock poisoned".to_string())?;
-    let r = Reader::open()?;
-    let info = r.info.clone();
-    r.wake().ok();
-    *slot = Some(r);
-    Ok(info)
+async fn connect(state: State<'_, AppState>) -> Result<DeviceInfo, String> {
+    static CONNECTING: AtomicBool = AtomicBool::new(false);
+
+    if CONNECTING.swap(true, Ordering::SeqCst) {
+        return Err("a connection attempt is already running".to_string());
+    }
+
+    let outcome = (|| -> Result<DeviceInfo, String> {
+        let r = Reader::open()?;
+        let info = r.info.clone();
+        r.wake().ok();
+        let mut slot = state
+            .reader
+            .lock()
+            .map_err(|_| "internal state lock poisoned".to_string())?;
+        *slot = Some(r);
+        Ok(info)
+    })();
+
+    CONNECTING.store(false, Ordering::SeqCst);
+    outcome
 }
 
 #[tauri::command]
@@ -294,6 +322,15 @@ pub struct WriteResult {
     pub verified: bool,
     /// Why this write did not confirm a copy, when it did not.
     pub message: Option<String>,
+    /// Which of ADR 0001's two refusal conditions stopped the write, as
+    /// `"unreadable"` or `"already-carries"`. `None` for any attempt that was
+    /// transmitted, and for a failure that was never a refusal.
+    ///
+    /// This is the cause as a value rather than inside the prose above: the two
+    /// conditions have two different fixes, and a caller that had to pattern-match
+    /// a sentence to tell them apart would be one rewording away from presenting
+    /// them identically (`write_guard::RefusalCause`).
+    pub refusal_cause: Option<&'static str>,
     /// Confirmed copies of this Identity after the write, when a Snapshot in the
     /// library carries it. `None` means the library holds no such Snapshot.
     pub confirmed_copies: Option<u32>,
@@ -328,6 +365,32 @@ fn record_write_count(
     }
 }
 
+/// Apply one write outcome to the Snapshot a 13.56 MHz write came from.
+///
+/// The counting rule is `WriteOutcome::counts_as_confirmed_copy`'s, applied by
+/// the store, so this hands over the outcome it observed and nothing else. The
+/// Tag is written either way, so a library that cannot be written to is reported
+/// next to the write, never raised instead of it.
+fn record_snapshot_write_count(
+    app: &AppHandle,
+    id: &str,
+    outcome: write_outcome::WriteOutcome,
+) -> (WriteCountOutcome, Option<String>) {
+    let store = match library_store(app) {
+        Ok(store) => store,
+        Err(e) => return (WriteCountOutcome::NoSnapshot, Some(e)),
+    };
+    // Read, count and write as one step, so a count recorded now cannot replace
+    // a Draft or a Snapshot another part of the app saved a moment ago.
+    match store.update(|library| library.record_snapshot_write(id, outcome)) {
+        Ok((_, record)) => (record, None),
+        Err(SaveError::Refused(problem)) => {
+            (WriteCountOutcome::NoSnapshot, Some(problem.message()))
+        }
+        Err(e) => (WriteCountOutcome::NoSnapshot, Some(save_message(e))),
+    }
+}
+
 /// Write an Identity onto the 125 kHz tag currently on the reader.
 ///
 /// The Identity is validated before any device access, and the write itself is
@@ -348,11 +411,16 @@ fn lf_write(
     let identity = Identity::new(customer, data32).map_err(|e| e.to_string())?;
     let attempt = with_reader(&state, |r| Ok(r.lf_write_attempt(identity)))?;
 
-    let (evidence, message) = match &attempt {
-        LfWriteAttempt::Refused(why) => (Evidence::Refused, Some(why.clone())),
-        LfWriteAttempt::Failed(why) => (Evidence::NotTransmitted, Some(why.clone())),
+    let (evidence, message, refusal_cause) = match &attempt {
+        LfWriteAttempt::Refused { cause, message } => (
+            Evidence::Refused,
+            Some(message.clone()),
+            Some(cause.as_str()),
+        ),
+        LfWriteAttempt::Failed(why) => (Evidence::NotTransmitted, Some(why.clone()), None),
         LfWriteAttempt::Transmitted(card) => (
             Evidence::Readback(card.as_ref().map(LfCard::identity)),
+            None,
             None,
         ),
     };
@@ -379,6 +447,7 @@ fn lf_write(
         outcome: outcome.as_str(),
         verified: outcome.counts_as_confirmed_copy(),
         message,
+        refusal_cause,
         // A count that failed to persist is not reported as if it had.
         confirmed_copies: match count_problem {
             None => record.confirmed_copies(),
@@ -404,6 +473,10 @@ pub struct BatchAttemptView {
     pub outcome: &'static str,
     /// Why this attempt did not confirm a copy, when it did not.
     pub message: Option<String>,
+    /// Which of ADR 0001's two refusal conditions stopped the attempt, when one
+    /// did — `"unreadable"` or `"already-carries"`. A skip is the second one by
+    /// definition, and it is still never counted as a copy.
+    pub refusal_cause: Option<&'static str>,
     /// What the Tag read as for this attempt, when it read as anything.
     pub readback: Option<LfCard>,
     /// Confirmed copies of this Identity after the attempt, when a Snapshot in
@@ -448,6 +521,7 @@ fn lf_clone_attempt(
         data32,
         outcome: outcome.as_str(),
         message: verdict.message,
+        refusal_cause: verdict.refusal.map(|cause| cause.as_str()),
         readback: verdict.readback,
         confirmed_copies: match count_problem {
             None => record.confirmed_copies(),
@@ -457,62 +531,91 @@ fn lf_clone_attempt(
     })
 }
 
-/// What one guarded blanking attempt produced, in the shape the webview reads.
+/// What one guarded Clear or Destroy produced, in the shape the webview reads.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BlankResult {
-    /// The Identity the user confirmed, which is what was blanked.
+pub struct ClearResult {
+    /// The Identity the user confirmed, which is what was overwritten.
     pub customer: u8,
     pub data32: u32,
-    /// "refused" | "blanked" | "unverified" | "failed" — see `write_outcome`.
-    /// Never "verified": a blanking write creates no copy to verify.
+    /// "clear" | "destroy" — the operation the user chose, echoed back so the
+    /// interface can never word a result for a different action than it asked for.
+    pub operation: &'static str,
+    /// "refused" | "cleared" | "destroyed" | "unverified" | "failed" |
+    /// "willNotAcceptWrites" — see `write_outcome`. Never "verified": neither
+    /// operation places a copy.
     pub outcome: &'static str,
+    /// True only when the re-read presented the cleared placeholder. Mirror of
+    /// `outcome == "cleared"`, and never true for a destroy.
+    pub cleared: bool,
     /// True only when the re-read found no Identity. Mirror of
-    /// `outcome == "blanked"`.
-    pub blanked: bool,
-    /// The Identity the Tag still presents, when it still presents one.
-    pub still_identifies: Option<String>,
-    /// Why the Tag was not blanked, when it was not.
+    /// `outcome == "destroyed"`, and never true for a clear.
+    pub destroyed: bool,
+    /// The Identity the Tag presents, when it presented one: the placeholder after
+    /// a Clear that landed, and what it kept when the write did not take.
+    pub presents: Option<String>,
+    /// Why the Tag was not overwritten as asked, when it was not.
     pub message: Option<String>,
 }
 
-/// Blank the Identity on the 125 kHz tag on the reader.
+/// Clear or destroy the Identity on the 125 kHz tag on the reader.
 ///
-/// `customer` and `data32` are the Identity the user confirmed in the UI. The
-/// guard refuses unless the tag in the write position presents exactly that
-/// Identity, so a confirmation can never be applied to a different tag — and
-/// refuses outright when no tag can be read, per ADR 0001. There is no
-/// "write anyway": neither refusal is a prompt.
+/// `customer` and `data32` are the Identity the user confirmed in the UI, and
+/// `operation` is which of the two writes they asked for. The guard refuses unless
+/// the tag in the write position presents exactly that Identity, so a confirmation
+/// can never be applied to a different tag — and refuses outright when no tag can
+/// be read, per ADR 0001. There is no "write anyway": neither refusal is a prompt.
 ///
-/// Nothing is recorded in the library. Blanking destroys an Identity rather than
-/// copying one, so no Snapshot's confirmed-copy count may move; a Snapshot that
-/// describes the destroyed value stays exactly as it is, because a Snapshot
-/// records what a Tag held when it was read, not what a Tag holds now.
+/// The two operations write two different payloads and report two different
+/// outcomes, and neither can be reported as the other:
+///
+///   * `clear` writes the non-zero placeholder (customer `0x00`, data32
+///     `0x00FFFFFF`). The tag stops being a working credential and stays a live,
+///     rewritable chip: it still reads as a Tag, so a Clone or an authored Identity
+///     can be written onto it next.
+///   * `destroy` writes the neutral Identity (all zeroes). Measured on hardware,
+///     a T5577 written with it stops presenting an Identity, keeps answering every
+///     reader, and permanently refuses further data. It is the deliberate,
+///     destructive operation and it is never the default.
+///
+/// Nothing is recorded in the library. Neither operation copies an Identity, so no
+/// Snapshot's confirmed-copy count may move; a Snapshot that describes the
+/// overwritten value stays exactly as it is, because a Snapshot records what a Tag
+/// held when it was read, not what a Tag holds now.
 #[tauri::command]
-fn lf_blank(
+fn lf_clear(
     state: State<'_, AppState>,
     customer: u8,
     data32: u32,
-) -> Result<BlankResult, String> {
+    operation: String,
+) -> Result<ClearResult, String> {
+    // The wire name is closed: an unknown operation is an error rather than a
+    // default, because defaulting here would silently pick one of two irreversible
+    // writes.
+    let operation = clear::LfOperation::from_wire(&operation)?;
     // Built without `Identity::new`: a reading is not range-checked, and a tag
     // whose data field carries bits this app cannot encode is still a tag the
-    // user may want to blank.
+    // user may want to clear.
     let confirmed = Identity { customer, data32 };
-    let attempt = with_reader(&state, |r| Ok(r.lf_blank_attempt(confirmed)))?;
-    if matches!(attempt, BlankAttempt::Failed(_)) {
+    let attempt = with_reader(&state, |r| Ok(r.lf_clear_attempt(confirmed, operation)))?;
+    if matches!(attempt, ClearAttempt::Failed(_)) {
         // A transport error means the handle is suspect; drop it so the next
         // call re-enumerates instead of failing forever.
         if let Ok(mut slot) = state.reader.lock() {
             *slot = None;
         }
     }
-    let verdict = blank::verdict(&attempt);
-    Ok(BlankResult {
+    let verdict = clear::verdict(operation, &attempt);
+    let cleared = matches!(verdict.outcome, write_outcome::WriteOutcome::Cleared);
+    let destroyed = matches!(verdict.outcome, write_outcome::WriteOutcome::Destroyed);
+    Ok(ClearResult {
         customer,
         data32,
+        operation: operation.as_str(),
         outcome: verdict.outcome.as_str(),
-        blanked: matches!(verdict.outcome, write_outcome::WriteOutcome::Blanked),
-        still_identifies: verdict.still_identifies.map(|id| id.id()),
+        cleared,
+        destroyed,
+        presents: verdict.presented.map(|id| id.id()),
         message: verdict.message,
     })
 }
@@ -548,7 +651,12 @@ impl From<NdefPreview> for NdefPreviewView {
     }
 }
 
-/// What one Draft write did, in the shape the webview reads it.
+/// What one write of a message to a 13.56 MHz Tag did, in the shape the webview
+/// reads it.
+///
+/// Writing a Draft and writing a Snapshot's Records produce this same value:
+/// they are one operation with different provenance, and both are counted by the
+/// same rule.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NdefWriteView {
@@ -566,6 +674,19 @@ pub struct NdefWriteView {
     pub wrote_pages: Vec<usize>,
     /// Pages the firmware reported writing.
     pub accepted_pages: Vec<usize>,
+    /// Confirmed copies of the Snapshot these Records came from, after the
+    /// write. `None` when the write named no Snapshot (a Draft), or when the
+    /// library holds none under that id. A Draft owns no count: it is attached
+    /// to no Tag, so there is nothing to be honest about.
+    pub confirmed_copies: Option<u32>,
+    /// True only when the count actually rose — one verified write of a
+    /// Snapshot's Records. False for a Draft, for a Snapshot the library does
+    /// not hold, and for every outcome that is not a confirmed copy, so a caller
+    /// reloads the list only when there is something new in it.
+    pub count_changed: bool,
+    /// Set when the count could not be written to the library file. The Tag was
+    /// written either way, so this never fails the write.
+    pub count_problem: Option<String>,
 }
 
 impl From<NdefWrite> for NdefWriteView {
@@ -579,6 +700,10 @@ impl From<NdefWrite> for NdefWriteView {
             required_bytes: write.required_bytes,
             wrote_pages: write.wrote_pages,
             accepted_pages: write.accepted_pages,
+            // Filled in by the command when the write named a Snapshot.
+            confirmed_copies: None,
+            count_changed: false,
+            count_problem: None,
         }
     }
 }
@@ -707,24 +832,48 @@ fn hf_ndef_preview(
     with_reader(&state, |r| Ok(ntag::preview(r, &message).into()))
 }
 
-/// Write a Draft's Records to the 13.56 MHz Tag on the Reader as one complete
-/// NDEF message, then read it back.
+/// Write a message to the 13.56 MHz Tag on the Reader as one complete NDEF
+/// message, then read it back.
 ///
-/// Nothing is sent for an empty Draft or a message the Tag cannot hold, and a
-/// Tag that cannot be read first is not written at all. The write itself is one
+/// The message is a Draft's Records or a Snapshot's, encoded by the webview's
+/// one NDEF codec — this command does not care which, because writing either is
+/// the same operation and goes through the same confirmation. `snapshot_id` is
+/// the difference: when the Records came from a Snapshot, it names the Snapshot
+/// so a confirmed copy can be counted against it. A Draft names none and has no
+/// count, because it is attached to no Tag.
+///
+/// Nothing is sent for an empty message or one the Tag cannot hold, and a Tag
+/// that cannot be read first is not written at all. The write itself is one
 /// 21-report frame carrying the Tag's whole image, with only the pages the
 /// message occupies marked for writing — so the UID, lock bytes and Capability
 /// Container cannot be touched (see `ntag::plan_write`).
 ///
 /// The outcome is the same vocabulary the 125 kHz path uses: only `verified`, a
-/// read-back that matches what was written, is a write that landed.
+/// read-back that matches what was written, is a write that landed — and only
+/// then does the Snapshot's confirmed-copy count rise.
 #[tauri::command]
 fn hf_ndef_write(
+    app: AppHandle,
     state: State<'_, AppState>,
     message_hex: String,
+    snapshot_id: Option<String>,
 ) -> Result<NdefWriteView, String> {
     let message = message_bytes(&message_hex)?;
-    with_reader(&state, |r| Ok(ntag::write_message(r, &message).into()))
+    let written = with_reader(&state, |r| Ok(ntag::write_message(r, &message)))?;
+    // The outcome is read before the value is turned into its view, because the
+    // counting rule is the enum's and not a wire string's.
+    let outcome = written.outcome;
+    let mut view = NdefWriteView::from(written);
+    if let Some(id) = snapshot_id.as_deref() {
+        let (record, problem) = record_snapshot_write_count(&app, id, outcome);
+        view.count_changed = problem.is_none() && record.incremented();
+        view.confirmed_copies = match problem {
+            None => record.confirmed_copies(),
+            Some(_) => None,
+        };
+        view.count_problem = problem;
+    }
+    Ok(view)
 }
 
 /// What can be determined about the password protection of the Tag on the
@@ -968,15 +1117,191 @@ fn console_capability() -> console::CapabilityView {
     console::capability_view(console::CAPABILITY)
 }
 
-/// Where the library lives: the app data directory Tauri resolves from the
-/// bundle identifier, never a hardcoded path, so a rename of the app moves the
-/// library with it instead of losing it.
-fn library_store(app: &AppHandle) -> Result<LibraryStore, String> {
-    let dir = app
-        .path()
+/// The app data directory Tauri resolves from the bundle identifier, never a
+/// hardcoded path, so a rename of the app moves everything it saved with it
+/// instead of losing it.
+///
+/// This is the only place the directory is resolved, so the store and the clear
+/// action cannot disagree about where this app keeps its files.
+fn app_data_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
+    app.path()
         .app_data_dir()
-        .map_err(|e| format!("could not resolve the app data directory: {e}"))?;
-    Ok(LibraryStore::new(dir.join("library.json")))
+        .map_err(|e| format!("could not resolve the app data directory: {e}"))
+}
+
+/// Where the library lives: the one file name inside the app data directory.
+fn library_store(app: &AppHandle) -> Result<LibraryStore, String> {
+    Ok(LibraryStore::new(app_data_dir(app)?.join(library::FILE_NAME)))
+}
+
+/// One file the clear action removed, in the shape the webview reports.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RemovedTargetView {
+    /// "libraryFile" | "staleTemp"
+    pub target: &'static str,
+    pub path: String,
+    pub bytes: u64,
+}
+
+/// The file that stopped the clear action, and why it could not be removed.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BlockedTargetView {
+    /// "libraryFile" | "staleTemp"
+    pub target: &'static str,
+    pub path: String,
+    pub reason: String,
+}
+
+/// What clearing every file this app saved came to.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClearView {
+    /// True only when every target that existed was removed.
+    pub cleared: bool,
+    /// Exactly what was removed: never a target that was not there.
+    pub removed: Vec<RemovedTargetView>,
+    /// The part that could not be removed. `None` when `cleared` is true.
+    pub blocked: Option<BlockedTargetView>,
+}
+
+impl From<clear_data::Removed> for RemovedTargetView {
+    fn from(removed: clear_data::Removed) -> Self {
+        Self {
+            target: removed.kind.id(),
+            path: removed.path.display().to_string(),
+            bytes: removed.bytes,
+        }
+    }
+}
+
+/// Remove every file this app has saved: the library file, and the temporary
+/// sibling a save may have left beside it.
+///
+/// It takes **no path from input**. The two targets are resolved here from the
+/// app data directory, so there is no argument through which the webview (or
+/// anything else driving this command) can name a file outside this app's own
+/// storage. What is removed, and what refuses the action, is
+/// [`clear_data::clear`]'s to decide; this only resolves and reports.
+///
+/// It runs inside the library's serialisation domain, so it cannot race a save
+/// that is reading and replacing the same file. It is reachable only from the
+/// Settings → Data gate that requires the word `clear`: no save, load, import or
+/// migration calls it, which is what keeps a failed write from turning into a
+/// quiet deletion (see the exception recorded in [`library`]).
+#[tauri::command]
+fn clear_all_saved_data(app: AppHandle) -> Result<ClearView, String> {
+    let dir = app_data_dir(&app)?;
+    let scope = clear_data::ClearScope::resolve(&dir);
+    let outcome = library::serialised(|domain| clear_data::clear(domain, &scope));
+    Ok(match outcome {
+        clear_data::ClearOutcome::Cleared { removed } => ClearView {
+            cleared: true,
+            removed: removed.into_iter().map(RemovedTargetView::from).collect(),
+            blocked: None,
+        },
+        clear_data::ClearOutcome::Refused { blocked, removed } => ClearView {
+            cleared: false,
+            removed: removed.into_iter().map(RemovedTargetView::from).collect(),
+            blocked: Some(BlockedTargetView {
+                target: blocked.kind.id(),
+                path: blocked.path.display().to_string(),
+                reason: blocked.reason,
+            }),
+        },
+    })
+}
+
+/// Which file a reveal should hand to the file manager.
+///
+/// A library nobody has saved yet has no file to select, so the directory it
+/// will be written into is revealed instead: the place is the answer either way,
+/// and revealing a path that does not exist fails.
+fn reveal_target(path: &Path) -> &Path {
+    match path.is_file() {
+        true => path,
+        false => path.parent().unwrap_or(path),
+    }
+}
+
+/// Show the library file in the system file manager.
+///
+/// Takes no path: it reveals the one file the store resolved, so a caller
+/// cannot use it to open something else. The command returns the path it
+/// revealed, because every platform's file manager may be slow to appear and
+/// the page can still state where the file is.
+#[tauri::command]
+fn library_reveal(app: AppHandle) -> Result<String, String> {
+    let store = library_store(&app)?;
+    let target = reveal_target(store.path()).to_path_buf();
+    reveal_in_file_manager(&target).map_err(|e| {
+        format!(
+            "the file manager could not be opened for {}: {e}",
+            target.display()
+        )
+    })?;
+    Ok(store.path().display().to_string())
+}
+
+/// Open the system file manager at one path, selecting it where the platform
+/// can. Spawned, not awaited: the file manager is not this app's child process.
+#[cfg(target_os = "macos")]
+fn reveal_in_file_manager(path: &Path) -> std::io::Result<()> {
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(path)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(target_os = "windows")]
+fn reveal_in_file_manager(path: &Path) -> std::io::Result<()> {
+    std::process::Command::new("explorer")
+        .arg(if path.is_dir() {
+            path.as_os_str().to_owned()
+        } else {
+            format!("/select,{}", path.display()).into()
+        })
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn reveal_in_file_manager(path: &Path) -> std::io::Result<()> {
+    let dir = if path.is_dir() {
+        path
+    } else {
+        path.parent().unwrap_or(path)
+    };
+    std::process::Command::new("xdg-open")
+        .arg(dir)
+        .spawn()
+        .map(|_| ())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reveal_target;
+
+    #[test]
+    fn a_reveal_selects_the_library_file_when_it_exists() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+        std::fs::write(&path, b"{}").expect("library");
+
+        assert_eq!(reveal_target(&path), path, "the file itself is selected");
+    }
+
+    #[test]
+    fn a_reveal_of_a_library_nobody_has_saved_shows_its_directory() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("library.json");
+
+        // Revealing a path that does not exist fails on every platform, and the
+        // answer the user wants is where it will be.
+        assert_eq!(reveal_target(&path), dir.path());
+    }
 }
 
 /// Why a library file must not be read or written, in the shape the UI shows.
@@ -1127,6 +1452,42 @@ fn library_save_lf(
     match change_library(&store, |library| {
         library.add_lf(customer, data32, &raw, &captured_at)
     })? {
+        Changed::Refused(problem) => Ok(SaveResult {
+            outcome: "refused",
+            library: refused_view(&store, problem),
+            snapshot: None,
+        }),
+        Changed::Done { library, result } => match result {
+            InsertOutcome::Duplicate(existing) => Ok(SaveResult {
+                outcome: "duplicate",
+                library: loaded_view(&store, library),
+                snapshot: Some(existing),
+            }),
+            InsertOutcome::Added(added) => Ok(SaveResult {
+                outcome: "added",
+                library: loaded_view(&store, library),
+                snapshot: Some(added),
+            }),
+        },
+    }
+}
+
+/// Save a 13.56 MHz read as a Snapshot, keeping everything the read found.
+///
+/// The caller hands over the read's own fields — the UID, the raw reply, the
+/// ATQA and SAK, the family they resolved to, the capacity, the NDEF status and
+/// the Records in order — so this command adds no interpretation of its own. A
+/// read already in the library (the same UID) is reported as a duplicate instead
+/// of being stored twice, and a file this build must not write to is reported as
+/// refused rather than raised.
+#[tauri::command]
+fn library_save_hf(
+    app: AppHandle,
+    hf: library::HfFields,
+    captured_at: String,
+) -> Result<SaveResult, String> {
+    let store = library_store(&app)?;
+    match change_library(&store, |library| library.add_hf(hf, &captured_at))? {
         Changed::Refused(problem) => Ok(SaveResult {
             outcome: "refused",
             library: refused_view(&store, problem),
@@ -1513,7 +1874,7 @@ pub fn run() {
             lf_identity_preview_hex,
             lf_write,
             lf_clone_attempt,
-            lf_blank,
+            lf_clear,
             hf_ndef_preview,
             hf_ndef_write,
             hf_password_status,
@@ -1526,6 +1887,7 @@ pub fn run() {
             send_cmd,
             library_load,
             library_save_lf,
+            library_save_hf,
             library_rename,
             library_edit,
             library_delete,
@@ -1537,8 +1899,89 @@ pub fn run() {
             library_export,
             library_import_preview,
             library_import_apply,
-            library_pick_file
+            library_pick_file,
+            library_reveal,
+            clear_all_saved_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running PM4 Studio");
+}
+
+#[cfg(test)]
+mod wire_tests {
+    //! The two write views as the webview receives them.
+    //!
+    //! A refusal's cause travels as its own field rather than inside `message`,
+    //! so a test that only ever reads the prose would not notice the field being
+    //! renamed, dropped or defaulted to the wrong condition. These assertions are
+    //! about the wire shape, which is the contract the TypeScript side switches
+    //! on (`src/types.ts`).
+
+    use super::*;
+
+    fn write_result(outcome: &'static str, refusal_cause: Option<&'static str>) -> WriteResult {
+        WriteResult {
+            customer: 0x55,
+            data32: 0x0084_8212,
+            readback: None,
+            outcome,
+            verified: false,
+            message: Some("the guard said no".to_string()),
+            refusal_cause,
+            confirmed_copies: None,
+            count_problem: None,
+        }
+    }
+
+    fn attempt_view(
+        outcome: &'static str,
+        refusal_cause: Option<&'static str>,
+    ) -> BatchAttemptView {
+        BatchAttemptView {
+            customer: 0x55,
+            data32: 0x0084_8212,
+            outcome,
+            message: None,
+            refusal_cause,
+            readback: None,
+            confirmed_copies: None,
+            count_problem: None,
+        }
+    }
+
+    #[test]
+    fn a_write_refusal_carries_its_cause_beside_the_message() {
+        let json = serde_json::to_value(write_result("refused", Some("already-carries")))
+            .expect("a write result serialises");
+        assert_eq!(json["refusalCause"], "already-carries");
+        assert_eq!(json["outcome"], "refused");
+        assert_eq!(json["message"], "the guard said no");
+    }
+
+    #[test]
+    fn a_write_that_was_transmitted_carries_a_null_cause() {
+        let json = serde_json::to_value(write_result("unverified", None))
+            .expect("a write result serialises");
+        assert!(json["refusalCause"].is_null());
+    }
+
+    #[test]
+    fn a_batch_skip_carries_the_same_identity_cause_it_was_judged_by() {
+        // A skip is the guard's second condition, so it names it: the two
+        // conditions have different fixes and must not arrive looking alike.
+        let json =
+            serde_json::to_value(attempt_view("skipped", Some("already-carries")))
+                .expect("an attempt view serialises");
+        assert_eq!(json["refusalCause"], "already-carries");
+        assert_eq!(json["outcome"], "skipped");
+    }
+
+    #[test]
+    fn an_unreadable_attempt_names_the_other_condition() {
+        let json =
+            serde_json::to_value(attempt_view("refused", Some("unreadable")))
+                .expect("an attempt view serialises");
+        assert_eq!(json["refusalCause"], "unreadable");
+        assert_eq!(json["outcome"], "refused");
+    }
 }

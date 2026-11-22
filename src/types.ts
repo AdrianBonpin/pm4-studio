@@ -17,9 +17,9 @@ export type LfCard = {
 
 /** One 13.56 MHz poll reply, undecoded.
  *
- * The payload's field offsets are an unverified hypothesis, so the backend hands
- * over the bytes and the frontend decoder (`src/lib/hfDecoder.ts`) decides what
- * — if anything — can be named. */
+ * The backend hands over the bytes and the frontend decoder
+ * (`src/lib/hfDecoder.ts`) decides what — if anything — can be named. The reply
+ * layout is measured against two real tags; see docs/PROTOCOL.md. */
 export type HfCard = {
   /** Payload byte for byte as the Reader reported it. */
   payload: number[];
@@ -31,21 +31,47 @@ export type HfCard = {
  * anything was sent, `unverified` was sent but could not be read back (the tag's
  * state is unknown), and `failed` never reached the device.
  *
- * `blanked` belongs to the blanking path: the write was sent with the neutral
- * Identity and the re-read found no Identity at all. It is a destruction, never
- * a copy, and it must not be worded as "verified".
+ * `cleared` and `destroyed` belong to the two Identity-overwrite operations. They
+ * are never the same kind and one never stands in for the other:
+ *
+ *   - `cleared` — the write was sent with the non-zero placeholder and the
+ *     read-back presented exactly it. The tag stops being a working credential and
+ *     stays a live, rewritable chip.
+ *   - `destroyed` — the write was sent with the all-zero Identity and the
+ *     read-back found no Identity at all. The tag answers every reader and
+ *     permanently refuses further data. It is not recoverable and it is not
+ *     reusable.
+ *
+ * Neither is a copy and neither may be worded as "verified".
  *
  * `erased` belongs to the NDEF erase path: the write was sent and the read-back
  * showed a present tag with a valid empty NDEF message. The tag keeps its UID,
- * its Capability Container and its format; only the content is gone. Like
- * `blanked` it is never a copy and never "verified". */
+ * its Capability Container and its format; only the content is gone. Like the
+ * two above it is never a copy and never "verified". */
 export type WriteOutcome =
   | "refused"
   | "verified"
-  | "blanked"
+  | "cleared"
+  | "destroyed"
   | "erased"
   | "unverified"
   | "failed";
+
+/**
+ * Which of ADR 0001's two refusal conditions stopped a write.
+ *
+ * A refusal is not one problem with one fix, so it is not one word either. The
+ * cause is a value the backend reports rather than a sentence the interface has
+ * to pattern-match, because the two conditions are worded, sounded and remedied
+ * differently (`write_guard::RefusalCause`):
+ *
+ *   - `unreadable` — nothing could be read in the write position. The fix is a
+ *     Tag that reads: seat one, or use one that does.
+ *   - `already-carries` — the Tag read fine and already presents the Identity
+ *     being written. The fix is a different Tag; almost always the original is
+ *     still on the Reader.
+ */
+export type RefusalCause = "unreadable" | "already-carries";
 
 export type WriteResult = {
   customer: number;
@@ -57,6 +83,8 @@ export type WriteResult = {
   verified: boolean;
   /** Why this write did not confirm a copy, when it did not. */
   message: string | null;
+  /** Which refusal condition fired; null for anything that was transmitted. */
+  refusalCause: RefusalCause | null;
   /** Confirmed copies of this Identity after the write; null = no such Snapshot. */
   confirmedCopies: number | null;
   /** Set when the count could not be written to the library file. */
@@ -81,23 +109,51 @@ export type IdentityPreview = {
   payloadHex: string;
 };
 
-/** What became of one blanking attempt.
+/** Which of the two Identity-overwrite operations the user asked for.
  *
- * `blanked` means the re-read found no Identity, which is the success condition
- * for blanking — a blanked tag reads as empty. `failed` means either the write
- * never reached the device or the tag still presents an Identity afterwards;
- * `unverified` means the write was sent and could not be read back at all. */
-export type BlankResult = {
-  /** The Identity the user confirmed, which is what was blanked. */
+ * `clear` writes the non-zero placeholder and leaves a live, rewritable tag;
+ * `destroy` writes the all-zero Identity and permanently disables the tag. The
+ * value travels with the request and comes back in the result, so the interface
+ * can never word a result for a different action than the one it sent.
+ *
+ * `TAG_OPERATION` in `lib/clearTag.ts` is the one place the words live. */
+export type TagOperation = "clear" | "destroy";
+
+/** What became of one Clear or Destroy attempt.
+ *
+ * `cleared` means the re-read presented the placeholder: Clear's success
+ * condition, and a positive confirmation. `destroyed` means the re-read found no
+ * Identity: Destroy's success condition. They are distinct values because the two
+ * operations do different things, and the interface must never word one as the
+ * other.
+ *
+ * `willNotAcceptWrites` is the re-read that did not show what was written: the tag
+ * refused the write, which is a fact about the tag rather than a generic failure
+ * or an unknown (ADR 0007). `unverified` means the write was sent and could not be
+ * read back at all; `failed` means it never reached the device. */
+export type ClearResult = {
+  /** The Identity the user confirmed, which is what was overwritten. */
   customer: number;
   data32: number;
-  /** See `src/lib/blankTag.ts` for the wording of each outcome. */
-  outcome: "refused" | "blanked" | "unverified" | "failed";
-  /** True only when the re-read found no Identity. Never a "verified" claim. */
-  blanked: boolean;
-  /** The Identity the tag still presents, when it still presents one. */
-  stillIdentifies: string | null;
-  /** Why the tag was not blanked, when it was not. */
+  /** The operation the user chose, echoed back from the request. */
+  operation: TagOperation;
+  /** See `src/lib/clearTag.ts` for the wording of each outcome. */
+  outcome:
+    | "refused"
+    | "cleared"
+    | "destroyed"
+    | "unverified"
+    | "failed"
+    | "willNotAcceptWrites";
+  /** True only when the re-read presented the cleared placeholder.
+   *  Never true for a destroy, and never a "verified" claim. */
+  cleared: boolean;
+  /** True only when the re-read found no Identity. Never true for a clear. */
+  destroyed: boolean;
+  /** The Identity the tag presents, when it presented one: the placeholder after
+   *  a Clear that landed, and what it kept when the write did not take. */
+  presents: string | null;
+  /** Why the tag was not overwritten as asked, when it was not. */
   message: string | null;
 };
 
@@ -126,6 +182,12 @@ export type BatchAttemptResult = {
   outcome: BatchAttemptOutcome;
   /** Why this attempt did not confirm a copy, when it did not. */
   message: string | null;
+  /**
+   * Which of ADR 0001's two refusal conditions stopped this attempt, when one
+   * did. A `skipped` attempt is `already-carries` by definition; a `refused`
+   * attempt is normally `unreadable`. Null for a transmitted attempt.
+   */
+  refusalCause: RefusalCause | null;
   /** What the Tag read as for this attempt, when it read as anything. */
   readback: LfCard | null;
   /** Confirmed copies of this Identity after the attempt; null = no Snapshot. */

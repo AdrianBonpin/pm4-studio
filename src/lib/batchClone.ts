@@ -29,6 +29,8 @@
  */
 
 import type { BatchAttemptOutcome, BatchAttemptResult, LfCard } from "../types";
+import { NOTICE_TONE_CLASS } from "./noticeTone";
+import { attemptKind, severityOf, toneForSeverity } from "./severity";
 import { confirmedCopiesLabel, countsAsConfirmedCopy, type WriteNotice } from "./writeOutcome";
 
 /** How many attempts of each kind a run has produced. */
@@ -187,49 +189,48 @@ function countSentence(result: BatchAttemptResult): string {
  *
  * `skipped` is worded as its own result: the tag already carries the identity, so
  * nothing was written and nothing was counted. It is deliberately not worded as
- * an error the user has to fix by re-seating a tag that is already correct, and
- * never as a copy.
+ * a copy, and never as a fault in the tag that the user has to fix by re-seating
+ * a tag that is already correct — though it is a *refusal*, so it sounds and is
+ * drawn like one (attention, spec's alphabet table): "that fob is fine", "that
+ * tag was never read" and "that write is unknown" have to be three different
+ * things to hear.
  */
 export function attemptNotice(result: BatchAttemptResult): WriteNotice {
+  return {
+    tone: toneForSeverity(severityOf(attemptKind(result))),
+    text: attemptSentence(result),
+  };
+}
+
+/** The sentence for one attempt, in the words of what it actually came to. */
+function attemptSentence(result: BatchAttemptResult): string {
   switch (result.outcome) {
     case "verified":
-      return {
-        tone: "ok",
-        text:
-          `Verified — the tag reads ${result.readback?.id ?? "the identity you wrote"}.` +
-          countSentence(result),
-      };
+      return (
+        `Verified — the tag reads ${result.readback?.id ?? "the identity you wrote"}.` +
+        countSentence(result)
+      );
     case "skipped":
-      return {
-        tone: "warn",
-        text:
-          (result.message ??
-            "this tag already carries the identity being written, so nothing was written.") +
-          " Not counted as another copy." +
-          countSentence(result),
-      };
+      return (
+        (result.message ??
+          "this tag already carries the identity being written, so nothing was written.") +
+        " Not counted as another copy." +
+        countSentence(result)
+      );
     case "unverified":
-      return {
-        tone: "warn",
-        text:
-          "Unknown: " +
-          (result.message ??
-            "the write was sent but the tag did not read back") +
-          countSentence(result),
-      };
+      return (
+        "Unknown: " +
+        (result.message ?? "the write was sent but the tag did not read back") +
+        countSentence(result)
+      );
     case "refused":
-      return {
-        tone: "err",
-        text: `Not written: ${result.message ?? "the reader refused the write"}` +
-          countSentence(result),
-      };
+      return `Not written: ${result.message ?? "the reader refused the write"}` + countSentence(result);
     case "failed":
-      return {
-        tone: "err",
-        text: `Not written: the write could not be sent${
+      return (
+        `Not written: the write could not be sent${
           result.message ? ` (${result.message})` : ""
-        }.` + countSentence(result),
-      };
+        }.` + countSentence(result)
+      );
   }
 }
 
@@ -242,13 +243,19 @@ export const OUTCOME_LABEL: Record<BatchAttemptOutcome, string> = {
   failed: "Failed",
 };
 
-/** Tailwind text colour per outcome, for the run's list. */
+/**
+ * The ink of one attempt in the run's list.
+ *
+ * Read from the one tone table rather than naming a colour here, and from the
+ * severity the seam gives the kind that attempt becomes — so a skipped tag is
+ * drawn the same colour every other refusal is, and no colour is named twice.
+ */
 export const OUTCOME_TONE_CLASS: Record<BatchAttemptOutcome, string> = {
-  verified: "text-ok",
-  skipped: "text-warn",
-  unverified: "text-warn",
-  refused: "text-err",
-  failed: "text-err",
+  verified: NOTICE_TONE_CLASS.ok,
+  skipped: NOTICE_TONE_CLASS.err,
+  unverified: NOTICE_TONE_CLASS.warn,
+  refused: NOTICE_TONE_CLASS.err,
+  failed: NOTICE_TONE_CLASS.err,
 };
 
 /**
