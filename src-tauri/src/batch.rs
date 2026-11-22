@@ -360,16 +360,20 @@ impl BatchRun {
 ///
 /// Lives here rather than in `reader.rs` so that the batch's own vocabulary is
 /// decided in one place; it drives the same shipping calls the single Clone does
-/// (`read_tag_in_position`, `lf_write`, `lf_read_once`).
+/// (`read_in_position`, `lf_write`, `lf_read_once`).
+///
+/// The read keeps presence apart from Identity, so a destination that is present
+/// with no Identity — a Blank, in the batch's own word — is a legal position to
+/// write to rather than a position the guard cannot see.
 pub fn guarded_attempt(reader: &Reader, target: Identity) -> BatchAttempt {
-    let current = match reader.read_tag_in_position() {
-        Ok(current) => current,
+    let (presence, current) = match reader.read_in_position() {
+        Ok(found) => found,
         // The Reader failed before anything could be decided: this is a device
         // fault, not a guard refusal, and reporting it as one keeps the two
         // remedies apart (replug the Reader vs put a Blank on it).
         Err(e) => return BatchAttempt::Failed(e),
     };
-    let decision = write_guard::decide(current.as_ref().map(LfCard::identity), target);
+    let decision = write_guard::decide(presence, target);
     if !decision.allows_write() {
         // Nothing is sent. A same-identity reading is the expected case during a
         // batch and is reported as a skip by `verdict`; it is still not written.
@@ -398,6 +402,7 @@ pub fn guarded_attempt(reader: &Reader, target: Identity) -> BatchAttempt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::identity::TagPresence;
     use crate::test_frames;
 
     /// The Tag this app wrote in the recorded working example: `55 00 84 82 12`.
@@ -554,16 +559,27 @@ mod tests {
     fn the_skip_refusal_is_the_cause_in_the_guard_itself() {
         // The cause is not re-derived here: it comes from the same decision the
         // guard made, so the two can never disagree about which condition fired.
-        let decision = write_guard::decide(Some(written_card().identity()), target());
+        let decision =
+            write_guard::decide(TagPresence::Identified(written_card().identity()), target());
         assert_eq!(
             RefusalCause::of(decision),
             verdict(&already_written(), target()).refusal
         );
-        let unreadable = write_guard::decide(None, target());
+        let unreadable = write_guard::decide(TagPresence::Absent, target());
         assert_eq!(
             RefusalCause::of(unreadable),
             verdict(&nothing_readable(), target()).refusal
         );
+    }
+
+    #[test]
+    fn a_destination_with_no_identity_is_a_write_position_not_a_refusal() {
+        // The batch's Blank is a Tag that is present and carries no Identity.
+        // It used to reach the guard as "nothing was read" — because the combined
+        // reading folds it into `None` — and every batch refused it.
+        let decision = write_guard::decide(TagPresence::Blank, target());
+        assert!(decision.allows_write());
+        assert_eq!(RefusalCause::of(decision), None);
     }
 
     #[test]

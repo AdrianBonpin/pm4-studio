@@ -96,6 +96,33 @@ That is recorded as its own follow-up, because the observation may also mean the
 blanking write can leave a tag unreadable, which is worse than the caveat the app
 prints ("it may refuse further writes … it will probably read as empty").
 
+**Correction, later the same day.** Two things here were wrong, and both are now
+fixed in the app rather than only in this record.
+
+1. The tag was never unreadable. `cargo run --example blankprobe -- read` reports
+   `tag present, NO identity (data field empty)`: the chip latches and modulates,
+   with an empty data field. The app called that "no tag", because the combined
+   read folds "no Tag" and "a Tag with no Identity" into `None`, so its write
+guard refused every write to a Tag it had itself blanked. `write_guard::decide`
+   now takes the presence-aware reading, and a Tag that is present with no
+   Identity is a legal write position.
+2. The expectation above — second Reset → *will not accept writes* — could never
+   have happened. A second Reset of a freshly blanked Tag is refused before
+   anything is sent, because there is nothing left to blank
+   (`BlankDecision::RefuseNothingToBlank`, reported as `Refused`). *Will not
+   accept writes* requires a blanking write that **was** sent and whose re-read
+   still found an Identity. The runbook and the follow-up ticket now keep the two
+   apart.
+
+**Later measurement of the same tag, after the fix.** A write of a non-zero
+Identity is transmitted successfully and the Tag never takes it: two attempts,
+including one after lifting the Tag off the Reader and re-presenting it to force
+a re-latch. The Tag still latches and reads as carrying no Identity, and accepts
+no data. So writing the all-zero data field appears to have left this T5577
+permanently refusing writes. What blanking *should* write is therefore an open
+product question, not a settled decision — recorded in the follow-up ticket,
+and not changed by this branch.
+
 ### Item 6 — clone, batch, authored Identity: **unconfirmed**
 
 Signed off as "works?" — which is not an observation. All three report their own
@@ -108,4 +135,5 @@ Criteria 3, 4 and 5–7 of ticket 20 are **not** ticked. Criterion 4 got no
 observation, and criterion 5's second half — the entire reason ticket 12 exists —
 did not happen on hardware. A test suite asserting a refusal outcome is not the
 same evidence as hearing it, which is what the checklist was written to
-distinguish.
+distinguish. Criterion 5's *first* half did happen and is unaffected; its second
+half was also mis-specified, as the correction under item 5 records.

@@ -46,6 +46,21 @@
 //! Reader: a Tag that reads as empty and a Tag that was lifted off look the
 //! same. `Blanked` therefore means "the Tag no longer presents an Identity",
 //! which is what blanking is for, and the UI says so in those words.
+//!
+//! # Two refusals that are not the same refusal
+//!
+//! A blanking attempt that found nothing to blank and a blanking write the chip
+//! would not take are different facts, and only one of them is a report about the
+//! chip:
+//!
+//!   * [`BlankDecision::RefuseNothingToBlank`] — the Tag is there and already
+//!     carries no Identity. **Nothing is transmitted**, so nothing was learned
+//!     about whether the chip accepts writes. A second Reset of a freshly blanked
+//!     Tag lands here, because the first Reset left nothing for the second to
+//!     destroy. It is [`WriteOutcome::Refused`], never `WillNotAcceptWrites`.
+//!   * [`WriteOutcome::WillNotAcceptWrites`] — a blanking write *was* sent and the
+//!     re-read still found an Identity. That is evidence about the chip: it kept
+//!     what it had. Only a transmission can produce it (ADR 0007).
 
 use crate::identity::{Identity, TagPresence};
 use crate::write_outcome::{self, Evidence, WriteOutcome};
@@ -60,6 +75,11 @@ pub enum BlankDecision {
     /// be blind.
     RefuseUnreadable,
     /// Refused: the Tag is there and already carries no Identity.
+    ///
+    /// Nothing was transmitted, so this is not [`WriteOutcome::WillNotAcceptWrites`]:
+    /// that outcome is a report about the chip, and it requires a write to have
+    /// been attempted. This one means the attempt was pointless, not that it was
+    /// turned down.
     RefuseNothingToBlank,
     /// Refused: the Tag presents an Identity the user did not confirm.
     RefuseDifferentIdentity,
@@ -86,7 +106,9 @@ impl BlankDecision {
             ),
             BlankDecision::RefuseNothingToBlank => Some(
                 "the tag on the reader already carries no Identity, so there is nothing to \
-                 blank and nothing was written."
+                 blank and nothing was written. The tag is still on the reader — whether it \
+                 will accept a new Identity depends on the chip, which this Reader cannot tell \
+                 without a write."
                     .to_string(),
             ),
             BlankDecision::RefuseDifferentIdentity => {
@@ -242,6 +264,10 @@ pub struct BlankVerdict {
 /// happened, or for a re-read that failed. A re-read that still finds an Identity
 /// reports `WillNotAcceptWrites` and names the likely causes, because that is the
 /// useful reading: the attempt was the only way to learn it (ADR 0007).
+///
+/// A refusal stays `Refused`. In particular a Tag that already carries no
+/// Identity is refused before anything is sent, so it can never reach
+/// `WillNotAcceptWrites`: nothing about that chip was tested.
 pub fn verdict(attempt: &BlankAttempt) -> BlankVerdict {
     let outcome = write_outcome::classify_blank(attempt.evidence());
     let (message, still_identifies) = match attempt {
@@ -385,6 +411,45 @@ mod tests {
             .expect("a refusal has a message");
         assert!(message.contains("already carries no Identity"), "{message}");
         assert!(message.contains("nothing was written"), "{message}");
+        // The one true thing the app can add: the tag is still there, and whether
+        // it takes a new Identity is the chip's answer, not this app's promise.
+        assert!(message.contains("still on the reader"), "{message}");
+        assert!(message.contains("depends on the chip"), "{message}");
+    }
+
+    #[test]
+    fn a_second_blank_of_a_blank_tag_is_a_refusal_not_a_verdict_on_the_chip() {
+        // The Tag this app blanked is still there and reads as empty, so a second
+        // Reset is refused before anything is sent. That is `Refused`, and it is
+        // deliberately not `WillNotAcceptWrites`: nothing about the chip was
+        // tested, so nothing about the chip may be claimed.
+        let refusal = BlankDecision::RefuseNothingToBlank
+            .refusal_message(written_tag(), None)
+            .expect("a refusal has a message");
+        let verdict = verdict(&BlankAttempt::Refused(refusal));
+        assert_eq!(verdict.outcome, WriteOutcome::Refused);
+        assert_ne!(verdict.outcome, WriteOutcome::WillNotAcceptWrites);
+        assert_eq!(verdict.still_identifies, None);
+        assert!(!verdict.outcome.counts_as_confirmed_copy());
+    }
+
+    #[test]
+    fn only_a_transmitted_blank_can_say_the_chip_will_not_accept_writes() {
+        // The two refusals, side by side: one is a Tag with nothing to destroy
+        // (no bytes sent), the other is a chip that kept its Identity after a
+        // write (bytes sent). Only the second is evidence about the chip.
+        let nothing_to_blank = verdict(&BlankAttempt::Refused(
+            BlankDecision::RefuseNothingToBlank
+                .refusal_message(written_tag(), None)
+                .expect("a refusal has a message"),
+        ));
+        let kept_its_identity =
+            verdict(&BlankAttempt::Transmitted(BlankReadback::StillIdentifies(
+                written_tag(),
+            )));
+        assert_eq!(nothing_to_blank.outcome, WriteOutcome::Refused);
+        assert_eq!(kept_its_identity.outcome, WriteOutcome::WillNotAcceptWrites);
+        assert_ne!(nothing_to_blank.outcome, kept_its_identity.outcome);
     }
 
     #[test]

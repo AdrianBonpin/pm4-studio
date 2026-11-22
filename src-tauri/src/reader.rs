@@ -495,16 +495,30 @@ impl Reader {
     /// 125 kHz read, reporting presence separately from the Identity.
     ///
     /// [`Reader::lf_read_once`] folds "no Tag" and "a Tag with no Identity"
-    /// into `None`, which is right for the read UI and useless for blanking:
-    /// a Tag that carries no Identity is exactly what a blanking write aims to
-    /// produce. A reply that never arrived is `Absent`; the firmware always
-    /// answers a poll, so silence is the field being empty.
+    /// into `None`, which is right for the read UI and useless for a write: a Tag
+    /// that carries no Identity is a Tag the app can see and aim at. A reply that
+    /// never arrived is `Absent`; the firmware always answers a poll, so silence
+    /// is the field being empty.
     pub fn lf_read_presence_once(&self) -> Result<TagPresence, String> {
+        let (presence, _) = self.lf_read_position_once()?;
+        Ok(presence)
+    }
+
+    /// One 125 kHz read of the write position, decoded both ways.
+    ///
+    /// Presence and the full reading come from the same reply on purpose: two
+    /// separate reads could disagree, and the answer this path needs is "what is
+    /// in front of the writer right now". A Tag with no Identity has presence but
+    /// no card, which is exactly the shape `read_in_position` needs.
+    fn lf_read_position_once(&self) -> Result<(TagPresence, Option<LfCard>), String> {
         let f = match self.transact(CMD_LF_READ, &[0x00, 0x01], Some(CMD_LF_READ), 1500)? {
             Some(f) => f,
-            None => return Ok(TagPresence::Absent),
+            None => return Ok((TagPresence::Absent, None)),
         };
-        Ok(TagPresence::from_read_payload(&f.payload))
+        Ok((
+            TagPresence::from_read_payload(&f.payload),
+            LfCard::from_payload(&f.payload),
+        ))
     }
 
     /// Write an Identity onto a 125 kHz Tag with command `0x0073`.
@@ -523,23 +537,34 @@ impl Reader {
         Ok(())
     }
 
-    /// Read the tag currently in the write position, retrying briefly because a
-    /// tag that was just placed needs a moment to be seen.
+    /// Read the Tag in the write position, keeping presence apart from Identity
+    /// and retrying briefly because a tag that was just placed needs a moment to
+    /// be seen.
     ///
+    /// Returns the presence and, when the Tag presented one, the full reading.
     /// `pub(crate)` so a Batch Clone attempt (`crate::batch`) re-reads the Tag in
     /// the write position for every attempt, exactly as ADR 0001 requires, using
     /// the same retry window the single-clone path uses.
-    pub(crate) fn read_tag_in_position(&self) -> Result<Option<LfCard>, String> {
+    ///
+    /// The pair is returned rather than just the card because a Tag with no
+    /// Identity has no card to return and is still a Tag: a caller that folded it
+    /// into `None` would be unable to tell it from an empty field, and would
+    /// refuse to write to a Tag it can see.
+    pub(crate) fn read_in_position(&self) -> Result<(TagPresence, Option<LfCard>), String> {
         for attempt in 0..10 {
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(200));
             }
             self.wake().ok();
-            if let Some(c) = self.lf_read_once()? {
-                return Ok(Some(c));
+            let (presence, card) = self.lf_read_position_once()?;
+            // An empty field is the only answer worth retrying; a Tag that is
+            // there, blank or identified, is an answer.
+            if presence == TagPresence::Absent {
+                continue;
             }
+            return Ok((presence, card));
         }
-        Ok(None)
+        Ok((TagPresence::Absent, None))
     }
 
     /// Wake, write, then read the tag back so callers can verify the result.
@@ -564,9 +589,13 @@ impl Reader {
     /// read-back reported nothing are three different facts, and the library
     /// counts a copy for none of them. Keeping them apart is what stops
     /// "unknown" from being recorded as either success or failure.
+    ///
+    /// The read that feeds the guard keeps presence apart from Identity: a Tag
+    /// that is present with no Identity is a position the app can see, so it does
+    /// not become ADR 0001's blind write.
     pub fn lf_write_attempt(&self, identity: Identity) -> LfWriteAttempt {
-        let current = match self.read_tag_in_position() {
-            Ok(current) => current,
+        let (presence, current) = match self.read_in_position() {
+            Ok(found) => found,
             // No reading means the guard cannot be satisfied: nothing is sent.
             // A read that failed outright is the same condition as a read that
             // found nothing — ADR 0001's first case — so it carries the cause.
@@ -577,7 +606,10 @@ impl Reader {
                 }
             }
         };
-        let decision = write_guard::decide(current.as_ref().map(LfCard::identity), identity);
+        // The guard is given what the Tag *is*, not just what it reads as: a Tag
+        // that is present with no Identity is a legal write position, and the
+        // combined reading cannot express it.
+        let decision = write_guard::decide(presence, identity);
         if let Some(cause) = write_guard::RefusalCause::of(decision) {
             let message = decision
                 .refusal_message(current.as_ref().map(LfCard::identity))
@@ -605,19 +637,7 @@ impl Reader {
     /// Retries briefly for the same reason as the copy path: a tag that was just
     /// placed needs a moment to be seen.
     fn read_presence_in_position(&self) -> Result<TagPresence, String> {
-        for attempt in 0..10 {
-            if attempt > 0 {
-                std::thread::sleep(std::time::Duration::from_millis(200));
-            }
-            self.wake().ok();
-            match self.lf_read_presence_once()? {
-                // An empty field is the only answer worth retrying; a Tag that
-                // is there, blank or identified, is an answer.
-                TagPresence::Absent => continue,
-                found => return Ok(found),
-            }
-        }
-        Ok(TagPresence::Absent)
+        self.read_in_position().map(|(presence, _)| presence)
     }
 
     /// Re-read after a blanking write, without trusting a single early reply.

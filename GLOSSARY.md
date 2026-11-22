@@ -16,8 +16,11 @@ implant). The form factor is never part of the model.
 _Avoid_: card, fob, badge, chip, transponder
 
 **Blank**:
-A Tag that carries no identity and can accept a write. Blankness is a state, not
-a product category — a Tag becomes Blank again only by being written to.
+A Tag that carries no Identity. Blankness is a state, not a product category — a
+Tag becomes Blank again only by being written to. A Blank is not necessarily a
+Tag that will take a write: that is **Writability**, which cannot be observed
+before trying, and a Reset can leave a Tag Blank and unable to accept a new
+Identity.
 _Avoid_: empty tag, new tag, unwritten tag, virgin tag
 
 **Snapshot**:

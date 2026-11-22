@@ -288,7 +288,7 @@ fn parse_field(field: AuthorField, text: &str) -> Result<u32, AuthorError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::identity::MAX_DATA32;
+    use crate::identity::{MAX_DATA32, TagPresence};
     use crate::test_frames;
     use crate::write_guard::{self, WriteDecision};
     use crate::write_outcome::{self, classify, Evidence, WriteOutcome};
@@ -620,7 +620,7 @@ mod tests {
         // ADR 0001 at the authoring seam: the guard sees what the write position
         // reads as, and an authored Identity gets no exemption.
         let authored = from_parts("85", "132", "33298").expect("in range");
-        let decision = write_guard::decide(None, authored);
+        let decision = write_guard::decide(TagPresence::Absent, authored);
         assert_eq!(decision, WriteDecision::RefuseUnreadable);
         assert!(!decision.allows_write());
         assert_eq!(
@@ -631,17 +631,28 @@ mod tests {
     }
 
     #[test]
+    fn an_authored_write_proceeds_onto_a_tag_that_carries_no_identity() {
+        // The state a Reset leaves the Tag in. An authored Identity gets no
+        // exemption from ADR 0001 and no refusal either: the Tag was seen, it
+        // simply holds nothing, so the write position is known.
+        let authored = from_parts("85", "132", "33298").expect("in range");
+        let decision = write_guard::decide(TagPresence::Blank, authored);
+        assert_eq!(decision, WriteDecision::Proceed);
+        assert!(decision.allows_write());
+    }
+
+    #[test]
     fn a_blank_that_already_presents_the_authored_identity_is_refused() {
         // The Tag in the write position reads as what we are about to write, so
         // it is not a Blank: this is the case that locked a chip.
         let authored = from_parts("85", "132", "33298").expect("in range");
         assert_eq!(
-            write_guard::decide(Some(authored), authored),
+            write_guard::decide(TagPresence::Identified(authored), authored),
             WriteDecision::RefuseSameIdentity
         );
         // A Tag carrying any other Identity is a fair target.
         assert_eq!(
-            write_guard::decide(Some(other_tag()), authored),
+            write_guard::decide(TagPresence::Identified(other_tag()), authored),
             WriteDecision::Proceed
         );
     }

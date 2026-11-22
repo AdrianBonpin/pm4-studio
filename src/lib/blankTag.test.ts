@@ -126,6 +126,22 @@ describe("blankNotice", () => {
     expect(notice.text).not.toMatch(/confirmed cop(y|ies)/i);
   });
 
+  it("says the Identity is gone and leaves writability to the chip", () => {
+    // What is true after a blank: the reading is empty and the Identity is gone.
+    // Whether the chip then takes a new Identity is the chip's answer — the app
+    // cannot promise recovery, and it cannot warn of a lock it has not tested for.
+    const text = blankNotice(result("blanked")).text;
+    expect(text).toMatch(/Identity is gone/i);
+    expect(text).toMatch(/depends on the chip/i);
+    expect(text).toMatch(/cannot tell/i);
+    // It no longer describes a locked chip as though it were the blank's result,
+    // and it never says the tag is unusable.
+    expect(text).not.toMatch(/may refuse further writes/i);
+    expect(text).not.toMatch(/unusable/i);
+    // Nor does it promise a new Identity can be written.
+    expect(text).not.toMatch(/can be written (again|to it)/i);
+  });
+
   it("reports a refusal as not blanked, with the guard's reason and no retry offer", () => {
     const notice = blankNotice(
       result("refused", { message: "could not read the tag on the reader" }),

@@ -84,11 +84,18 @@ own T5577 blanks is already permanently locked from an earlier experiment.
   A blanked Tag and a Tag lifted off the Reader look identical in the read path,
   so the app says "the tag no longer presents an Identity" and offers a read
   rather than promising the chip is on the Reader.
-- A Tag that already reads as empty cannot be blanked again through this path,
-  because the guard cannot read it as a Tag. That is a refusal with an
-  explanation, not a silent no-op.
+- A Tag that already reads as empty cannot be blanked again through this path:
+  the presence-aware read sees it as a Tag carrying no Identity, so the guard
+  refuses with `RefuseNothingToBlank` — there is nothing to destroy. Nothing is
+  transmitted, so this is a refusal and not `WillNotAcceptWrites` (which needs a
+  write that was sent). That is a refusal with an explanation, not a silent
+  no-op.
 - Whether a blanking write lands, and whether it triggers the T5577 lock bit, is
   still a hardware question. `src-tauri/examples/blankprobe.rs` is the repeatable
-  probe; until it has run on a sacrificial blank, the write is implemented and
-  its logic proven but not observed on a chip. Recording that gap is the point of
-  the outcome model: nothing here claims more than the app saw.
+  probe. Measured 2026-11-22: the neutral write lands, and the Tag afterwards
+  reads as `tag present, NO identity (data field empty)`. That same Tag then
+  accepted no new Identity, transmitted twice, so whether the neutral payload
+  leaves the chip locked is the open question in
+  `docs/tickets/studio-redesign-followups/resets-refusal-was-never-seen-on-hardware.md`.
+  Recording that gap is the point of the outcome model: nothing here claims more
+  than the app saw.
