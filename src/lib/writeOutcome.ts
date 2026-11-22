@@ -14,8 +14,8 @@ import type { NoticeTone } from "./noticeTone";
 
 /** Only a verified read-back is a confirmed copy; nothing else counts. */
 export function countsAsConfirmedCopy(outcome: WriteOutcome): boolean {
-  // A blanked write is deliberately not in this list: it removes an Identity
-  // from a Tag rather than putting one on another.
+  // A cleared or destroyed write is deliberately not in this list: both replace an
+  // Identity on a Tag rather than putting one on another.
   return outcome === "verified";
 }
 
@@ -55,8 +55,8 @@ function countSentence(result: WriteResult, outcome: WriteOutcome): string {
     return " No Snapshot in the library carries this Identity, so there is no count to keep.";
   }
   const label = confirmedCopiesLabel(result.confirmedCopies);
-  // Only a verified write is a copy. Blanking destroys an Identity, so even a
-  // successful one leaves the count exactly where it was.
+  // Only a verified write is a copy. Clearing and destroying replace an Identity,
+  // so even a successful one leaves the count exactly where it was.
   if (outcome === "verified") {
     return ` The library now lists ${label} of it.`;
   }
@@ -104,13 +104,14 @@ function writeSentence(result: WriteResult): string {
           result.message ? ` (${result.message})` : ""
         }.` + countSentence(result, "failed")
       );
-    case "blanked":
-      // Blanking has its own notice and its own wording; see `lib/blankTag.ts`.
-      // A copy write never reports this, so reaching here is a bug worth naming
-      // rather than a result worth wording.
+    case "cleared":
+    case "destroyed":
+      // Clear and Destroy have their own notices and their own wording; see
+      // `lib/clearTag.ts`. A copy write never reports either, so reaching here is a
+      // bug worth naming rather than a result worth wording.
       return (
-        "Unexpected outcome: this write reported a blanked tag, which a copy cannot do. " +
-        "Blanking has its own notice; nothing was counted here."
+        "Unexpected outcome: this write reported a cleared or destroyed tag, which a copy " +
+        "cannot do. Clear and Destroy have their own notices; nothing was counted here."
       );
     case "erased":
       // Erasing NDEF content has its own notice and its own word; see

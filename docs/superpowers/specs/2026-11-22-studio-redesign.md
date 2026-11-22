@@ -84,7 +84,7 @@ still possible.
 
 **One operation visible at a time.** The two band pages become mode-switched
 workspaces with a segmented control, ordered by the work: 125 kHz is **Read ·
-Write · Reset · Clone · Batch**; 13.56 MHz is **Read · Write · Copy · Erase ·
+Write · Clear · Clone · Batch**; 13.56 MHz is **Read · Write · Copy · Erase ·
 Memory**. Selecting a mode shows that mode and nothing else. This is what
 removes the scroll, and it is also what makes per-operation feedback tractable:
 every operation has a name, an entry point, and therefore an outcome.
@@ -102,12 +102,13 @@ data), About (version, credits, GitHub, licence, Reader and firmware), and
 Diagnostics (indicator test, capability limits). Tools keeps only the raw
 console, because ADR 0006 makes that surface deliberately visible and honest.
 
-**The app stops pretending to know what a 125 kHz tag will accept.** Reset keeps
-its capability — it demonstrably works on a fresh T5577 — and says plainly that
-the first write is the test: a tag already written once may permanently refuse,
-this Reader cannot tell which it is, and the attempt is safe only on a tag you can
-afford to lose. A refusal becomes its own outcome, *this tag will not accept
-writes*, with the cause named. No probe is offered, because every possible probe
+**The app stops pretending to know what a 125 kHz tag will accept.** The operation
+— named **Clear** since the split described under story 67, and **Reset** when this
+specification was written — keeps its capability and says plainly that the first
+write is the test: a tag already written once may permanently refuse, this Reader
+cannot tell which it is, and the attempt is safe only on a tag you can afford to
+lose. A refusal becomes its own outcome, *this tag will not accept writes*, with
+the cause named. No probe is offered, because every possible probe
 is a write, and the only non-destructive-looking one — writing a tag's own
 Identity back to it — is the operation this project already identifies as the
 chip-locker.
@@ -193,7 +194,7 @@ Delivery is five ordered slices.
 
 **125 kHz**
 
-55. As a user, I want the 125 kHz page ordered Read, Write, Reset, Clone, Batch, so that the page follows the order I actually work in.
+55. As a user, I want the 125 kHz page ordered Read, Write, Clear, Clone, Batch, so that the page follows the order I actually work in.
 56. As a user, I want only the selected operation visible, so that I do not scroll past four things to reach the fifth.
 57. As a user, I want reading a tag to be the first thing on the page, so that the precondition for every write is also the first step.
 58. As a user, I want the Identity, facility code and card number shown large enough to read across a desk, so that confirming which credential I hold takes no effort.
@@ -205,9 +206,22 @@ Delivery is five ordered slices.
 64. As a user, I want a refused clone to say *why* it refused, so that a reseated tag is distinguishable from a guard firing.
 65. As a user, I want to write one Identity to successive Blanks without re-reading the source, so that making several fobs is not repetitive.
 66. As a user, I want each batch attempt reported separately, so that I know which fob succeeded.
-67. As a user, I want Reset described as Reset, so that I am not led to expect a factory restore the hardware cannot perform.
-68. As a user, I want to be told before a Reset, in plain words, that a tag already written once may permanently refuse further writes, that this Reader cannot tell which kind it is, and that the attempt is safe only on a tag I can afford to lose.
-69. As a user, I want a refused Reset to be reported as *this tag will not accept writes*, with the likely cause named, so that I am not told the tag is unchanged as though nothing can be concluded.
+67. As a user, I want the operation that overwrites a 125 kHz tag's Identity **named for what it does** — so that I am not led to expect a factory restore the hardware cannot perform, and not handed a destructive operation under a reassuring name.
+68. As a user, I want to be told before a Clear, in plain words, that a tag already written once may permanently refuse further writes, that this Reader cannot tell which kind it is, and that the attempt is safe only on a tag I can afford to lose.
+69. As a user, I want a refused Clear to be reported as *this tag will not accept writes*, with the likely cause named, so that I am not told the tag is unchanged as though nothing can be concluded.
+
+> **Amended — story 67 (Clear/Destroy split).** This story read *"I want Reset
+> described as Reset"*, and its intent — do not lead the user to expect a factory
+> restore the hardware cannot perform — still binds unchanged. The word it named is
+> now wrong, for a reason the story could not have anticipated: **Reset named the
+> destructive operation, and it was the operation a user reached for by habit.**
+> Three T5577s were consumed that way. So the interface does not use the word at
+> all; the everyday, reversible operation is **Clear** (write a placeholder; the
+> tag stays live and rewritable) and the deliberate, destructive one is **Destroy**
+> (its own control, its own confirmation, permanent). The story is amended rather
+> than left in place because a story the interface deliberately violates is worse
+> than no story: it trains the next reader to ignore the list. See `GLOSSARY.md`
+> and `docs/tickets/studio-redesign-followups/clearing-a-tag-must-leave-it-usable.md`.
 70. As a user, I want the app to stop offering a pre-check for writability, because no such check exists, so that I do not go looking for one.
 71. As a user, I want the blame for a refused write never assigned to the payload, so that I do not try again with the same tag.
 72. As a user, I want the 125 kHz page to stop carrying a section that only points at another page, so that the last thing on the page is an operation.
@@ -329,7 +343,7 @@ Delivery is five ordered slices.
 - The impeccable skill vendored, referenced from a new repository `AGENTS.md`, with the product and design context it reads written down, and a design check that becomes blocking in the final slice.
 - The five-destination shell; Settings as Feedback, Data, About and Diagnostics.
 - The outcome seam, the toast system, the four-symbol audible alphabet and the three-way quiet level.
-- 125 kHz as a mode-switched page: Read, Write, Reset, Clone, Batch, with Reset's honest framing and its new refusal outcome.
+- 125 kHz as a mode-switched page: Read, Write, Clear, Clone, Batch, with Clear's honest framing and its new refusal outcome.
 - 13.56 MHz as a mode-switched page: Read, Write, Copy, Erase, Memory.
 - The corrected and verified HF reply layout, including 4-, 7- and 10-byte UIDs.
 - One-action Read that also fetches the NDEF message.
@@ -366,7 +380,7 @@ The design check runs impeccable's deterministic detector over the component sou
 
 **The outcome seam**
 
-One typed value describes what an operation did, and it is the only input both channels accept. Its discriminator is a small closed set derived from the existing write-outcome vocabulary plus the new Reset refusal, and it carries the message text and an optional structured detail. Severity is a property of the outcome, not of the call site, so a toast and a signal cannot disagree.
+One typed value describes what an operation did, and it is the only input both channels accept. Its discriminator is a small closed set derived from the existing write-outcome vocabulary plus the new Clear refusal, and it carries the message text and an optional structured detail. Severity is a property of the outcome, not of the call site, so a toast and a signal cannot disagree.
 
 `report(outcome)` is the single entry point. Components never invoke the beeper and never construct a toast directly. The seam fans out to the toast store and the signal queue. An outcome that is informational rather than the result of an operation — a stored-preferences announcement — may pass a flag that suppresses the signal, and that is the only way a signal can be absent for a reported outcome.
 
@@ -401,7 +415,7 @@ The shell's device-failure strip becomes a toast. The library-lock banner and th
 
 Five destinations. The two band pages share a segmented-control workspace: one mode visible at a time, the previously selected mode remembered for the session. Library is master-detail: a collection switch for Snapshots and Drafts, a list, and the selected item's detail beside it. Settings is a leaf with four groups. Tools is a single page holding the raw console and nothing else.
 
-The mode order is the work order and is not alphabetical or historical: 125 kHz is Read, Write, Reset, Clone, Batch. 13.56 MHz is Read, Write, Copy, Erase, Memory. The capability limits live in Settings → Diagnostics so that a limitation is stated once rather than repeated per tag.
+The mode order is the work order and is not alphabetical or historical: 125 kHz is Read, Write, Clear, Clone, Batch. 13.56 MHz is Read, Write, Copy, Erase, Memory. The capability limits live in Settings → Diagnostics so that a limitation is stated once rather than repeated per tag.
 
 **The 13.56 MHz memory-dump mode is named `Memory`, not `Diagnostics`.** Round 4 settled the order as Read, Write, Copy, Erase, Diagnostics, and Settings was separately settled to contain a Diagnostics group. Both cannot keep the name: a user told to look in Diagnostics would have two destinations to try, and the capability limits — the thing that answers "why can this Reader not do that" — would be the harder of the two to find. Settings keeps `Diagnostics` because that group already holds the indicator test and the limits. The band mode is named for what it holds.
 
@@ -443,9 +457,32 @@ The length byte is what makes the layout self-describing, and it is why 7- and 1
 
 Because the layout is now measured, the prediction in the previous work — that the reply carried a two-byte validity prefix followed by the UID at 2–6 with ATQA at 14–16 and SAK at 17 — is recorded as refuted, and the provisional badge and the section explaining it are deleted rather than moved.
 
-**Reset and writability**
+**Clear, Destroy and writability**
 
-Reset writes the neutral Identity over whatever the tag presents; the existing guard already permits this because the target differs from the current reading. The confirmation states, in plain words and before the write, that the app cannot determine whether a tag will accept a write, that a tag already written once may refuse permanently, and that the attempt is safe only on a tag the user can afford to lose.
+The 125 kHz mode is **Clear**, and it offers two operations that the app keeps
+distinct. **Clear** writes a non-zero placeholder Identity over whatever the tag
+presents, so the tag stops being a working credential and stays a live, rewritable
+chip: it reads back as an Identity, so a Clone or an authored Identity can be
+written onto it. **Destroy** is the older neutral-Identity write, kept as its own
+operation behind its own confirmation, because measured on hardware it leaves a
+T5577 permanently refusing data while it keeps answering every reader. Destroy is
+never the default and is not reachable by repeating Clear.
+
+The existing guard permits both, because the target differs from the current
+reading, and a tag that is present with no Identity is a legal write position. The
+confirmation states, in plain words and before the write, that the app cannot
+determine whether a tag will accept a write, that a tag already written once may
+refuse permanently, that the attempt is safe only on a tag you can afford to lose,
+and — for Destroy — that the tag is permanently disabled and cannot be recovered
+or reused.
+
+The *afford to lose* caveat survives Clear's payload change deliberately. The
+placeholder is a clone-shaped payload, which is an argument that the chip will
+survive it and a strong one — every clone this app has written has left the chip
+working, and the all-zero payload that locked three of them is a shape no clone
+produces. It is still an argument, not a measurement: no cleared tag has yet been
+confirmed to take a new Identity. The caveat is retired when the hardware
+checklist records that confirmation, not before.
 
 A re-read that still finds an Identity produces a distinct outcome — *this tag will not accept writes* — whose message names the likely cause: the chip has already been written, or was never writable. That is separated from the generic failure outcome and from *unverified*, because the three call for different next actions. No confirmed copy is ever counted for any of them.
 
@@ -489,7 +526,7 @@ This work spans six independent subsystems. The slices below are the split: each
 |---|---|---|
 | 1 Foundation | impeccable vendored, AGENTS.md and the product and design documents, Outcome seam, toast system, signal alphabet, quiet level, Settings, five destinations | — |
 | 2 Library | master-detail, Snapshots and Drafts collections, 13.56 MHz Snapshots with Records, schema v3 and migration, read-a-tag-into-a-draft removed, Edit as Draft | 1 |
-| 3 125 kHz | mode-switched page, Read, Write, Reset honesty and its new refusal outcome, Clone, Batch, Library pointer removed | 1 |
+| 3 125 kHz | mode-switched page, Read, Write, Clear honesty and its new refusal outcome, Clone, Batch, Library pointer removed | 1 |
 | 4 13.56 MHz | mode-switched page, verified decode with 4/7/10-byte UIDs, one-action Read with NDEF, Copy, Erase, Memory, password panel removed | 1, 2 |
 | 5 Close-out | design check blocking, screenshots of every page at both sizes, manual hardware checklist extended and run | 2, 3, 4 |
 
@@ -541,7 +578,7 @@ The stub exists only for the development and verification path. It must be exclu
 Critical flows to capture at both 980×760 and the 900×700 minimum:
 
 1. The shell with all five destinations, and a toast in each of the four corner settings.
-2. Each of the five 125 kHz modes, including a readout, a confirmation, and the Reset confirmation carrying its new caveats.
+2. Each of the five 125 kHz modes, including a readout, a confirmation, the Clear confirmation carrying its new caveats, and Destroy's separate confirmation.
 3. Each of the five 13.56 MHz modes, including a decoded readout with the Records table, a raw-only fallback, and the Copy confirmation.
 4. Library in both collections, with nothing selected and with an item open in the detail pane.
 5. Settings, all four groups.
@@ -553,7 +590,7 @@ The manual hardware checklist stays and grows by four items:
 8. Read a MIFARE Classic 1K and confirm it reports MIFARE Classic 1K with a 4-byte UID, and that the memory dump does not claim a family it cannot support.
 9. Read a 7-byte-UID NTAG and confirm the full UID with no raw fallback.
 10. Copy a message between two tags and confirm the read-back comparison, plus a refusal on a destination that is too small.
-11. Reset a fresh T5577: it reports *Blanked*, one chirp, and counts no copy. Then Reset the same tag again: it refuses **before transmitting**, reporting that the tag already carries no Identity — that is *nothing to blank*, three chirps, and it is a different outcome from *will not accept writes*. The *will not accept writes* outcome needs a chip that refuses a transmitted write while still reading an Identity back, and no tag has produced one yet; it stays unobserved until one does. **Measured 2026-11-22:** the all-zero blank payload leaves a T5577 locked — still latched and modulating, still refusing data — so Reset destroys rather than clears. See `docs/PROTOCOL.md` and `docs/tickets/studio-redesign-followups/clearing-a-tag-must-leave-it-usable.md`.
+11. **Clear a fresh T5577, then rewrite it** — the operation this item described as *Reset* is now Clear, and Clear is the everyday one. It reports *Cleared*, one chirp, and counts no copy; the tag reads back as the placeholder `00 00 FF FF FF`, and it can then be cleared again or written with a real Identity from this app, with no read-before-write refusal. **Not yet observed:** no fresh T5577 is left to confirm that the placeholder does not lock the chip, so the hardware criterion in `docs/tickets/studio-redesign-followups/clearing-a-tag-must-leave-it-usable.md` stays unticked. **Separately, Destroy** a fresh T5577: it reports *Destroyed*, **two chirps** (*needs you* — the confirmation is an absence, so check the tag), and the tag keeps answering every reader while refusing all data. A Destroy of a tag that already carries no Identity is refused **before transmitting** — *nothing to destroy*, three chirps — which is a different outcome from *will not accept writes*. **Measured 2026-11-22:** the all-zero payload leaves a T5577 locked — still latched and modulating, still refusing data — three times, one after a field re-seat; the datasheet mechanism is in `docs/PROTOCOL.md`, open problem 7.
 
 ## Migration & Rollback
 
@@ -565,13 +602,13 @@ The manual hardware checklist stays and grows by four items:
 
 In practice a v2 file contains no 13.56 MHz Snapshots at all, because nothing in the build that wrote v2 could create one — the store exposed only the 125 kHz save path, so the existing `hf` field was never reachable. Migration therefore adds defaults rather than transforming readings. Should a hand-edited v2 file nonetheless contain one, its fields that the new shape expects and the old shape never held are left absent and rendered as unavailable, never filled with a plausible value.
 
-**Rollback.** This is the one place the honest answer is uncomfortable. Reverting the app after a v3 file has been written does **not** work by reinstalling: the older build refuses the file rather than stripping it — which is correct, and is the protection added in ADR 0005 — so it opens with no library at all. A rollback therefore requires exporting the library first under the new build, or deleting the library file to return to an empty one. No safety regression accompanies the rollback: the write guard, the 24-byte payload invariant and the fail-closed ordering are all untouched, and removing the redesign restores the app to exactly the capability and safety posture it had at the baseline. The Reset capability is preserved with better copy; the only capability withdrawn is the password panel, which never functioned.
+**Rollback.** This is the one place the honest answer is uncomfortable. Reverting the app after a v3 file has been written does **not** work by reinstalling: the older build refuses the file rather than stripping it — which is correct, and is the protection added in ADR 0005 — so it opens with no library at all. A rollback therefore requires exporting the library first under the new build, or deleting the library file to return to an empty one. No safety regression accompanies the rollback: the write guard, the 24-byte payload invariant and the fail-closed ordering are all untouched, and removing the redesign restores the app to exactly the capability and safety posture it had at the baseline. The Clear and Destroy capabilities are preserved with better copy and, in Clear, with a payload that leaves the tag usable; the only capability withdrawn is the password panel, which never functioned.
 
 **Rollback of the design gate.** The design check becoming blocking is the last thing to land. Reverting that single change restores a non-blocking check without touching product behaviour.
 
 ## Domain Model
 
-**ADR 0007 — a 125 kHz tag's writability is only discoverable by writing, and the app never offers a probe.** Hard to reverse because it is a commitment not to build something users will ask for repeatedly. Surprising without context because the obvious response to "the blank didn't take" is to check first. A genuine trade-off: writability can be learned in advance, but only by performing a write, and the only write that leaves content unchanged is the same-Identity write this project identifies as the chip-locker. Consequences: Reset is documented as the test; the refusal gets its own outcome; the capability limits state the limit; ADR 0001's same-Identity refusal is unchanged.
+**ADR 0007 — a 125 kHz tag's writability is only discoverable by writing, and the app never offers a probe.** Hard to reverse because it is a commitment not to build something users will ask for repeatedly. Surprising without context because the obvious response to "the blank didn't take" is to check first. A genuine trade-off: writability can be learned in advance, but only by performing a write, and the only write that leaves content unchanged is the same-Identity write this project identifies as the chip-locker. Consequences: Clear is documented as the test; the refusal gets its own outcome; the capability limits state the limit; ADR 0001's same-Identity refusal is unchanged.
 
 **ADR 0008 — every operation reports through one seam that drives both the visible message and the audible signal.** Surprising because the fastest way to add a beep is to call the beeper, which is exactly how the app arrived at nine beeps out of thirty operations with no failure tone anywhere. A real trade-off: ad-hoc calls are more flexible and less coupled; a single seam makes coverage a property of the structure rather than of discipline. Consequences: components no longer receive a chirp callback; an operation that reports nothing is a structural gap; the two channels cannot disagree about severity.
 
@@ -597,7 +634,7 @@ New terms:
 
 Amended terms:
 
-- **Reset** gains: Reset is the only way to discover whether a 125 kHz Tag will accept a write; no cheaper test exists. Its _Avoid_ line gains "blank" as a verb.
+- **Reset** is retired from the interface, and the term splits in two: **Clear** (write a placeholder; the tag stays usable) and **Destroy** (write the neutral Identity; the tag is permanently disabled). Clear is the only way to discover whether a 125 kHz Tag will accept a write, because no cheaper test exists. "Blank" stays a noun for a state and is never a verb.
 - **Clone** loses its "out of scope for now" counterpart. Copy is now in scope, and the distinction is recorded as a relationship rather than a boundary.
 - **Erase** keeps its 13.56 MHz-only meaning, and now explicitly notes that the word is never used for a 125 kHz operation.
 

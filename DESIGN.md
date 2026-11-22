@@ -259,8 +259,10 @@ a hairline does the grouping instead.
 Pill-shaped, 6×12 padding, 14px Outfit, one-pixel border. Four variants:
 **primary** (accent fill), **secondary** (raised surface, muted ink), **ghost**
 (transparent), **danger** (error tint with an error border). The danger variant is
-for an action that destroys something — a Reset, an Erase, a delete — so the
-irreversible control is never the one that looks like every other control. A
+for an action that destroys something — a Destroy, an Erase, a delete — so the
+irreversible control is never the one that looks like every other control — which
+is also why the everyday Clear is a primary button and its neighbouring Destroy is
+not. A
 button never wraps onto a second line at any supported window size.
 
 ### Badges

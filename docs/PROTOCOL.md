@@ -288,57 +288,87 @@ source badge.
    behaviour. Treat each blank as single-use until proven otherwise, and never
    experiment on a tag you care about.
 
-#### Blanking — writing no Identity — IMPLEMENTED, HARDWARE-OBSERVED, PAYLOAD OPEN
+#### Two payloads for two purposes — Clear and Destroy — IMPLEMENTED, ONE HARDWARE-CONFIRMED
 
-Blanking writes the neutral Identity: customer `0x00`, data32 `0x00000000`, in
-the usual 24-byte `0x0073` payload (`00 01 01` then all zeros). It is not a
-factory reset and it does not unlock a locked chip; neither is reachable over
-this protocol.
+The app writes **the same `0x0073` frame with two different data payloads**, for
+two different operations. They are not interchangeable, and which is which is the
+whole of the split:
 
-**Measured 2026-11-22 — this payload destroys the chip.** On a factory T5577 the
-write lands: the tag stops presenting an Identity, which is why the app reports
-`blanked`. The chip then **locks**. It still latches and modulates, so every
-reader reaches it, but it accepts no further data. Two `0x0073` writes were
-acknowledged by the device and ignored by the chip, the second one after lifting
-the tag off the Reader and re-presenting it to force a re-latch. Presence came
-back as `TagPresence::Blank` before and after both attempts.
+| Operation | customer | facility | card | data32 | What it leaves |
+|---|---|---|---|---|---|
+| **Clear** | `0x00` | `0xFF` | `0xFFFF` | `0x00FF_FFFF` | A live, rewritable Tag carrying a placeholder no system issues |
+| **Destroy** | `0x00` | — | — | `0x00000000` | A Tag that answers every reader and refuses all further data |
 
-The consequence is not the one this section used to describe. A blanked T5577 is
+Both are 24-byte payloads with the firmware's `00 01 01` enable flags, and both
+are **not** a factory reset and **not** an unlock; neither is reachable over this
+protocol. The two values are defined once each, in `Identity::CLEARED` and
+`Identity::BLANK` (`src-tauri/src/identity.rs`), with the reasoning that chose
+them.
+
+**Clear's safety argument is the payload's shape, not its value.** Clear's payload
+is *clone-shaped*: customer at `[8]` and `[12]`, data32 at `[16..20]`, exactly the
+layout every routine clone write uses — and clone writes have never locked a chip.
+The all-zero payload is the one payload no clone ever writes, and it is the one
+that locked chips. That is stronger evidence than "the value is non-zero" and still
+weaker than a hardware confirmation: no fresh T5577 has been cleared and then
+written again, because none is left (see the follow-up ticket).
+
+#### Destroy — writing no Identity — MEASURED: IT PERMANENTLY DISABLES A T5577
+
+Destroy writes the neutral Identity: customer `0x00`, data32 `0x00000000`, in the
+usual 24-byte `0x0073` payload (`00 01 01` then all zeros).
+
+**Measured 2026-11-22, three instances — this payload disables the chip.** On a
+factory T5577 the write lands: the tag stops presenting an Identity, which is why
+the app reports *destroyed*. The chip then **locks**. It still latches and
+modulates, so every reader reaches it, but it accepts no further data. Two
+`0x0073` writes were acknowledged by the device and ignored by the chip, the second
+one after lifting the tag off the Reader and re-presenting it to force a re-latch.
+Presence came back as `TagPresence::Blank` before and after both attempts. The
+same happened on two further chips.
+
+The consequence is not the one this section used to describe. A destroyed T5577 is
 not "empty"; it is a tag that reads as nothing, forever, while looking alive to
-every reader it meets. Zero is therefore **not** a safe cleared value — clearing
-has to leave a non-zero placeholder Identity so the chip keeps working (see
-`docs/tickets/studio-redesign-followups/clearing-a-tag-must-leave-it-usable.md`),
-and the all-zero write is retained only as a deliberate destroy.
+every reader it meets. **"The tag went dead" is the wrong diagnosis** in any future
+bug report: a Tag that still answers the field is exactly what a destroyed one
+looks like, and a reply is not evidence of life.
 
 The read path cannot confirm it the way a clone is confirmed. An all-zero data
-field decodes as "no reading", so a Tag that has been blanked reads as **empty**
+field decodes as "no reading", so a Tag that has been destroyed reads as **empty**
 — the same as no Tag at all to the combined decoder. That is why the app reports
-`blanked` rather than `verified` (ADR 0003): the success condition of a blanking
+`destroyed` rather than `verified` (ADR 0003): the success condition of a destroying
 write is the absence of an Identity. The presence-aware decode
 (`TagPresence::from_read_payload`) keeps that apart from a genuinely empty field:
-the blanked Tag **is latched**, it simply carries an empty data field.
-
-Probe: `cargo run --example blankprobe -- read` (reads only) and
-`cargo run --example blankprobe -- blank` (writes the neutral Identity to the Tag
-on the Reader, consuming it).
+the destroyed Tag **is latched**, it simply carries an empty data field.
 
 **Observed on hardware, 2026-11-22.** `0x0073` with the neutral payload reports
-`blanked`, and the Tag afterwards reads as `tag present, NO identity (data field
+`destroyed`, and the Tag afterwards reads as `tag present, NO identity (data field
 empty)` — latched and modulating, with a zero data field, which is what
-`blankprobe -- read` prints. So the neutral write does land.
+`clearprobe -- read` prints. So the neutral write does land, and what follows it is
+permanent.
 
-**What came after it is the open question.** The same Tag would not take a new
-Identity: `lf_write` transmitted successfully on two attempts, including one
-after lifting the Tag off the Reader and re-presenting it to force a re-latch, and
-the Tag still reads as carrying no Identity. Writing an all-zero data field
-appears to have left that T5577 permanently refusing writes. Whether that is what
-zeroing this chip does, or whether a blanking write should carry something else,
-is **not decided** — no replacement payload has been chosen, and the neutral one
-is deliberately unchanged until it is. Do not read the paragraph above as "zero
-is the correct cleared state": it is the payload the app sends today, and its
-consequence is under investigation (follow-up ticket
-`studio-redesign-followups/resets-refusal-was-never-seen-on-hardware.md`, and
-open problem 7 below).
+Probe: `cargo run --example clearprobe -- read` (reads only),
+`cargo run --example clearprobe -- clear` (writes the placeholder to the Tag on the
+Reader) and `cargo run --example clearprobe -- destroy` (writes the neutral
+Identity, permanently disabling the Tag). It uses the shipping guard and verdict,
+so what it prints is what the app does.
+
+#### Clear — writing the placeholder — IMPLEMENTED, NOT HARDWARE-CONFIRMED
+
+Clear writes customer `0x00`, facility `0xFF`, card `0xFFFF` — data32
+`0x00FF_FFFF` — and the re-read is expected to present exactly that value. Unlike
+Destroy, its success condition is **positive**: the read-back carries the
+placeholder, so the Tag is visible as an object and remains a legal write position
+for the next Clone or authored Identity.
+
+**Not yet confirmed on hardware.** The placeholder has never been written to a
+fresh T5577, because no fresh T5577 is left. What is known: the payload is
+clone-shaped, and clone-shaped writes have never locked a chip; the value is
+non-zero and reads back as an Identity rather than as an empty field. What is not
+known: whether `0x00FF_FFFF` is accepted and left rewritable by this chip family.
+Until a fresh tag is cleared and then written again, that is the one open claim —
+see `docs/tickets/studio-redesign-followups/clearing-a-tag-must-leave-it-usable.md`,
+whose hardware criterion is deliberately unticked.
 
 ### Multi-report frames — VERIFIED (spike 16, 2026-11-21)
 
@@ -944,8 +974,43 @@ would have shown `0S07` as part of a bank card.
 6. **`C8 42`** meaning in the LF read payload.
 7. **What sets the T5577 lock bit.** One write locked a chip; another did not.
    Understanding which payloads are safe would remove the main hazard of the
-   `0x0073` path. Blanking writes a payload unlike any tried so far, so whether
-   it is safe is unknown; `blankprobe` is the probe that would say.
+   `0x0073` path. Destroy's all-zero payload is the one that has locked chips;
+   `clearprobe` is the probe that would settle whether Clear's does.
+
+   **The chip mechanism is now documented, and it is a lock rather than wear.**
+   From the T5577/ATA5577C/ATA5577M1330C datasheets:
+
+   - The part is rated for **100,000 erase/write cycles**. Rewriting is its
+     designed purpose; it is not a single-use part, so the three chips this app
+     consumed were not worn out.
+   - It has 11 blocks of (32 data bits + **1 lock bit**), and *"once locked, the
+     block (including the lock bit itself) is not re-programmable via the RF
+     field."*
+   - The lock bit travels in **the same command as the data**: *"standard write
+     needs the opcode, the lock bit, 32 data bits and the 3-bit address (38 bits
+     total)."*
+   - There is also an OTP bit that makes every block behave as if locked, and, with
+     master key 6, a mode of operation that locks the part forever.
+
+   That last point is the measured behaviour exactly: a locked chip still latches
+   and modulates, so every reader reaches it, while it refuses all data — which is
+   what the three chips do.
+
+   **The measured correlation on this hardware** is payload *shape*, not payload
+   value: the **all-zero** payload locks (three instances, one after a field
+   re-seat), while **clone-shaped** payloads — customer at `[8]` and `[12]`, data32
+   at `[16..20]`, as every routine Clone writes — have never locked one. Which of
+   the 24 payload bytes carries the lock bit is still unknown.
+
+   **The consequence for this app:** a locked chip is alive and visible to every
+   reader and permanently refuses data, so "the tag went dead" is the wrong
+   diagnosis in any future bug report.
+
+   **The standing task:** if the lock-bit position in the `0x0073` payload is ever
+   identified, **Destroy** should set it deliberately — one command, a certain
+   result — and **Clear** must then be proven to leave it clear. Until then this
+   app must not claim it sets the lock bit, because it does not know which byte
+   would.
 
 Solved: **125 kHz write/clone** — command `0x0073`, see above.
 Solved: **multi-report reassembly** — verified in both directions, with real

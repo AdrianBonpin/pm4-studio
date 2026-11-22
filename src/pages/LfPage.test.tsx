@@ -5,11 +5,11 @@ import { LfPage } from "./LfPage";
 import { fakeBackend, renderUi, type CommandAnswer } from "../test/dom";
 import { SNAPSHOT, libraryState, libraryView } from "../test/libraryState";
 import {
-  RESET_ACTION_LABEL,
-  RESET_PANEL_TITLE,
-  RESET_READ_CONTROL,
-  resetConfirmation,
-} from "../lib/blankTag";
+  CLEAR_ACTION_LABEL,
+  CLEAR_PANEL_TITLE,
+  CLEAR_READ_CONTROL,
+  clearConfirmation,
+} from "../lib/clearTag";
 import { replacementConfirmation } from "../lib/replacement";
 import type { IdentityPreview, LfCard, WriteResult } from "../types";
 import type { LibraryState } from "../hooks/useLibrary";
@@ -149,7 +149,7 @@ describe("the 125 kHz workspace", () => {
     expect(switcher().getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Read",
       "Write",
-      "Reset",
+      "Clear",
       "Clone",
       "Batch",
     ]);
@@ -172,13 +172,13 @@ describe("the 125 kHz workspace", () => {
     expect(screen.getByRole("heading", { name: "Author an Identity" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Read a tag" })).toBeNull();
 
-    await user.click(switcher().getByRole("button", { name: "Reset" }));
-    expect(screen.getByRole("heading", { name: RESET_PANEL_TITLE })).toBeTruthy();
+    await user.click(switcher().getByRole("button", { name: "Clear" }));
+    expect(screen.getByRole("heading", { name: CLEAR_PANEL_TITLE })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Author an Identity" })).toBeNull();
 
     await user.click(switcher().getByRole("button", { name: "Clone" }));
     expect(screen.getByRole("heading", { name: "Clone a tag" })).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: RESET_PANEL_TITLE })).toBeNull();
+    expect(screen.queryByRole("heading", { name: CLEAR_PANEL_TITLE })).toBeNull();
 
     await user.click(switcher().getByRole("button", { name: "Batch" }));
     expect(screen.getByRole("heading", { name: "Batch clone" })).toBeTruthy();
@@ -216,7 +216,7 @@ describe("the 125 kHz workspace", () => {
     for (const heading of [
       "Read a tag",
       "Author an Identity",
-      RESET_PANEL_TITLE,
+      CLEAR_PANEL_TITLE,
       "Clone a tag",
       "Batch clone",
     ]) {
@@ -438,14 +438,14 @@ describe("Batch", () => {
   });
 });
 
-describe("Reset", () => {
-  it("still asks before destroying the Identity it read", async () => {
+describe("Clear", () => {
+  it("still asks before overwriting the Identity it read", async () => {
     const { user } = renderPage({ lf_poll: () => SOURCE });
 
-    await user.click(switcher().getByRole("button", { name: "Reset" }));
-    await user.click(screen.getByRole("button", { name: RESET_READ_CONTROL }));
+    await user.click(switcher().getByRole("button", { name: "Clear" }));
+    await user.click(screen.getByRole("button", { name: CLEAR_READ_CONTROL }));
 
-    expect(await screen.findByText(resetConfirmation(SOURCE.id).title)).toBeTruthy();
-    expect(screen.getByRole("button", { name: RESET_ACTION_LABEL })).toBeTruthy();
+    expect(await screen.findByText(clearConfirmation(SOURCE.id).title)).toBeTruthy();
+    expect(screen.getByRole("button", { name: CLEAR_ACTION_LABEL })).toBeTruthy();
   });
 });

@@ -41,9 +41,10 @@
 
 import type {
   BatchAttemptResult,
-  BlankResult,
   BuildRefusal,
+  ClearResult,
   EraseResult,
+  TagOperation,
   WriteResult,
 } from "../types";
 import type { SaveResult } from "./library";
@@ -51,7 +52,7 @@ import { attemptNotice } from "./batchClone";
 import {
   ALL_OUTCOME_KINDS,
   attemptKind,
-  blankKind,
+  clearKind,
   copyWriteKind,
   eraseKind,
   ndefWriteKind,
@@ -61,7 +62,11 @@ import {
   type OutcomeKind,
   type Severity,
 } from "./severity";
-import { resetNotice, WILL_NOT_ACCEPT_WRITES } from "./blankTag";
+import {
+  reportsOtherOperation,
+  tagOperationNotice,
+  WILL_NOT_ACCEPT_WRITES,
+} from "./clearTag";
 import { describeClearReport, type ClearReport } from "./clearData";
 import { BUILD_REFUSAL_DETAIL, BUILD_REFUSAL_LABEL } from "./consoleRefusal";
 import { eraseNotice } from "./eraseTag";
@@ -89,7 +94,7 @@ export type OutcomeOperation =
   | "library"
   | "write"
   | "copy"
-  | "reset"
+  | "clear"
   | "clone"
   | "batch"
   | "erase"
@@ -114,7 +119,7 @@ export const ALL_OUTCOME_OPERATIONS: readonly OutcomeOperation[] = [
   "library",
   "write",
   "copy",
-  "reset",
+  "clear",
   "clone",
   "batch",
   "erase",
@@ -225,7 +230,7 @@ function deviceOutcome(
 /** Everything a caller may need to describe what an operation did. */
 export const outcomes = {
   /** A Tag was read and the read is the result: `Read 55 00 84 82 12.` */
-  tagRead(operation: "read" | "hf-read" | "reset", identity: string): Outcome {
+  tagRead(operation: "read" | "hf-read" | "clear", identity: string): Outcome {
     return make("read", operation, `Read ${identity}.`);
   },
 
@@ -286,8 +291,9 @@ export const outcomes = {
    * nobody established keeps the generic kind, because the fail-safe direction is
    * the error rather than the milder skip.
    *
-   * A copy write that reports `blanked` or `erased` is a bug, not a result — it
-   * places no copy — so it is reported as a failure rather than as success.
+   * A copy write that reports `cleared`, `destroyed` or `erased` is a bug, not a
+   * result — it places no copy — so it is reported as a failure rather than as
+   * success.
    */
   write(operation: "write" | "clone" | "batch", result: WriteResult): Outcome {
     const kind = copyWriteKind(result.outcome, refusalCauseOf(result));
@@ -390,13 +396,26 @@ export const outcomes = {
       trimmed === "" ? {} : { detail: trimmed },
     );
   },
-  /** What became of one Reset, in the blanking copy's own words. */
-  blank(result: BlankResult): Outcome {
-    // The tag that read back its own Identity after the write is `reset-refused`:
-    // not `failed` (which says the attempt is the problem) and not `unverified`
-    // (which says nothing is known) — the state of the tag is known, and it is
-    // the useful finding (ADR 0007). `blankKind` is the one place that says so.
-    return make(blankKind(result.outcome), "reset", resetNotice(result).text);
+  /**
+   * What became of one Clear, or one Destroy, in that operation's own words.
+   *
+   * The operation the user chose is passed in rather than read off the result, so a
+   * result that echoes the other one is a reported mismatch instead of a plausible
+   * message: `tagOperationNotice` refuses to word a destruction as a clear.
+   *
+   * A tag that did not take the write is `clear-refused`: not `failed` (which says
+   * the attempt is the problem) and not `unverified` (which says nothing is known) —
+   * the state of the tag is known, and it is the useful finding (ADR 0007).
+   * `clearKind` is the one place the severity comes from, so a destroy the user
+   * asked for is never drawn as a failure.
+   */
+  clear(operation: TagOperation, result: ClearResult): Outcome {
+    // A result for the other operation is a refusal, not a completion: the message
+    // says so, and the severity has to agree with it.
+    const kind = reportsOtherOperation(operation, result)
+      ? "refused"
+      : clearKind(result.outcome);
+    return make(kind, "clear", tagOperationNotice(operation, result).text);
   },
 
   /** What became of one NDEF erase, in the erasing copy's own words. */
@@ -410,9 +429,10 @@ export const outcomes = {
    *
    * The words are `lib/tagWrite`'s, because that module already words the notice
    * beside the result: the line on the page and the message in the corner come
-   * from one sentence rather than two that can drift. `blanked` and `erased` are
-   * things writing a message cannot do, so a backend reporting either is a bug
-   * and is reported as a failure rather than as a success nobody would believe.
+   * from one sentence rather than two that can drift. `cleared`, `destroyed` and
+   * `erased` are things writing a message cannot do, so a backend reporting any of
+   * them is a bug and is reported as a failure rather than as a success nobody
+   * would believe.
    */
   ndefWrite(result: NdefWriteResult): Outcome {
     return make(ndefWriteKind(result.outcome), "write", ndefWriteNotice(result).text);
@@ -479,15 +499,15 @@ export const outcomes = {
   },
 
   /**
-   * A Reset this Tag would not accept. Its own outcome rather than a write
-   * failure, because what it says is specific and the remedy is not "try again":
-   * the first write is the test, and this Reader cannot tell which tags will
-   * refuse one (ADR 0007, and `lib/blankTag.ts` for why no check is offered).
+   * A Clear or Destroy this Tag would not accept. Its own outcome rather than a
+   * write failure, because what it says is specific and the remedy is not "try
+   * again": the first write is the test, and this Reader cannot tell which tags
+   * will refuse one (ADR 0007, and `lib/clearTag.ts` for why no check is offered).
    */
-  resetRefused(cause: string): Outcome {
+  clearRefused(cause: string): Outcome {
     return make(
-      "reset-refused",
-      "reset",
+      "clear-refused",
+      "clear",
       WILL_NOT_ACCEPT_WRITES,
       {
         detail:

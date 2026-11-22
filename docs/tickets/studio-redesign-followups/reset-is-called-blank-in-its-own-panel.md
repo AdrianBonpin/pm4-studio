@@ -10,7 +10,18 @@
 
 **Tracker:** None
 
-**Status:** done
+**Status:** done — **superseded on naming** by
+[`clearing-a-tag-must-leave-it-usable.md`](clearing-a-tag-must-leave-it-usable.md)
+
+> **Amendment (2026-11-22).** This ticket made the panel say **Reset**, which was
+> the right fix for the defect it found: one name for one operation. The Clear/
+> Destroy split then retired that name — a destructive operation a user reaches for
+> by habit should not be called something that sounds like "start over" — so the
+> mode, the panel and every string now say **Clear**, and **Destroy** is a separate
+> control inside it. The *structure* this ticket built survives unchanged: the mode
+> pill's label and the panel's words still come from one name, and
+> `lib/clearTag.test.ts` → "the mode and its panel say the same word" still fails if
+> they part company. Every criterion below is still met; only the word changed.
 
 - [x] The panel heading, its controls and its outcome words say **Reset**, and the verb "blank" as an action the user performs is gone from the 125 kHz page's copy. "Blank" as a *noun* stays, in Clone and Batch. — `lib/blankTag`: `RESET_PANEL_TITLE` "Reset a tag", `RESET_READ_CONTROL` "Read the tag to reset", `RESET_ACTION_LABEL` "Reset this tag permanently", `RESET_ANOTHER_CONTROL` "Reset another tag", and `resetNotice` words the outcome "Reset — the tag no longer presents an Identity" / "Not reset: …".
 - [x] The page subtitle no longer ends "…or blank a tag". — `lib/pageCopy.ts`: "…author one by hand, or Reset a tag."

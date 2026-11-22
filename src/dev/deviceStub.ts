@@ -51,7 +51,7 @@ import type { Draft, DraftRecord, DraftsView } from "../lib/drafts";
 import type { LibraryView, Snapshot } from "../lib/library";
 import type { DumpRow, MemoryDump } from "../lib/memoryDump";
 import type { TagNdef, TagNdefOutcome, TagRecordsRead } from "../lib/tagRecords";
-import type { DeviceInfo, HfCard, LfCard } from "../types";
+import type { DeviceInfo, HfCard, LfCard, TagOperation } from "../types";
 import { mountStubPanel } from "./stubPanel";
 
 /**
@@ -258,7 +258,7 @@ function applyLfProfile(profile: LfProfile): void {
   switch (profile) {
     case "source":
       state.lfTag = SOURCE;
-      // The tag this project's own probe already wrote once: the Reset that fails.
+      // The tag this project's own probe already wrote once: the Clear that fails.
       state.lfWritable = false;
       break;
     case "blank":
@@ -524,6 +524,16 @@ function cardFrom(customer: number, data32: number): LfCard {
   };
 }
 
+/**
+ * The placeholder **Clear** writes: customer `0x00`, facility `0xFF`, card
+ * `0xFFFF`, i.e. data32 `0x00FF_FFFF`.
+ *
+ * One definition in the shipping code (`src-tauri/src/identity.rs`,
+ * `Identity::CLEARED`); this is the fixture's copy of it, and the id text is what
+ * the interface shows because the backend reports it rather than spelling it out.
+ */
+const CLEARED: LfCard = cardFrom(0x00, 0x00ff_ffff);
+
 /** What a guarded write answers, mirroring the Rust vocabulary and its rules. */
 function guardedWrite(customer: number, data32: number) {
   const target = identityFrom(customer, data32);
@@ -629,38 +639,56 @@ const handlers: Record<string, (args: Args) => unknown> = {
       countProblem: null,
     };
   },
-  lf_blank: (args) => {
+  lf_clear: (args) => {
     const customer = Number(args.customer ?? 0);
     const data32 = Number(args.data32 ?? 0);
+    const operation = String(args.operation ?? "clear") as TagOperation;
+    const base = { customer, data32, operation };
     if (state.lfTag === null) {
       return {
-        customer,
-        data32,
+        ...base,
         outcome: "refused",
-        blanked: false,
-        stillIdentifies: null,
+        cleared: false,
+        destroyed: false,
+        presents: null,
         message: "No tag could be read, so there was nothing to write to.",
       };
     }
     if (!state.lfWritable) {
-      const still = state.lfTag.id;
+      // The measured reality of a chip that will not take data: it still reads,
+      // and it keeps the Identity it had.
       return {
-        customer,
-        data32,
+        ...base,
         outcome: "willNotAcceptWrites",
-        blanked: false,
-        stillIdentifies: still,
+        cleared: false,
+        destroyed: false,
+        presents: state.lfTag.id,
         message: "This tag will not accept writes.",
       };
     }
-    // A blanked tag reads as empty: it holds no Identity to report.
-    state.lfTag = null;
+    if (operation === "destroy") {
+      // A destroyed tag reads as carrying no Identity, and refuses every later
+      // write — which is why the stub flips `lfWritable` as well.
+      state.lfTag = null;
+      state.lfWritable = false;
+      return {
+        ...base,
+        outcome: "destroyed",
+        cleared: false,
+        destroyed: true,
+        presents: null,
+        message: null,
+      };
+    }
+    // A cleared tag carries the placeholder, so it reads as an Identity and is a
+    // legal write position for the next Clone or authored Identity.
+    state.lfTag = CLEARED;
     return {
-      customer,
-      data32,
-      outcome: "blanked",
-      blanked: true,
-      stillIdentifies: null,
+      ...base,
+      outcome: "cleared",
+      cleared: true,
+      destroyed: false,
+      presents: CLEARED.id,
       message: null,
     };
   },

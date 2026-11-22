@@ -1,8 +1,17 @@
-# Reset's refusal was never seen, and a blanked tag accepts no new Identity
+# The refusal was never seen, and a zeroed tag accepts no new Identity
+
+> **Naming note (2026-11-22).** This ticket was written when the operation was one
+> destructive write called **Reset**. The payload question it raised has since been
+> answered by splitting the operation: the all-zero write is now **Destroy** (its
+> own gate, permanent), and the everyday **Clear** writes a non-zero, clone-shaped
+> placeholder so the tag stays usable. Where this ticket says "blanking" or
+> "Reset", read the overwrite write — the destructive half of it is Destroy. The
+> criteria below are kept as written, with the outcome of each recorded.
 
 **What to build:** Evidence that the "this tag will not accept writes" outcome
-happens on real hardware, and a decision about what blanking should write, now
-that writing the all-zero data field has left a T5577 refusing every later write.
+happens on real hardware, and a decision about what the overwrite write should
+carry, now that writing the all-zero data field has left a T5577 refusing every
+later write.
 
 **Cause.** Ticket 12's whole point is a blanking write producing its own
 outcome — three chirps, the LED held on, "the tag will not accept writes", with
@@ -80,10 +89,24 @@ tag settle.
 - [ ] A blanked tag that will not take a new Identity produces its own
       distinguishable report — not "the reader is absent", not a generic failure,
       and not *blanked* (which describes the first write, not the second).
-- [ ] The blanking payload question is decided and written down: what `0x0073`
-      should carry so a blanked T5577 stays usable, or the finding that this chip
-      family cannot be left usable by any blanking write this protocol can send.
-      Measured against the tag family's datasheet, not reasoned from it.
-- [ ] Whichever way it resolves, `docs/superpowers/hardware-checklist-studio-redesign.md`
-      item 5 is re-run and its result recorded, so the claim stops resting on the
-      automated suite alone.
+- [x] The payload question is decided and written down: what `0x0073` should carry
+      so a tag stays usable, or the finding that this chip family cannot be left
+      usable by any write this protocol can send. Measured against the tag family's
+      datasheet, not reasoned from it.
+      *Decided:* two payloads, two operations. **Destroy** keeps the all-zero write
+      (measured to disable the chip); **Clear** writes customer `0x00`, facility
+      `0xFF`, card `0xFFFF` (data32 `0x00FF_FFFF`), chosen because the payload is
+      *clone-shaped* — the same layout every routine Clone writes, and clone writes
+      have never locked a chip. Defined once, with the reasoning, in
+      `Identity::CLEARED` (`src-tauri/src/identity.rs`); recorded in
+      `docs/PROTOCOL.md`. The datasheet evidence is in `docs/PROTOCOL.md`, open
+      problem 7: 100,000 erase/write cycles, a per-block lock bit carried in the
+      same 38-bit standard write, and an OTP mode — so the three consumed chips were
+      **locked, not worn out**, which is why they still latch and modulate.
+- [ ] **Still open, and the reason this stays unticked:** no fresh T5577 is left, so
+      a cleared tag has never been written again. `docs/superpowers/hardware-checklist-studio-redesign.md`
+      item 5 has been rewritten for Clear and Destroy with its expected observations,
+      and it has **not been run**. The Clear payload's safety rests on the shape of
+      the payload and on the datasheet, not on a hardware confirmation.
+- [ ] A write the chip refused, on a still-readable tag, has still not been observed
+      producing *will not accept writes*. It stays unobserved until a tag produces it.

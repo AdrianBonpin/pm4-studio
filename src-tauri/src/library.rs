@@ -1739,8 +1739,8 @@ mod tests {
     }
 
     #[test]
-    fn a_blanking_write_never_adds_a_confirmed_copy() {
-        // Blanking destroys an Identity instead of copying one. The Snapshot
+    fn a_destroying_write_never_adds_a_confirmed_copy() {
+        // Destroying an Identity is not copying one. The Snapshot
         // that describes it must not gain a copy, and nothing about the Tag's
         // value may be edited: a Snapshot records what a Tag held when it was
         // read, not what a Tag holds now.
@@ -1752,7 +1752,7 @@ mod tests {
         };
         let before = library.snapshots[0].clone();
 
-        let outcome = library.record_write(&identity, WriteOutcome::Blanked);
+        let outcome = library.record_write(&identity, WriteOutcome::Destroyed);
         assert_eq!(
             outcome,
             WriteCountOutcome::Unchanged {
@@ -2813,7 +2813,8 @@ mod tests {
             WriteOutcome::Failed,
             WriteOutcome::Unverified,
             WriteOutcome::Erased,
-            WriteOutcome::Blanked,
+            WriteOutcome::Destroyed,
+            WriteOutcome::Cleared,
         ] {
             let mut library = Library::empty();
             let (hf, _) = hf_read_with_two_records();

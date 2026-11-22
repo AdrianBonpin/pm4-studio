@@ -19,8 +19,14 @@ _Avoid_: card, fob, badge, chip, transponder
 A Tag that carries no Identity. Blankness is a state, not a product category — a
 Tag becomes Blank again only by being written to. A Blank is not necessarily a
 Tag that will take a write: that is **Writability**, which cannot be observed
-before trying, and a Reset can leave a Tag Blank and unable to accept a new
-Identity.
+before trying, and a **Destroy** leaves a Tag Blank and permanently unable to
+accept data. A **Clear** leaves a Tag carrying the **Cleared** placeholder, which
+is *not* Blank — it reads as an Identity, which is what keeps it writable.
+
+This is the only survivor of the family of "blank" words in the interface: it is
+a noun for a state a Tag can be in, and it is never a verb. The operation that
+produces the state is **Destroy**, and the operation a user reaches for is
+**Clear**.
 _Avoid_: empty tag, new tag, unwritten tag, virgin tag
 
 **Snapshot**:
@@ -107,26 +113,50 @@ indicator test. The 13.56 MHz memory-dump mode is named Memory, so that "look in
 Diagnostics" has exactly one destination.
 _Avoid_: tools, debug, advanced, inspect
 
+**Clear**:
+Overwriting a Tag's Identity with the **Cleared** placeholder, so the Tag stops
+being a working credential and stays a live, rewritable chip. Clear is the
+everyday operation and the name of the 125 kHz mode that offers it. It does
+**not** restore a factory configuration, it does **not** unlock a locked Tag, and
+it does **not** destroy the Tag: a Cleared Tag reads back as an Identity, so a
+Clone or an authored Identity can be written onto it afterwards. It *is* a write,
+which is why it is also the only way to find out whether a Tag will accept one:
+no cheaper test exists (ADR 0007), and the attempt can fail.
+_Avoid_: wipe, erase, format, factory reset, restore, reset, blank (as a verb)
+
+**Cleared**:
+The state a **Clear** leaves: the Tag carries the placeholder Identity —
+customer `0x00`, facility `0xFF`, card `0xFFFF` — which no building system issues,
+so it opens nothing, and which is non-zero, so the Tag keeps reading and keeps
+accepting writes. The placeholder is defined once, in `Identity::CLEARED`
+(`src-tauri/src/identity.rs`), with the reasoning that chose it.
+
+**Destroy**:
+Overwriting a Tag's Identity with the neutral one — customer `0x00`, data32
+`0x00000000` — which on a T5577 leaves the Tag **permanently disabled**: it keeps
+latching and modulating, so every reader still reaches it, and it refuses all
+further data. Measured three times on 2026-11-22, once after a field re-seat, and
+explained by the chip's per-block lock bit (see `docs/PROTOCOL.md`, open problem
+7). Destroy is deliberate, destructive and never the default; it cannot be
+recovered, reused or unlocked, and there is no factory restore in this protocol.
+_Avoid_: wipe, erase, format, factory reset, restore, reset, recover, reuse
+
 **Reset**:
-Writing the neutral Identity over a Tag's own, so the Tag carries no assigned
-value. Reset does **not** restore a factory configuration, and does **not** unlock
-a locked Tag. It is also the only way to find out whether a Tag will accept a
-write: no cheaper test exists, so the first Reset is the test — and the test can
-fail destructively. Measured on 2026-11-22: the all-zero write leaves a T5577
-**locked**, still latched and modulating and accepting no further data, so on that
-family a Reset destroys the Tag's usability instead of clearing it. A Tag left
-without an Identity is therefore **Blank** as a state and is not a reusable Tag: it
-may be unable to accept a Clone, and nothing in this app can make it accept one
-again. Clearing a Tag so that it stays usable is a separate operation, measured but
-not built — see
-`docs/tickets/studio-redesign-followups/clearing-a-tag-must-leave-it-usable.md`.
-_Avoid_: wipe, erase, format, factory reset, restore, blank (as a verb)
+**Not used in the interface.** The word named the single destructive operation
+this app used to offer as its routine one, and it invited exactly the factory-restore
+reading the hardware cannot satisfy. The operation it named is now **Clear**
+(routine, reversible) and **Destroy** (deliberate, destructive), and the interface
+says those words. The word survives only in historical documents — this glossary's
+own history, ADRs and hardware run reports — where it names the operation that
+came before the split.
+_Avoid_: using it for either current operation
 
 **Erase**:
 Clearing a 13.56 MHz Tag's NDEF content by writing an empty NDEF TLV (`03 00 FE`)
 over the message area. An erased Tag is still a Tag: it keeps its UID, its
 Capability Container and its format, and carries no Records. Erase is not a
-format, not a Reset, and does not lock or password-protect anything.
+format, not a Clear and not a Destroy, and does not lock or password-protect
+anything.
 _Avoid_: format, wipe, reset, blank, unlock
 
 **Card type**:
@@ -163,9 +193,10 @@ _Avoid_: phase, stage, milestone, epic
 - A **Collection** holds either **Snapshots** or **Drafts**, never both in one list
 - A **Clone** consumes one **Blank** and the **Identity** from one **Snapshot**
 - A **Copy** consumes one 13.56 MHz Tag's **NDEF message** and replaces another Tag's
-- A **Reset** consumes one non-**Blank** Tag and leaves a **Blank**
-- An **Erase** leaves a **Tag** present with no **Records**; it is not a **Reset**
-  and does not make the Tag **Blank**
+- A **Clear** consumes one non-**Blank** Tag and leaves it **Cleared**: still a Tag, still writable, carrying a placeholder no system issues
+- A **Destroy** consumes one non-**Blank** Tag and leaves it **Blank** and permanently unable to accept data
+- An **Erase** leaves a **Tag** present with no **Records**; it is neither a
+  **Clear** nor a **Destroy**, and it does not make the Tag **Blank**
 - A **Frame** carries exactly one **Command**
 - A **Slice** may be gated on a **Spike**
 - An **Outcome** reports one operation and produces exactly one **Toast** and at most one **Signal**
@@ -178,8 +209,10 @@ _Avoid_: phase, stage, milestone, epic
   Resolved: the object is a **Tag**; "badge" is no longer used.
 - "reset" was used for three different operations — restoring a factory
   configuration, overwriting an Identity with the neutral one, and unlocking a chip
-  that refuses writes. Resolved: **Reset** means the second only. The other two are
-  not possible over this protocol.
+  that refuses writes. Resolved: the word is retired from the interface. The second
+  operation split into **Clear** (writes a placeholder; the Tag stays usable) and
+  **Destroy** (writes the neutral Identity; the Tag is permanently disabled), and
+  the other two are not possible over this protocol.
 - "record" was used for both a library entry and an NDEF record. Resolved: a
   library entry is a **Snapshot**; an NDEF record is a **Record**.
 - "clone" was used for both copying an Identity and copying an NDEF message.
@@ -187,7 +220,8 @@ _Avoid_: phase, stage, milestone, epic
   copying on 13.56 MHz. Both are in scope, and the distinction survives because
   the two verify differently.
 - "blank" was used as both a noun for a product you buy and a state a Tag is in.
-  Resolved: **Blank** is a state. It is never a verb — the operation is **Reset**.
+  Resolved: **Blank** is a state. It is never a verb, and it is not a word the
+  Clear/Destroy panel uses at all — the operations are **Clear** and **Destroy**.
 - "diagnostics" meant both the 13.56 MHz memory-dump mode and the Settings group
   holding the capability limits. Resolved: the mode is **Memory**; the Settings
   group is **Diagnostics**.

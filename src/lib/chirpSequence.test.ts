@@ -16,7 +16,7 @@ function sequenceFor(outcome: Outcome): ChirpSequence {
   return chirpSequenceFor(signalOf(outcome));
 }
 import { SIGNAL_SYMBOLS, type SignalSymbol } from "./signal";
-import type { BlankResult, EraseResult, WriteResult } from "../types";
+import type { ClearResult, EraseResult, WriteResult } from "../types";
 
 /**
  * The audible alphabet, as a pure value: an outcome in, a sequence out.
@@ -59,12 +59,25 @@ function writeResult(
   };
 }
 
-const BLANK: BlankResult = {
+const CLEARED: ClearResult = {
   customer: 0x55,
   data32: 0x0084_8212,
-  outcome: "blanked",
-  blanked: true,
-  stillIdentifies: null,
+  operation: "clear",
+  outcome: "cleared",
+  cleared: true,
+  destroyed: false,
+  presents: "00 00 FF FF FF",
+  message: null,
+};
+
+const DESTROYED: ClearResult = {
+  customer: 0x55,
+  data32: 0x0084_8212,
+  operation: "destroy",
+  outcome: "destroyed",
+  cleared: false,
+  destroyed: true,
+  presents: null,
   message: null,
 };
 
@@ -110,10 +123,20 @@ const EXPECTED_OUTCOMES: readonly {
     chirps: 1,
   },
   {
-    what: "a Reset that left no Identity",
-    outcome: outcomes.blank(BLANK),
+    what: "a Clear that left the placeholder",
+    outcome: outcomes.clear("clear", CLEARED),
     symbol: "done",
     chirps: 1,
+  },
+  {
+    // A destroy the user asked for is completed, not failed — but its evidence is
+    // an absence, which cannot be told from a tag lifted off the reader, so it is
+    // *needs you* rather than *done*. That is also what makes it audibly distinct
+    // from a clear.
+    what: "a Destroy the user asked for",
+    outcome: outcomes.clear("destroy", DESTROYED),
+    symbol: "needs-you",
+    chirps: 2,
   },
   {
     what: "an erase that cleared the message",
@@ -213,8 +236,8 @@ const EXPECTED_OUTCOMES: readonly {
     chirps: 3,
   },
   {
-    what: "a Reset the tag would not accept",
-    outcome: outcomes.resetRefused("the tag is still identifiable"),
+    what: "a Clear the tag would not accept",
+    outcome: outcomes.clearRefused("the tag is still identifiable"),
     symbol: "attention",
     chirps: 3,
   },

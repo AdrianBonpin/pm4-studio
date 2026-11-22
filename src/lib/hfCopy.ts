@@ -774,9 +774,11 @@ export function copyEvidence(result: NdefWriteResult): CopyWriteEvidence {
       return { outcome: "refused", reason: result.message, readback };
     case "failed":
       return { outcome: "failed", reason: result.message, readback };
-    case "blanked":
+    case "cleared":
+    case "destroyed":
     case "erased":
-      // An NDEF write replaces a message and can never blank or erase a Tag.
+      // An NDEF write replaces a message and can never clear, destroy or erase a
+      // Tag's content.
       // Reported as a failure rather than trusted, for the same reason
       // `writeNotice` names it as a bug.
       return {

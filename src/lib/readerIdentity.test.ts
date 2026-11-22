@@ -298,9 +298,17 @@ describe("the writability limit is untouched by the NDEF correction", () => {
   it("still says a write is the only test", () => {
     // Ticket 12's limit is the one entry that must survive verbatim; a sweep of
     // the list for stale claims must not tidy it away with the corrected ones.
+    //
+    // The operation it names was renamed since: Reset became Clear, and Destroy
+    // became its own deliberate action. The limit is about the *test*, which is
+    // the everyday write, so it names Clear — this assertion moved with the
+    // rename rather than being relaxed. Everything else about the entry is
+    // unchanged, and the rule the comment states still holds: a future sweep for
+    // stale claims must not tidy this entry away.
     const limit = READER_CAPABILITY_LIMITS.find((entry) => entry.id === "writability");
     const text = `${limit?.label} ${limit?.detail}`;
     expect(text).toMatch(/without attempting a write/i);
-    expect(text).toMatch(/Reset is the test/i);
+    expect(text).toMatch(/Clear is the test/i);
+    expect(text).not.toMatch(/\bReset\b/);
   });
 });

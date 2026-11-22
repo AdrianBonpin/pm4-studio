@@ -213,6 +213,43 @@ mod tests {
     }
 
     #[test]
+    fn a_cleared_tag_is_a_legal_write_position_for_a_new_identity() {
+        // The requirement, at the gate every Clone, Batch and authored write goes
+        // through: a tag Clear has already been on still reads as an Identity, so
+        // it must be a write position with no read-before-write refusal. Its value
+        // is the placeholder, which is not the target, so ADR 0001's "the original
+        // is still in place" condition does not fire either.
+        let cleared = Identity::CLEARED;
+        let target = written_tag();
+        assert_ne!(cleared, target, "the placeholder is not a real credential");
+
+        let decision = decide(TagPresence::Identified(cleared), target);
+        assert_eq!(decision, WriteDecision::Proceed);
+        assert!(decision.allows_write());
+        assert_eq!(RefusalCause::of(decision), None);
+        assert_eq!(decision.refusal_message(Some(cleared)), None);
+    }
+
+    #[test]
+    fn a_cleared_tag_is_not_the_blank_case_either() {
+        // The placeholder is non-zero on purpose, so the presence decoder reports
+        // `Identified` rather than `Blank`: the app can see a cleared Tag, which is
+        // what makes it a write position at all.
+        let mut payload = [0u8; crate::identity::LF_READ_PAYLOAD_LEN];
+        payload[2] = 0x01;
+        payload[12..16].copy_from_slice(&Identity::CLEARED.data32.to_le_bytes());
+
+        assert_eq!(
+            TagPresence::from_read_payload(&payload),
+            TagPresence::Identified(Identity::CLEARED)
+        );
+        assert_eq!(
+            decide(TagPresence::from_read_payload(&payload), written_tag()),
+            WriteDecision::Proceed
+        );
+    }
+
+    #[test]
     fn a_blank_write_position_raises_no_refusal_cause() {
         // Nothing was refused, so naming a cause would blame a condition the
         // guard never raised.

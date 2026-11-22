@@ -77,6 +77,14 @@ No second tag of insufficient capacity was available. Unverified.
 
 ### Item 5 — Reset twice: **half observed, and a new finding**
 
+> **Read with hindsight (2026-11-22, after the run).** The operation this item
+> exercised was a single destructive write called **Reset**. It has since split into
+> **Clear** (writes a non-zero placeholder; the tag stays usable) and **Destroy**
+> (the all-zero write this item measured). The findings below are unchanged — they
+> are what Destroy does — and the runbook's item 5 has been rewritten for both
+> operations. This section is a record of what was observed, not of what the app
+> now offers.
+
 `screenshots/hardware-5-reset-reported-blanked.png`
 
 The first half is **pass**: the write reported *Blanked* — not verified, not a copy

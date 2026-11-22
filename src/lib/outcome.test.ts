@@ -18,9 +18,9 @@ import type { NdefWriteResult } from "./tagWrite";
 import { BUILD_REFUSAL_LABEL } from "./consoleRefusal";
 import { writeNotice } from "./writeOutcome";
 import { attemptNotice } from "./batchClone";
-import { resetNotice } from "./blankTag";
+import { clearNotice, destroyNotice } from "./clearTag";
 import { eraseNotice } from "./eraseTag";
-import type { BatchAttemptResult, BlankResult, EraseResult, WriteResult } from "../types";
+import type { BatchAttemptResult, ClearResult, EraseResult, WriteResult } from "../types";
 import type { LibraryView, SaveResult, Snapshot } from "./library";
 
 /**
@@ -51,7 +51,12 @@ const EXPECTED_SEVERITY: Record<OutcomeKind, Severity> = {
   "already-saved": "info",
   "read-incomplete": "warning",
   verified: "success",
-  blanked: "success",
+  // Clear's read-back is the placeholder itself: a positive confirmation.
+  cleared: "success",
+  // A destroy the user asked for is completed, not failed — but its evidence is an
+  // absence, so it is *needs you*, and that is what makes it audibly distinct from
+  // a clear.
+  destroyed: "warning",
   erased: "success",
   "data-cleared": "success",
   unverified: "warning",
@@ -59,7 +64,7 @@ const EXPECTED_SEVERITY: Record<OutcomeKind, Severity> = {
   failed: "error",
   skipped: "error",
   unreadable: "error",
-  "reset-refused": "error",
+  "clear-refused": "error",
   "refused-by-build": "error",
   "reader-absent": "info",
   // The Reader disappearing during an operation is not the quiet state: the
@@ -114,23 +119,40 @@ function attempt(
   };
 }
 
-const BLANK: BlankResult = {
+const PLACEHOLDER = "00 00 FF FF FF";
+
+const CLEARED: ClearResult = {
   customer: 0x55,
   data32: 0x0084_8212,
-  outcome: "blanked",
-  blanked: true,
-  stillIdentifies: null,
+  operation: "clear",
+  outcome: "cleared",
+  cleared: true,
+  destroyed: false,
+  presents: PLACEHOLDER,
   message: null,
 };
 
-/** A Reset the tag refused: the re-read still found an Identity (ADR 0007). */
-const WILL_NOT_ACCEPT: BlankResult = {
+const DESTROYED: ClearResult = {
   customer: 0x55,
   data32: 0x0084_8212,
+  operation: "destroy",
+  outcome: "destroyed",
+  cleared: false,
+  destroyed: true,
+  presents: null,
+  message: null,
+};
+
+/** A Clear the tag refused: the re-read still found an Identity (ADR 0007). */
+const WILL_NOT_ACCEPT: ClearResult = {
+  customer: 0x55,
+  data32: 0x0084_8212,
+  operation: "clear",
   outcome: "willNotAcceptWrites",
-  blanked: false,
-  stillIdentifies: "55 00 84 82 12",
-  message: "the tag still reads as 55 00 84 82 12 after the blanking write",
+  cleared: false,
+  destroyed: false,
+  presents: "55 00 84 82 12",
+  message: "the tag still reads as 55 00 84 82 12 after the clearing write",
 };
 
 const ERASE: EraseResult = {
@@ -203,8 +225,10 @@ describe("the discriminator set", () => {
         "already-saved",
         "announcement",
         "beep-test",
-        "blanked",
+        "clear-refused",
+        "cleared",
         "data-cleared",
+        "destroyed",
         "drafted",
         "erased",
         "failed",
@@ -219,7 +243,6 @@ describe("the discriminator set", () => {
         "reader-wedged",
         "refused",
         "refused-by-build",
-        "reset-refused",
         "saved",
         "skipped",
         "unreadable",
@@ -237,6 +260,7 @@ describe("the discriminator set", () => {
     expect([...ALL_OUTCOME_OPERATIONS].sort()).toEqual(
       [
         "batch",
+        "clear",
         "clone",
         "console",
         "copy",
@@ -247,7 +271,6 @@ describe("the discriminator set", () => {
         "preferences",
         "read",
         "reader",
-        "reset",
         "write",
       ].sort(),
     );
@@ -400,19 +423,47 @@ describe("an outcome built from the write-outcome vocabulary", () => {
     }
   });
 
-  it("never words a copy write that reported a blanked or erased tag as success", () => {
-    for (const result of ["blanked", "erased"] as const) {
+  it("never words a copy write that reported a cleared, destroyed or erased tag as success", () => {
+    for (const result of ["cleared", "destroyed", "erased"] as const) {
       const outcome = outcomes.write("write", writeResult(result));
       expect(outcome.kind).toBe("failed");
       expect(outcome.severity).toBe("error");
     }
   });
 
-  it("words blanking with the blanking copy, and calls it Reset", () => {
-    const outcome = outcomes.blank(BLANK);
-    expect(outcome.kind).toBe("blanked");
-    expect(outcome.message).toBe(resetNotice(BLANK).text);
-    expect(outcome.operation).toBe("reset");
+  it("words a clear with Clear's copy, and calls it Clear", () => {
+    const outcome = outcomes.clear("clear", CLEARED);
+    expect(outcome.kind).toBe("cleared");
+    expect(outcome.message).toBe(clearNotice(CLEARED).text);
+    expect(outcome.operation).toBe("clear");
+    expect(outcome.severity).toBe("success");
+  });
+
+  it("words a destroy with Destroy's copy, and never as a failure", () => {
+    // The requirement, at the seam: a destroy the user asked for completed. It is
+    // *needs you* rather than *done* because its evidence is an absence, and it is
+    // never *attention*.
+    const outcome = outcomes.clear("destroy", DESTROYED);
+    expect(outcome.kind).toBe("destroyed");
+    expect(outcome.message).toBe(destroyNotice(DESTROYED).text);
+    expect(outcome.operation).toBe("clear");
+    expect(outcome.severity).toBe("warning");
+    expect(signalOf(outcome)).toBe("needs-you");
+    expect(signalOf(outcome)).not.toBe("attention");
+  });
+
+  it("cannot report a clear and a destroy as each other", () => {
+    const clear = outcomes.clear("clear", CLEARED);
+    const destroy = outcomes.clear("destroy", DESTROYED);
+    expect(clear.kind).not.toBe(destroy.kind);
+    expect(clear.severity).not.toBe(destroy.severity);
+    expect(clear.message).not.toBe(destroy.message);
+    expect(clear.message).not.toMatch(/destroyed/i);
+    expect(destroy.message).not.toMatch(/cleared/i);
+    // A result that reports the other operation is a refusal, not a success.
+    const mixedUp = outcomes.clear("clear", DESTROYED);
+    expect(mixedUp.severity).toBe("error");
+    expect(mixedUp.message).not.toContain("Cleared —");
   });
 
   it("words erasing with the erasing copy", () => {
@@ -423,13 +474,13 @@ describe("an outcome built from the write-outcome vocabulary", () => {
   });
 });
 
-describe("a Reset the tag would not accept", () => {
+describe("a Clear the tag would not accept", () => {
   it("is its own outcome, names the likely cause, and says nothing changed", () => {
-    const outcome = outcomes.resetRefused("The Reader stopped answering during the write.");
+    const outcome = outcomes.clearRefused("The Reader stopped answering during the write.");
 
-    expect(outcome.kind).toBe("reset-refused");
+    expect(outcome.kind).toBe("clear-refused");
     expect(outcome.severity).toBe("error");
-    expect(outcome.operation).toBe("reset");
+    expect(outcome.operation).toBe("clear");
     expect(outcome.message).toContain("will not accept writes");
     expect(outcome.detail).toContain("The Reader stopped answering during the write.");
     expect(outcome.detail).toContain("cannot tell which kind");
@@ -439,30 +490,38 @@ describe("a Reset the tag would not accept", () => {
   it("is classified apart from a failure and from an unknown", () => {
     // The three call for different next actions, so the discriminators differ:
     // the write was sent, it did not take, and the tag's state is known.
-    const refusedWrites = outcomes.blank(WILL_NOT_ACCEPT);
-    const failed = outcomes.blank({ ...WILL_NOT_ACCEPT, outcome: "failed", message: "no" });
-    const unknown = outcomes.blank({ ...WILL_NOT_ACCEPT, outcome: "unverified", message: "no" });
+    const refusedWrites = outcomes.clear("clear", WILL_NOT_ACCEPT);
+    const failed = outcomes.clear("clear", { ...WILL_NOT_ACCEPT, outcome: "failed", message: "no" });
+    const unknown = outcomes.clear("clear", {
+      ...WILL_NOT_ACCEPT,
+      outcome: "unverified",
+      message: "no",
+      presents: null,
+    });
 
-    expect(refusedWrites.kind).toBe("reset-refused");
+    expect(refusedWrites.kind).toBe("clear-refused");
     expect(failed.kind).toBe("failed");
     expect(unknown.kind).toBe("unverified");
     expect(refusedWrites.kind).not.toBe(failed.kind);
     expect(refusedWrites.kind).not.toBe(unknown.kind);
-    // ...and never as a blank or as a copy.
-    expect(refusedWrites.kind).not.toBe("blanked");
+    // ...and never as a clear, a destroy or a copy.
+    expect(refusedWrites.kind).not.toBe("cleared");
+    expect(refusedWrites.kind).not.toBe("destroyed");
     expect(refusedWrites.kind).not.toBe("verified");
   });
 
-  it("keeps the blanking copy's words rather than inventing its own", () => {
-    expect(outcomes.blank(WILL_NOT_ACCEPT).message).toBe(resetNotice(WILL_NOT_ACCEPT).text);
-    expect(outcomes.blank(WILL_NOT_ACCEPT).message).toContain("will not accept writes");
-    expect(outcomes.blank(WILL_NOT_ACCEPT).message).toMatch(/already (been )?written/i);
-    expect(outcomes.blank(WILL_NOT_ACCEPT).message).toMatch(/never writable/i);
+  it("keeps Clear's own words rather than inventing its own", () => {
+    expect(outcomes.clear("clear", WILL_NOT_ACCEPT).message).toBe(
+      clearNotice(WILL_NOT_ACCEPT).text,
+    );
+    expect(outcomes.clear("clear", WILL_NOT_ACCEPT).message).toContain("will not accept writes");
+    expect(outcomes.clear("clear", WILL_NOT_ACCEPT).message).toMatch(/already (been )?written/i);
+    expect(outcomes.clear("clear", WILL_NOT_ACCEPT).message).toMatch(/never writable/i);
   });
 
   it("emits the attention symbol, with the LED held on for two seconds", () => {
     // The signal machinery is ticket 04's; this ticket's job is to reach it.
-    const outcome = outcomes.blank(WILL_NOT_ACCEPT);
+    const outcome = outcomes.clear("clear", WILL_NOT_ACCEPT);
     expect(signalOf(outcome)).toBe("attention");
 
     const sequence = chirpSequenceFor(signalOf(outcome));
@@ -474,7 +533,7 @@ describe("a Reset the tag would not accept", () => {
   it("reports a refusal through the seam, on both channels", () => {
     const { symbols, stop } = hearSignals();
 
-    report(outcomes.blank(WILL_NOT_ACCEPT));
+    report(outcomes.clear("clear", WILL_NOT_ACCEPT));
 
     const [toast] = toastStore.getState().toasts;
     expect(toast?.message).toContain("will not accept writes");
@@ -484,10 +543,11 @@ describe("a Reset the tag would not accept", () => {
   });
 
   it("never counts a confirmed copy for any outcome of the operation", () => {
-    // Reset places nothing, so no outcome of it may raise a Snapshot's count —
+    // Clear and Destroy place nothing, so no outcome of either may raise a
+    // Snapshot's count —
     // and the refusal may not be worded as though it did.
-    for (const result of [BLANK, WILL_NOT_ACCEPT]) {
-      const outcome = outcomes.blank(result);
+    for (const result of [CLEARED, DESTROYED, WILL_NOT_ACCEPT]) {
+      const outcome = outcomes.clear(result.operation, result);
       expect(outcome.message).not.toMatch(/confirmed cop(y|ies)/i);
       expect(outcome.kind).not.toBe("verified");
     }
@@ -802,10 +862,11 @@ describe("every outcome the vocabulary can build", () => {
     outcomes.nothingLatched("hf-read"),
     outcomes.write("batch", writeResult("verified")),
     outcomes.ndefWrite(ndefWriteResult),
-    outcomes.blank(BLANK),
-    outcomes.blank(WILL_NOT_ACCEPT),
+    outcomes.clear("clear", CLEARED),
+    outcomes.clear("destroy", DESTROYED),
+    outcomes.clear("clear", WILL_NOT_ACCEPT),
     outcomes.erase(ERASE),
-    outcomes.resetRefused("because"),
+    outcomes.clearRefused("because"),
     outcomes.refusedByBuild({ kind: "refusedByBuild", cmd: "0x0073", message: "no" }),
     outcomes.refusedByReader("the frame was malformed"),
     outcomes.readerFailure("no such device"),
