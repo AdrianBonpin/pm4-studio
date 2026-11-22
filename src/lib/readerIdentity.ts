@@ -105,7 +105,7 @@ export const READER_CAPABILITY_LIMITS: readonly CapabilityLimit[] = [
     id: "writability",
     label: "125 kHz writability",
     detail:
-      "Cannot be determined without attempting a write. A 125 kHz reply carries no Tag family and no writability flag, so no command can answer whether a Tag will accept a write — and every command that would answer is itself a write. There is therefore no probe, in this app or in the protocol, and none is planned: Reset is the test.",
+      "Cannot be determined without attempting a write. A 125 kHz reply carries no Tag family and no writability flag, so no command can answer whether a Tag will accept a write — and every command that would answer is itself a write. There is therefore no probe, in this app or in the protocol, and none is planned: Clear is the test.",
   },
 ];
 

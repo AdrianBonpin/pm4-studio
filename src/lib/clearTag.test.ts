@@ -108,6 +108,16 @@ describe("Clear's confirmation", () => {
       expect(copy).toMatch(/no check exists/i);
       expect(copy).not.toMatch(/check (the|this) tag first|probe/i);
     });
+
+    // Kept through the payload change on purpose. Clearing writes a clone-shaped
+    // payload now rather than an all-zero one, which is an argument that the chip
+    // will survive it — but no cleared tag has been confirmed to take a new
+    // Identity yet, so the advice the spec, ADR 0007 and ticket 12 all state still
+    // applies. Retire this when the hardware checklist records that confirmation.
+    it("says the attempt is safe only on a tag you can afford to lose", () => {
+      expect(inAFact(/afford to lose/i)).toBe(true);
+      expect(copy).toMatch(/afford to lose/i);
+    });
   });
 
   it("is named Clear, and never claims a factory restore", () => {

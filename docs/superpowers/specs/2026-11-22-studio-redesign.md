@@ -472,8 +472,17 @@ The existing guard permits both, because the target differs from the current
 reading, and a tag that is present with no Identity is a legal write position. The
 confirmation states, in plain words and before the write, that the app cannot
 determine whether a tag will accept a write, that a tag already written once may
-refuse permanently, and — for Destroy — that the tag is permanently disabled and
-cannot be recovered or reused.
+refuse permanently, that the attempt is safe only on a tag you can afford to lose,
+and — for Destroy — that the tag is permanently disabled and cannot be recovered
+or reused.
+
+The *afford to lose* caveat survives Clear's payload change deliberately. The
+placeholder is a clone-shaped payload, which is an argument that the chip will
+survive it and a strong one — every clone this app has written has left the chip
+working, and the all-zero payload that locked three of them is a shape no clone
+produces. It is still an argument, not a measurement: no cleared tag has yet been
+confirmed to take a new Identity. The caveat is retired when the hardware
+checklist records that confirmation, not before.
 
 A re-read that still finds an Identity produces a distinct outcome — *this tag will not accept writes* — whose message names the likely cause: the chip has already been written, or was never writable. That is separated from the generic failure outcome and from *unverified*, because the three call for different next actions. No confirmed copy is ever counted for any of them.
 

@@ -135,6 +135,17 @@ export const CLEAR_FACTS: readonly TagFact[] = [
     detail:
       "A T5577 that has already been written may permanently refuse every later write while still reading back the Identity it carries. This Reader cannot tell a tag that will refuse from one that will accept.",
   },
+  {
+    // Deliberately kept after the payload changed. Clearing now writes the
+    // placeholder instead of an all-zero value, which is the clone-shaped payload
+    // this app has written many times without locking a tag — but this particular
+    // value has never been confirmed on hardware. Until it is, the honest advice
+    // is the same advice: an attempt you would not mind losing. Retire this fact
+    // only when the hardware checklist records a cleared tag being written again.
+    title: "Only clear a tag you can afford to lose",
+    detail:
+      "Clearing should leave a live tag, and the payload it writes is the same shape as the clones this app performs routinely. That is an argument, not a measurement: no cleared tag has yet been confirmed to take a new Identity. Treat the attempt as one you would not mind losing.",
+  },
 ];
 
 /**
