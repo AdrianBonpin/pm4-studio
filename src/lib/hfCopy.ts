@@ -53,7 +53,7 @@
 import { encodeRecords, recordsByteLength } from "./ndef";
 import { outcomes, type Outcome } from "./outcome";
 import { bytesToHex, existingRecords, type NdefWriteResult } from "./tagWrite";
-import type { HfRead } from "./hfRead";
+import type { HfRead, HfMessageState } from "./hfRead";
 import type { HfReading } from "./hfDecoder";
 import type { DraftRecord } from "./drafts";
 import type { NdefTagSnapshot } from "../types";
@@ -215,6 +215,19 @@ export interface CopyDestination {
   readonly uid: string | null;
   /** True when a Tag was latched, decoded or not. */
   readonly latched: boolean;
+  /**
+   * What the read found the destination holding, in the read half's own states.
+   *
+   * This is `HfRead`'s `HfMessageState` copied across, not a summary of it. The
+   * distinction between **read fine and holds nothing** (`empty-message`, a
+   * zero-length NDEF TLV or a message of zero bytes; `no-ndef-tlv`, NDEF
+   * formatted with no TLV yet) and **could not be read** (`unreadable`,
+   * `undecodable`, `read-failed`, `undecoded-reply`, `other-tag`, …) is already
+   * drawn there, and collapsing the two into "no message" is the defect this
+   * field exists to prevent. `copyDestination` copies it, so no second mapping
+   * can drift from the read's.
+   */
+  readonly holds: HfMessageState;
   /** What the destination holds now, when its message could be read. */
   readonly message: CopyMessage | null;
   /** Why there is no message, when there is none. The Tag's own reason. */
@@ -263,6 +276,12 @@ export type CopyRefusalCondition =
   | "source-not-removed"
   /** The destination's own message could not be read. */
   | "destination-unreadable"
+  /**
+   * The destination is not NDEF formatted, so it cannot take a message. Its own
+   * condition rather than `destination-unreadable`: the read succeeded and said
+   * exactly that, and formatting a Tag is an operation this build does not do.
+   */
+  | "destination-not-formatted"
   /** The destination already holds this exact message, so there is nothing to copy. */
   | "destination-identical"
   /** The destination's known capacity cannot hold the message. */
@@ -375,6 +394,18 @@ function sourceRemoved(source: CopyMessage, field: CopyFieldObservation): CopyDe
  * message has nothing to copy; and the source itself in the write position is the
  * removal step failing a second time, which is why it is checked by UID as well
  * as by message.
+ *
+ * **A destination that read fine and holds nothing is a proceed.** Zero Records
+ * are replaced, so there is no message to name, nothing that could be identical
+ * to the source, and nothing anyone could lose by writing. It is the ordinary
+ * destination for a Copy, and it is told apart from a failed read by the read
+ * half's own state (`holdsNothing`), never by matching a sentence. Capacity is
+ * still weighed, so an empty destination that is too small refuses for its size.
+ *
+ * An unformatted destination is neither of those: the read succeeded and said
+ * the Tag is not NDEF formatted, which this build cannot fix and cannot write
+ * around — the write path sizes itself from the Capability Container the Tag does
+ * not have — so it refuses with its own condition rather than as a failed read.
  */
 function destinationDecision(
   source: CopyMessage,
@@ -404,7 +435,22 @@ function destinationDecision(
     };
   }
 
-  if (destination.message === null) {
+  if (destination.holds === "not-formatted") {
+    return {
+      kind: "refused",
+      refusal: {
+        condition: "destination-not-formatted",
+        message: "Not copied: this tag is not NDEF formatted, so it cannot take a message.",
+        detail:
+          `${destination.problem ?? "Page 3 is not a Type 2 Capability Container."} Formatting ` +
+          "a tag is a separate operation that this app does not do, and a write is sized from " +
+          "the tag's Capability Container. There is none here, so nothing could be sized or " +
+          "written. Nothing was written: use a tag that is already NDEF formatted.",
+      },
+    };
+  }
+
+  if (destination.message === null && !holdsNothing(destination)) {
     return {
       kind: "refused",
       refusal: {
@@ -419,7 +465,9 @@ function destinationDecision(
     };
   }
 
-  if (messagesEqual(source, destination.message)) {
+  // A destination that holds nothing has no message that could be identical to
+  // the source: zero Records against the source's own count is not a copy.
+  if (destination.message !== null && messagesEqual(source, destination.message)) {
     return {
       kind: "refused",
       refusal: {
@@ -473,6 +521,27 @@ function destinationDecision(
   }
 
   return { kind: "proceed", fit: { kind: "known", requiredBytes: required, capacityBytes: capacity } };
+}
+
+/**
+ * Whether the destination was read completely and holds no Records.
+ *
+ * The two states are the read half's, not this module's: `empty-message` is an
+ * NDEF formatted Tag whose message is zero bytes (a zero-length NDEF TLV, and the
+ * same fact reached as a message that decodes to zero Records), and `no-ndef-tlv`
+ * is an NDEF formatted Tag whose user memory carries no TLV yet. Both answered
+ * every command the read sent, so both are findings rather than failures, and
+ * both are the ordinary destination for a Copy. Every other state without a
+ * message is a read that did not finish or did not apply to this Tag, which stays
+ * a refusal.
+ *
+ * The `message === null` half of the conjunction is the read's own statement that
+ * there are no Records; a value claiming both a message and an empty state is not
+ * a destination this guard will call empty.
+ */
+function holdsNothing(destination: CopyDestination): boolean {
+  if (destination.message !== null) return false;
+  return destination.holds === "empty-message" || destination.holds === "no-ndef-tlv";
 }
 
 /**
@@ -653,11 +722,24 @@ export function copySource(read: HfRead): CopyMessage | null {
  * message could not be read is `latched: true` with `message: null` and the
  * reason in `problem`. The two must not be confused: one is an empty field and
  * the other is a Tag whose content cannot be named.
+ *
+ * `holds` is the read's own message state, copied rather than reinterpreted, so a
+ * Tag that read fine and holds nothing (`empty-message`, `no-ndef-tlv`) keeps its
+ * answer all the way to the guard. A read that fetched nothing because the poll
+ * reply was undecodable, the message read failed, or the read described another
+ * Tag keeps its own state too, and the guard refuses those instead.
  */
 export function copyDestination(read: HfRead): CopyDestination {
   const reading = read.reading;
   if (reading === null) {
-    return { uid: null, latched: false, message: null, problem: null, capacityBytes: null };
+    return {
+      uid: null,
+      latched: false,
+      holds: "nothing-latched",
+      message: null,
+      problem: null,
+      capacityBytes: null,
+    };
   }
   const uid = reading.state === "decoded" ? reading.uid : null;
   const message =
@@ -670,7 +752,14 @@ export function copyDestination(read: HfRead): CopyDestination {
       : reading.state === "raw"
         ? reading.detail
         : (read.message.reason ?? read.message.note);
-  return { uid, latched: true, message, problem, capacityBytes: read.capacityBytes };
+  return {
+    uid,
+    latched: true,
+    holds: read.message.state,
+    message,
+    problem,
+    capacityBytes: read.capacityBytes,
+  };
 }
 
 /** The write's evidence, with its read-back decoded the same way the source was. */
