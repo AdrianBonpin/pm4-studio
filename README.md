@@ -135,6 +135,11 @@ access**. Reading your own badge is fine. Cloning someone else's access card,
 hotel key or transit card is a criminal offence in most jurisdictions. The author
 accepts no liability for misuse.
 
+## Contributing
+
+Commit messages, pull-request titles and the branch flow are stated in
+[`CONTRIBUTING.md`](CONTRIBUTING.md).
+
 ## License
 
 MIT
