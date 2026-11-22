@@ -154,13 +154,22 @@ const EXPECTED_OUTCOMES: readonly {
     chirps: 2,
   },
   {
-    // The same state, at launch or from an operation: said on screen, never a
-    // sound. The alphabet's silent symbol is "nothing happened, nothing to act
-    // on, not an error", which is what an unplugged Reader is.
-    what: "a Reader that is not plugged in",
-    outcome: outcomes.readerFailure("no such device: failed to open the Reader"),
+    // A state, read at rest: said on screen, never a sound. The alphabet's silent
+    // symbol is "nothing happened, nothing to act on, not an error", which is what
+    // an unplugged Reader is when nothing was asked of it.
+    what: "a Reader that is not plugged in, at rest",
+    outcome: outcomes.readerState("no such device: failed to open the Reader"),
     symbol: "silent",
     chirps: 0,
+  },
+  {
+    // The same absence one operation later, and not the same sound: an operation
+    // the user started did not complete, so silence would say "nothing happened"
+    // about something that did.
+    what: "a Reader that went away during an operation",
+    outcome: outcomes.readerFailure("no such device: failed to open the Reader"),
+    symbol: "attention",
+    chirps: 3,
   },
   {
     what: "a write that failed",

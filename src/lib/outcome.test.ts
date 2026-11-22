@@ -62,6 +62,9 @@ const EXPECTED_SEVERITY: Record<OutcomeKind, Severity> = {
   "reset-refused": "error",
   "refused-by-build": "error",
   "reader-absent": "info",
+  // The Reader disappearing during an operation is not the quiet state: the
+  // operation was lost, and whether it left anything on the Tag is unknown.
+  "reader-gone": "error",
   "reader-claimed": "error",
   "reader-wedged": "error",
   "reader-failure": "error",
@@ -210,6 +213,7 @@ describe("the discriminator set", () => {
         "read",
         "read-incomplete",
         "reader-absent",
+        "reader-gone",
         "reader-claimed",
         "reader-failure",
         "reader-wedged",
@@ -548,11 +552,34 @@ describe("a device failure", () => {
     // "nothing happened, nothing to act on, not an error", and the beeper that
     // would have to sound it is on the Reader that is not there. Reported as a
     // warning it chirped twice on every launch, which is not news.
-    const outcome = outcomes.readerFailure("no such device: failed to open the Reader");
+    //
+    // This is the *at rest* factory: the launch and a Connect press. The same
+    // message from a running operation is `reader-gone`, asserted below.
+    const outcome = outcomes.readerState("no such device: failed to open the Reader");
     expect(outcome.kind).toBe("reader-absent");
     expect(outcome.severity).toBe("info");
     expect(signalOf(outcome)).toBe("silent");
     expect(outcome.detail).toContain("Plug the NFC-PM4 Reader");
+  });
+
+  it("is attention, not silence, when the Reader goes away during an operation", () => {
+    // The same wire message as the state above, reported by an operation that was
+    // running when the Reader disappeared. The operation did not complete, and
+    // whether it left anything on the Tag is unknown, so the quiet tone and the
+    // silence would both say "nothing happened" about something that did.
+    const outcome = outcomes.readerFailure("no such device: failed to open the Reader", {
+      action: { label: "Reconnect", run: () => {} },
+    });
+
+    expect(outcome.kind).toBe("reader-gone");
+    expect(outcome.severity).toBe("error");
+    expect(signalOf(outcome)).toBe("attention");
+    // It keeps the remedy the state carries, and it does not claim to know what
+    // the interrupted operation left behind.
+    expect(outcome.detail).toContain("Reconnect");
+    expect(outcome.detail).toMatch(/check the Tag/i);
+    expect(`${outcome.message} ${outcome.detail}`).not.toMatch(/nothing was written/i);
+    expect(outcome.action?.label).toBe("Reconnect");
   });
 
   it("keeps an unclassified failure's own words rather than inventing a cause", () => {

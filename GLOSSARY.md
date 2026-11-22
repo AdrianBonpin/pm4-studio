@@ -111,8 +111,15 @@ _Avoid_: tools, debug, advanced, inspect
 Writing the neutral Identity over a Tag's own, so the Tag carries no assigned
 value. Reset does **not** restore a factory configuration, and does **not** unlock
 a locked Tag. It is also the only way to find out whether a Tag will accept a
-write: no cheaper test exists, so the first Reset is the test. The Tag it leaves
-carries no Identity, which is the **Blank** a Clone writes onto.
+write: no cheaper test exists, so the first Reset is the test — and the test can
+fail destructively. Measured on 2026-11-22: the all-zero write leaves a T5577
+**locked**, still latched and modulating and accepting no further data, so on that
+family a Reset destroys the Tag's usability instead of clearing it. A Tag left
+without an Identity is therefore **Blank** as a state and is not a reusable Tag: it
+may be unable to accept a Clone, and nothing in this app can make it accept one
+again. Clearing a Tag so that it stays usable is a separate operation, measured but
+not built — see
+`docs/tickets/studio-redesign-followups/clearing-a-tag-must-leave-it-usable.md`.
 _Avoid_: wipe, erase, format, factory reset, restore, blank (as a verb)
 
 **Erase**:

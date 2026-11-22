@@ -18,17 +18,24 @@ import type { ReplacementConfirmation as ReplacementConfirmationData } from "../
  * can express its own opinion about how serious its write is.
  *
  * **The two cases differ in words, not only in hue.** `replacementTone` names the
- * severity each case carries, and the notice leads with that word beside its own
+ * tone each case is drawn in, and the notice leads with that word beside its own
  * shape, so a user who cannot tell amber from grey still reads which of the two
  * they are looking at: "Check this" when something is destroyed, and "Nothing to
  * replace" when nothing is known to be.
+ *
+ * **This is a condition, not an outcome.** A confirmation the user has not answered
+ * is a state the page is in, so it has no `Outcome` and no severity in the seam
+ * (ADR 0008: conditions stay inline, and the toast model draws events). The tone
+ * below is therefore presentation — the ink this condition is drawn in — chosen
+ * here, once, for both callers; it makes no sound and produces no message in the
+ * corner.
  */
 
 /** How a confirmation reads, decided by `destructive` alone. */
 export interface ReplacementTone {
-  /** The severity the notice claims. */
+  /** The tone the notice is drawn in. Presentation for a condition, not a severity. */
   readonly tone: NoticeTone;
-  /** The severity in words — the notice's leading line. */
+  /** That tone in words — the notice's leading line. */
   readonly label: string;
 }
 

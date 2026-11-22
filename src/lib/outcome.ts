@@ -26,6 +26,14 @@
  *    states the user is in, they stay inline, and they have no kind here. An
  *    outcome is something that just happened.
  *
+ *    That is also why a condition may carry a tone of its own without going
+ *    through this seam: a confirmation waiting on a decision has no result to read
+ *    a severity from, so the module that owns the condition picks the ink it is
+ *    drawn in (`ReplacementConfirmation.replacementTone`, `lib/password.ts`'s
+ *    `noticeTone`). What such a tone may not do is *describe* itself as an
+ *    outcome: it is presentation for a condition, it produces no toast and no
+ *    sound, and nothing in this module's vocabulary is involved.
+ *
  * Background work — connecting, the firmware query, autosave, the poll loop's
  * iterations — reports nothing, by design. The rule is that an operation the user
  * starts ends in exactly one outcome, and `report` is the only way to say one.
@@ -58,7 +66,11 @@ import { describeClearReport, type ClearReport } from "./clearData";
 import { BUILD_REFUSAL_DETAIL, BUILD_REFUSAL_LABEL } from "./consoleRefusal";
 import { eraseNotice } from "./eraseTag";
 import { QUIET_LEVEL_LABEL, type QuietLevel } from "./quietLevel";
-import { classifyDeviceFailure, deviceFailureNotice } from "./readerIdentity";
+import {
+  classifyDeviceFailure,
+  deviceFailureNotice,
+  type DeviceFailure,
+} from "./readerIdentity";
 import { emitSignal } from "./signal";
 import { writeNotice as ndefWriteNotice, type NdefWriteResult } from "./tagWrite";
 import { pushToast } from "./toastStore";
@@ -164,6 +176,50 @@ function make(
 export function report(outcome: Outcome): void {
   pushToast(outcome);
   emitSignal(signalOf(outcome));
+}
+
+/**
+ * A hardware failure, with the one row that depends on when it was seen.
+ *
+ * `absentKind` is the whole difference between the two callers: `readerState` is
+ * asked at rest and calls an absent Reader a silent state, `readerFailure` is
+ * asked by an operation and calls the same absence a lost operation. Everything
+ * else — the classification, the remedy, the wording of the other three rows — is
+ * shared, so the two can never drift into two different accounts of one Reader.
+ */
+function deviceOutcome(
+  raw: unknown,
+  extra: { action?: OutcomeAction; onDismiss?: () => void },
+  absentKind: "reader-absent" | "reader-gone",
+): Outcome {
+  const text =
+    raw instanceof Error ? raw.message : typeof raw === "string" ? raw : String(raw ?? "");
+  const classified = classifyDeviceFailure(text);
+  if (classified === "unknown") {
+    // An ordinary failure keeps its own words: rewriting it as a hardware fault
+    // would name a cause nobody established.
+    const trimmed = text.trim();
+    return make(
+      "reader-failure",
+      "reader",
+      trimmed === "" ? "The operation failed." : trimmed,
+      extra,
+    );
+  }
+  const failure: DeviceFailure =
+    classified === "absent" && absentKind === "reader-gone" ? "gone" : classified;
+  const notice = deviceFailureNotice(failure);
+  const kind: Record<DeviceFailure, OutcomeKind | null> = {
+    absent: "reader-absent",
+    gone: "reader-gone",
+    claimed: "reader-claimed",
+    wedged: "reader-wedged",
+    unknown: null,
+  };
+  return make(kind[failure] ?? "reader-failure", "reader", notice.title, {
+    detail: notice.detail,
+    ...extra,
+  });
 }
 
 /** Everything a caller may need to describe what an operation did. */
@@ -474,12 +530,33 @@ export const outcomes = {
   },
 
   /**
-   * The Reader itself failed. The classification decides the kind, so the
-   * severity and the remedy come from the same answer: an unplugged Reader is a
-   * *state* — said on screen, silent, with the plug-in remedy; a Reader held by
-   * another process is an error telling you to close it; a Reader that stopped
+   * The Reader's own condition, read **at rest**: at launch, or when the user
+   * presses Connect/Reconnect. Not the result of an operation, so its silent
+   * state is honest — nothing was asked of the Reader and nothing happened.
+   *
+   * The absence that arrives *during* an operation is `readerFailure`, not this.
+   */
+  readerState(
+    raw: unknown,
+    extra: { action?: OutcomeAction; onDismiss?: () => void } = {},
+  ): Outcome {
+    return deviceOutcome(raw, extra, "reader-absent");
+  },
+
+  /**
+   * The Reader itself failed **an operation**. The classification decides the
+   * kind, so the severity and the remedy come from the same answer: a Reader held
+   * by another process is an error telling you to close it; a Reader that stopped
    * answering is attention, because it is present and broken and only a replug
-   * clears it.
+   * clears it; and a Reader that is not there at all is attention here, because
+   * the operation it was in the middle of did not complete.
+   *
+   * That last row is the distinction this seam has to keep: "no Reader attached"
+   * at rest is a state and is silent (`readerState`), while the same message
+   * arriving from a running operation is an event that lost the operation and must
+   * not be drawn in the quiet tone. The two sound different because they are not
+   * the same thing, and the caller knows which it is: this factory reports an
+   * operation, so the worst reading is the right one.
    *
    * The shell used to render this as a strip that pushed the page down; it now
    * arrives here, carrying the reconnect action the strip offered.
@@ -488,30 +565,7 @@ export const outcomes = {
     raw: unknown,
     extra: { action?: OutcomeAction; onDismiss?: () => void } = {},
   ): Outcome {
-    const text =
-      raw instanceof Error ? raw.message : typeof raw === "string" ? raw : String(raw ?? "");
-    const failure = classifyDeviceFailure(text);
-    if (failure === "unknown") {
-      // An ordinary failure keeps its own words: rewriting it as a hardware fault
-      // would name a cause nobody established.
-      const trimmed = text.trim();
-      return make(
-        "reader-failure",
-        "reader",
-        trimmed === "" ? "The operation failed." : trimmed,
-        extra,
-      );
-    }
-    const notice = deviceFailureNotice(failure);
-    const kind: Record<"absent" | "claimed" | "wedged", OutcomeKind> = {
-      absent: "reader-absent",
-      claimed: "reader-claimed",
-      wedged: "reader-wedged",
-    };
-    return make(kind[failure], "reader", notice.title, {
-      detail: notice.detail,
-      ...extra,
-    });
+    return deviceOutcome(raw, extra, "reader-gone");
   },
 
   /**

@@ -1,6 +1,6 @@
 # 08 — Every finding this ticket produced
 
-Three defects, three observations that are not defects, and two limits of the
+Four defects, three observations that are not defects, and two limits of the
 verification itself. The defects have follow-up tickets under
 `docs/tickets/studio-redesign-followups/`; nothing was quietly fixed here, and no
 existing ticket was edited.
@@ -125,6 +125,15 @@ Ticket: `docs/tickets/studio-redesign-followups/the-erase-confirmation-is-taller
 > a jsdom test cannot measure layout, so the gate for "a confirmation's own buttons
 > are in the viewport at 900×700" is the visual sweep (this file's sibling reports),
 > and the reason it cannot be a unit test is recorded here rather than left implied.
+>
+> The artifact for that measurement is committed beside the pre-fix pair, because a
+> number in a document is not evidence: `screenshots/hf-erase-confirmation-fixed-900.png`
+> and `-fixed-980.png`, taken from `e2e.html?hf=ntag` at 900×700 and 980×760 with the
+> Erase confirmation open. At 900×700 *Erase the tag's content* measures y=644–678 and
+> *Keep the content* the same — both fully inside the 700 px viewport and neither
+> clipped — and with *keep the tag on the Reader* they fit on the one action row; the
+> panel ends at 687. The two screenshots above (`hf-erase-confirmation-900.png`,
+> `-980.png`) are kept as the pre-fix record.
 
 ### F4 — Reset is called "Blank" in its own panel
 

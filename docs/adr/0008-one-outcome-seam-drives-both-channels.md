@@ -56,3 +56,11 @@ exactly one outcome.
 - The seam is the only place severity is chosen. A component that wants a special
   severity for its own case has to add an outcome variant, which makes the request
   visible and reviewable instead of local and invisible.
+- **Conditions are outside this decision, and are not a loophole in it.** A library
+  file that cannot be written to, a migration warning, an unanswered confirmation, a
+  gate that was not acknowledged: those are states, not operations that came to
+  something, so they have no outcome and no severity here. The module that owns the
+  condition picks the tone it is *drawn* in — `ReplacementConfirmation`'s
+  `replacementTone`, `lib/password.ts`'s `noticeTone` — and that tone is
+  presentation only: no message in the corner, no signal, and nothing anywhere calls
+  it an outcome's severity. A condition that wants a sound is not a condition.

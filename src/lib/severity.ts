@@ -106,7 +106,7 @@ export type OutcomeKind =
   /** Refused because the running build sends only non-changing commands. */
   | "refused-by-build"
   /**
-   * No Reader attached.
+   * No Reader attached **at rest**.
    *
    * A **state**, not the result of an operation: an unplugged Reader is the normal
    * condition of an app whose hardware is optional (`hooks/useReader` says so, and
@@ -117,8 +117,24 @@ export type OutcomeKind =
    * launch produced nothing, and the beeper that would sound the alarm is on the
    * Reader that is not there. Reported as a warning it chirped twice on every
    * launch, which is not news.
+   *
+   * Only `outcome.readerState` produces this kind. The same absence arriving from a
+   * running operation is `reader-gone`.
    */
   | "reader-absent"
+  /**
+   * The Reader went away **while an operation was running**: the app was talking
+   * to it, and it stopped being there, so that operation did not complete.
+   *
+   * Attention, not silence, and the difference is the whole reason this kind is
+   * separate from `reader-absent`: a state that was true before the operation is
+   * not news, but an operation the user started and lost is. It takes the
+   * alphabet's attention symbol — three chirps and the LED held — because silence
+   * here would say *nothing happened* about something that did. The message does
+   * not go on to claim the Tag is unchanged: an interrupted write is exactly the
+   * case where nobody can say what reached the chip, so it says to check the Tag.
+   */
+  | "reader-gone"
   /** Another process holds the Reader. A fault: one holder at a time, and the
    *  user has to close the other process. */
   | "reader-claimed"
@@ -173,6 +189,7 @@ export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
   "reset-refused",
   "refused-by-build",
   "reader-absent",
+  "reader-gone",
   "reader-claimed",
   "reader-wedged",
   "reader-failure",
@@ -206,6 +223,7 @@ const SEVERITY_OF: Record<OutcomeKind, Severity> = {
   "reset-refused": "error",
   "refused-by-build": "error",
   "reader-absent": "info",
+  "reader-gone": "error",
   "reader-claimed": "error",
   "reader-wedged": "error",
   "reader-failure": "error",

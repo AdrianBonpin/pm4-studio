@@ -30,6 +30,13 @@ import { toastStore, visibleToasts, type Toast, type ToastStore } from "../lib/t
  * `lib/noticeTone` through `toneForSeverity`, so the ink is named once for the whole
  * app and a message cannot be a different colour from the notice beside it. This
  * table adds what only a corner card needs.
+ *
+ * The frame is the other half of a pair, and `ui/Notice` is the first: an inline
+ * notice draws the same hues at `warn/50`, `ok/40` and `err/50`, on a 10% tint of
+ * the hue. A message cannot use that tint — its card is `bg-surface/95` so the page
+ * stays legible behind it — so its edge has to hold the hue against whatever it
+ * floats over, and `err` is `err/60` for that reason. Only the intensity differs
+ * by surface: the hue, and what it means, come from the one tone vocabulary.
  */
 const TONE = {
   success: { icon: Check, frame: "border-ok/40" },

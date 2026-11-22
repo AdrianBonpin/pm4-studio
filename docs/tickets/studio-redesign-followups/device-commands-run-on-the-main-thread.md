@@ -13,13 +13,18 @@ hard deadlock, because React's StrictMode mounts effects twice and the second
 `connect` blocked on the reader mutex on the main thread while the first held it
 mid-enumeration. `connect` is now `async` and refuses a concurrent attempt.
 
-**The rest of the surface has the same shape.** Of the commands in
-`src-tauri/src/lib.rs`, 60 are synchronous and 3 are async, and the synchronous ones
-reach the device through `with_reader`, which locks the reader slot, opens the device
-on first use if the slot is empty, and then performs the transfer — all on the main
-thread. A production build hides this because one attempt at a time is usually fast
-enough; it stops hiding the moment a transfer is slow or a Reader wedges, which is
-exactly the situation the wedged-reader handling exists for.
+**The rest of the surface has the same shape.** The command table registers 43
+commands — 40 synchronous and 3 asynchronous — and synchronous is the default, so
+the 17 of those 40 that reach the device do it through `with_reader`, which locks
+the reader slot, opens the device on first use if the slot is empty, and then
+performs the transfer — all on the main thread. (The other 23 synchronous commands
+never touch a Reader: the library, the drafts, the console capability, the
+read-only reveal, and the two password commands, which have no success path. The
+three asynchronous commands are `connect`, `library_pick_file` and
+`memory_dump_export`; only `connect` opens the device.) A production build hides
+this because one attempt at a time is usually fast enough; it stops hiding the
+moment a transfer is slow or a Reader wedges, which is exactly the situation the
+wedged-reader handling exists for.
 
 **Blocked by:** None
 

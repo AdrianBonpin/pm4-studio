@@ -21,7 +21,7 @@ Browser verification renders the interface with the device boundary stubbed, whi
 - [ ] Hardware checklist: a 125 kHz clone, a batch over several Blanks, and an authored Identity each report their own outcomes.
 - [ ] The four-symbol alphabet is confirmed distinguishable by ear, and the gap between chirps is recorded as the tuned value.
 - [x] The device stub is provably absent from a release build. — `docs/superpowers/e2e/07-release-build-proof.md`: absent from `dist/`, and a production build that does include it refuses to render
-- [x] Every finding is recorded. A failure becomes a follow-up ticket rather than being absorbed silently into this one. — `docs/superpowers/e2e/08-findings.md`; four follow-up tickets in `docs/tickets/studio-redesign-followups/`
+- [x] Every finding is recorded. A failure becomes a follow-up ticket rather than being absorbed silently into this one. — `docs/superpowers/e2e/08-findings.md`; seven follow-up tickets in `docs/tickets/studio-redesign-followups/`
 
 ## Report from this run
 
@@ -37,8 +37,11 @@ The browser half is done and the hardware half is not.
   two-second LED), and what a failure would look like — at
   `docs/superpowers/hardware-checklist-studio-redesign.md`. All seven items,
   including the chirp-gap tuning, expect a person with hardware.
-- **Findings:** four follow-up tickets in `docs/tickets/studio-redesign-followups/`
-  (Diagnostics states two capabilities it does not have; Copy refuses an empty
-  destination; the Erase confirmation overflows the window; Reset is called "Blank"
-  in its own panel), plus three recorded observations and two stated limits of the
-  verification itself, in `docs/superpowers/e2e/08-findings.md`.
+- **Findings:** seven follow-up tickets in `docs/tickets/studio-redesign-followups/`.
+  Four were raised by the browser pass (Diagnostics states two capabilities it does
+  not have; Copy refuses an empty destination; the Erase confirmation overflows the
+  window; Reset is called "Blank" in its own panel) and three by the work around it
+  (device commands run on the main thread; Reset's refusal has never been seen on
+  hardware, and a blanked tag may stop answering; clearing a tag must leave it
+  usable rather than destroying it). Plus three recorded observations and two stated
+  limits of the verification itself, in `docs/superpowers/e2e/08-findings.md`.
