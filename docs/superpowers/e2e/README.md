@@ -126,6 +126,7 @@ a device call from a fixture.
 | The long-label sweep at the minimum size | [06-long-label-sweep.md](06-long-label-sweep.md) | — |
 | Release-build proofs | [07-release-build-proof.md](07-release-build-proof.md) | 2 |
 | Every finding, in one place | [08-findings.md](08-findings.md) | — |
+| 13.56 MHz Write: the Draft list searched, emptied, cleared and chosen | [10-draft-list.md](10-draft-list.md) | 12 |
 
 ## The honest split
 
