@@ -117,7 +117,7 @@ export function PasswordProtection({ connected }: PasswordProtectionProps) {
         </Notice>
 
         {!connected && (
-          <p className="text-xs leading-relaxed text-text-muted">
+          <p className="max-w-prose text-xs leading-relaxed text-text-muted">
             Connect the Reader to read a Tag's protection state. Nothing on this panel needs a
             Reader to be explained, which is why the warning is shown first.
           </p>

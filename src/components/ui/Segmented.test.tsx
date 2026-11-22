@@ -162,10 +162,10 @@ const SOURCES = import.meta.glob(["../../**/*.tsx", "!../../**/*.test.tsx"], {
 const SWITCHER = "./Segmented.tsx";
 
 /**
- * The other files that report `aria-pressed`, and why neither is a switch.
+ * The other files that report `aria-pressed`, and why none is a switch.
  *
  * An exemption needs a reason and is checked like the design allow-list: an
- * unexplained one is how this guard stops guarding. Both are a row in a list
+ * unexplained one is how this guard stops guarding. Each is a row in a list
  * where the row *is* the item — it carries its own name and facts, and choosing
  * it opens that item beside the list. A switch holds a fixed set of labels and
  * hides nothing; a list of saved things is neither.
@@ -175,6 +175,8 @@ const NOT_A_SWITCHER: Record<string, string> = {
     "a Snapshot row: the row is the saved thing, and choosing one opens it beside the list",
   "../../pages/DraftsCollection.tsx":
     "a Draft row: the same list-and-detail shape, with the Draft's own facts on the row",
+  "../WriteDraftMode.tsx":
+    "a Draft row: the row is the saved thing, and choosing one opens it beside the list",
 };
 
 /**
