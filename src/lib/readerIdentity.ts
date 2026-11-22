@@ -6,8 +6,26 @@
  * device handle stays in Rust; this module only interprets what Rust returns.
  */
 
-/** What went wrong, in terms a user can act on. */
-export type DeviceFailure = "absent" | "claimed" | "wedged" | "unknown";
+/**
+ * What went wrong, in terms a user can act on.
+ *
+ * `absent` and `gone` are the same wire message — "the Reader is not there" —
+ * reported from two different moments, and they are not the same news:
+ *
+ *   - `absent` is a **state**: nothing was plugged in, nothing was attempted, and
+ *     nothing happened. At rest that is the normal condition of an app whose
+ *     hardware is optional, so it is said on screen and it is silent.
+ *   - `gone` is an **event**: an operation was running against a Reader the app
+ *     was talking to, and the Reader stopped being there, so that operation did
+ *     not complete. Nothing may be claimed about the Tag it was working on. That
+ *     is "failed, nothing changed" (ADR 0009), so it sounds three chirps.
+ *
+ * The classification of a message alone cannot tell them apart — the text is the
+ * same — so the distinction is made by the caller that knows whether an operation
+ * was in flight: `outcome.readerFailure` for an operation, `outcome.readerState`
+ * for the Reader's condition at rest.
+ */
+export type DeviceFailure = "absent" | "gone" | "claimed" | "wedged" | "unknown";
 
 export interface DeviceFailureNotice {
   tone: "muted" | "warn" | "error";
@@ -141,6 +159,16 @@ export function deviceFailureNotice(failure: DeviceFailure): DeviceFailureNotice
         title: "No Reader attached",
         detail:
           "Plug the NFC-PM4 Reader into a USB port and press Connect. Everything in the library stays usable without it.",
+      };
+    case "gone":
+      // The same absence, one operation later. Never the quiet tone: an operation
+      // was running and did not complete, and whether it left anything on the Tag
+      // is unknown, so the message says to check rather than to relax.
+      return {
+        tone: "error",
+        title: "The Reader went away",
+        detail:
+          "It stopped being available while the operation was running, so the operation did not complete. Plug the NFC-PM4 Reader back in, press Reconnect, and check the Tag before relying on what was on it.",
       };
     case "claimed":
       return {

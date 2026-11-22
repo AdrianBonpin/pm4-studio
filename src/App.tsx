@@ -103,8 +103,12 @@ export default function App() {
     }
     if (reportedFailure.current === reader.error) return;
     reportedFailure.current = reader.error;
+    // `readerState`, not `readerFailure`: this is the Reader's condition at rest —
+    // the launch, or a Connect press — where "no Reader attached" is a state and
+    // stays silent. An operation that loses the Reader reports through
+    // `readerFailure`, which sounds attention.
     report(
-      outcomes.readerFailure(reader.error, {
+      outcomes.readerState(reader.error, {
         action: { label: "Reconnect", run: () => void reader.connect() },
         onDismiss: () => reader.setError(null),
       }),
