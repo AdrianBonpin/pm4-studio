@@ -550,7 +550,7 @@ The manual hardware checklist stays and grows by four items:
 8. Read a MIFARE Classic 1K and confirm it reports MIFARE Classic 1K with a 4-byte UID, and that the memory dump does not claim a family it cannot support.
 9. Read a 7-byte-UID NTAG and confirm the full UID with no raw fallback.
 10. Copy a message between two tags and confirm the read-back comparison, plus a refusal on a destination that is too small.
-11. Reset a fresh T5577, then Reset the same tag again and confirm the *will not accept writes* outcome, with the tri-chirp attention signal and a two-second LED.
+11. Reset a fresh T5577: it reports *Blanked*, one chirp, and counts no copy. Then Reset the same tag again: it refuses **before transmitting**, reporting that the tag already carries no Identity — that is *nothing to blank*, three chirps, and it is a different outcome from *will not accept writes*. The *will not accept writes* outcome needs a chip that refuses a transmitted write while still reading an Identity back, and no tag has produced one yet; it stays unobserved until one does. **Measured 2026-11-22:** the all-zero blank payload leaves a T5577 locked — still latched and modulating, still refusing data — so Reset destroys rather than clears. See `docs/PROTOCOL.md` and `docs/tickets/studio-redesign-followups/clearing-a-tag-must-leave-it-usable.md`.
 
 ## Migration & Rollback
 

@@ -26,7 +26,7 @@ capability additions are Copy on 13.56 MHz and savable 13.56 MHz reads.
 | 09 Save a 13.56 MHz read as a Snapshot with its Records; schema v3 | 07, 08 | A 13.56 MHz read is as durable as a 125 kHz one, and the file says version 3 |
 | 10 Drafts becomes a collection inside Library | 07, 08 | Records are edited beside the list, never below an unrelated panel |
 | 11 125 kHz becomes a mode-switched workspace | 02, 03 | Read · Write · Reset · Clone · Batch in the order the work happens, one at a time |
-| 12 Reset tells the truth; a refused Reset is its own outcome | 04, 11 | A tag that will not accept writes is reported as such, with the cause named |
+| 12 Reset tells the truth; a refused Reset is its own outcome | 04, 11 | A tag that will not accept writes is reported as such, with the cause named, and a tag with nothing to blank is not confused with one |
 | 13 Clone and Batch report their own outcomes | 04, 11 | Every clone attempt, including the ones that fail, is heard and seen |
 | 14 13.56 MHz becomes a mode-switched workspace | 03, 08 | Operations before troubleshooting, and the panel that could never work is gone |
 | 15 Copy a whole NDEF message between 13.56 MHz tags | 08, 14 | Duplicating a message is one guided flow with the source protected |

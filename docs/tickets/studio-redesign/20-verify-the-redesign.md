@@ -17,7 +17,7 @@ Browser verification renders the interface with the device boundary stubbed, whi
 - [x] No control wraps onto a second line at the minimum size, and the sweep covers the longest labels in the app. — 0 of 372 controls over 25 states at 900×700; `docs/superpowers/e2e/06-long-label-sweep.md`
 - [ ] Hardware checklist: a 4-byte-UID MIFARE Classic 1K reads as itself with its full 4-byte UID; a 7-byte-UID NTAG reads its full UID with no raw fallback.
 - [ ] Hardware checklist: a Copy between two tags verifies, and a copy onto an oversize destination is refused before anything is written.
-- [ ] Hardware checklist: a never-written tag resets; the same tag reset again reports that it will not accept writes, with three chirps and the held LED.
+- [ ] Hardware checklist: a never-written tag resets and reports *Blanked* with no copy counted; the same tag reset again refuses as **nothing to blank**, which is a different outcome from *will not accept writes*. The *will not accept writes* outcome stays unobserved until a chip refuses a transmitted write while still reading an Identity back.
 - [ ] Hardware checklist: a 125 kHz clone, a batch over several Blanks, and an authored Identity each report their own outcomes.
 - [ ] The four-symbol alphabet is confirmed distinguishable by ear, and the gap between chirps is recorded as the tuned value.
 - [x] The device stub is provably absent from a release build. — `docs/superpowers/e2e/07-release-build-proof.md`: absent from `dist/`, and a production build that does include it refuses to render
