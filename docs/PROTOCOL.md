@@ -859,10 +859,35 @@ IN   55 00 69 00 13 01 01 31 F3 0E 0A 00 00 00 00 00 00 04 04 00 08 01 10 00 ..
 ```
 
 The `1D 00 20` after the NTAG215's UID and the zeros after the Classic's are
-buffer residue, not Tag data — the Classic capture shows the buffer clean, and
-repeat captures of one Tag returned different residue. `0x0044` / `0x00` is the
-NTAG21x pair and `0x0004` / `0x08` the MIFARE Classic 1K pair, both per NXP
-AN10833 Tables 3-4 and the NTAG213/215/216 data sheet Tables 24-25.
+buffer residue, not Tag data — repeat captures of one Tag returned different
+residue across captures, and the Classic capture above shows the buffer clean.
+`0x0044` / `0x00` is the NTAG21x pair and `0x0004` / `0x08` the MIFARE Classic 1K
+pair, both per NXP AN10833 Tables 3-4 and the NTAG213/215/216 data sheet Tables
+24-25.
+
+### The residue holds whatever the buffer held last — measured 2026-11-22
+
+A later capture of the **same** MIFARE Classic 1K, on a Reader reporting firmware
+`H00S07`, returned the same UID, ATQA, SAK, length byte and cascade count with
+different residue:
+
+```
+IN   ... 01 01 31 F3 0E 0A 30 53 30 37 00 00 04 04 00 08 01 10 00
+                             └──────────┘
+                             [6..11] residue = "0S07" + two NULs
+```
+
+`30 53 30 37` is ASCII `0S07` — the last four characters of the firmware string
+`H00S07` that the `0x0053`-family identification reports. The bytes between the
+UID and the length byte are therefore a stale copy of whatever the Reader last
+wrote into that buffer, not tag data and not random.
+
+This is the clearest evidence for the rule the app follows: **it is why those
+bytes must never be presented as UID or as content.** Residue that happens to be
+printable ASCII is indistinguishable from data by inspection, so the decoder
+never reads them at all — the UID is exactly the first `LEN` bytes of the buffer
+and nothing else. A decoder that guessed "ASCII after the UID is a name field"
+would have shown `0S07` as part of a bank card.
 
 ## Open problems
 

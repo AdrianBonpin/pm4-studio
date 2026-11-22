@@ -39,8 +39,16 @@ import { type SignalSymbol } from "./signal";
  * the real duration of a firmware chirp is unknown to the host, so this constant
  * is tuned on hardware (the spec records that as open), and every producer and
  * player reads it from here.
+ *
+ * Tuned to 400 ms by ear on real hardware. The nominal 120 ms was too short: two
+ * chirps in a row ran together, so "needs you" sounded like one longer beep and
+ * could not be told from "done". At 400 ms, one, two and three chirps were each
+ * distinguishable, the glimpse of the LED after an attention signal was legible in
+ * a loud room, and a twenty-attempt batch was still intelligible as it ran. That is
+ * a measurement, not a preference: it is the value the alphabet actually needs on
+ * this buzzer.
  */
-export const CHIRP_GAP_MS = 120;
+export const CHIRP_GAP_MS = 400;
 
 /**
  * How long the LED stays on after an attention signal.

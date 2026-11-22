@@ -24,14 +24,14 @@ is odd".
   less than one with it.
 - The four symbols you are listening for (ADR 0009):
 
-| Symbol | Count | Meaning |
-|---|---|---|
-| done | **1 chirp** | completed and confirmed good |
-| needs you | **2 chirps** | completed, result needs checking |
-| attention | **3 chirps**, then the **LED held on for two seconds** | failed or refused; nothing changed |
-| silence | none | nothing happened — no tag latched, nothing to act on |
+| Symbol    | Count                                                  | Meaning                                              |
+| --------- | ------------------------------------------------------ | ---------------------------------------------------- |
+| done      | **1 chirp**                                            | completed and confirmed good                         |
+| needs you | **2 chirps**                                           | completed, result needs checking                     |
+| attention | **3 chirps**, then the **LED held on for two seconds** | failed or refused; nothing changed                   |
+| silence   | none                                                   | nothing happened — no tag latched, nothing to act on |
 
-## 1. A 4-byte-UID MIFARE Classic 1K reads as itself — *(ticket criterion 3, spec item 8)*
+## 1. A 4-byte-UID MIFARE Classic 1K reads as itself — _(ticket criterion 3, spec item 8)_
 
 **You need:** a MIFARE Classic 1K tag (4-byte UID; ATQA `04 00`, SAK `08`).
 
@@ -42,7 +42,7 @@ is odd".
 3. Click **Read tag**. Wait for the readout.
 4. Then go to **13.56 MHz → Memory**, put the same tag on, click **Read memory**.
 5. Then open **Settings → Diagnostics → Capability limits** and read the
-   *MIFARE Classic sectors* entry.
+   _MIFARE Classic sectors_ entry.
 
 **Expected observation**
 
@@ -54,7 +54,7 @@ is odd".
 - Memory mode says it **cannot read the memory**, because sector access needs key
   authentication this protocol has no command for, and names **no family** in the
   dump — no "NTAG215", no invented 7-byte UID.
-- The Capability limits *MIFARE Classic sectors* entry agrees with what you just
+- The Capability limits _MIFARE Classic sectors_ entry agrees with what you just
   saw.
 
 **A failure looks like:** a seven- or ten-byte UID; a Classic reported as an NTAG;
@@ -63,9 +63,9 @@ from padding; or the read reporting "Not decoded" for a pair that is in the
 published table.
 
 | Result | ( ) pass ( ) fail — notes: |
-|---|---|
+| ------ | -------------------------- |
 
-## 2. A 7-byte-UID NTAG reads its full UID with no raw fallback — *(ticket criterion 3, spec item 9)*
+## 2. A 7-byte-UID NTAG reads its full UID with no raw fallback — _(ticket criterion 3, spec item 9)_
 
 **You need:** an NTAG21x tag (7-byte UID; ATQA `44 00`, SAK `00`).
 
@@ -95,9 +95,9 @@ single member named for a shared pair; silence on a partial result; or a read
 that reports success for a readout that says "could not be read".
 
 | Result | ( ) pass ( ) fail — notes: |
-|---|---|
+| ------ | -------------------------- |
 
-## 3. Copy between two tags verifies — *(ticket criterion 4, spec item 10, first half)*
+## 3. Copy between two tags verifies — _(ticket criterion 4, spec item 10, first half)_
 
 **You need:** two NDEF-capable tags, both empty or holding different messages.
 
@@ -133,9 +133,9 @@ source being writable at any point; or a refusal that says "failed" instead of
 naming the condition.
 
 | Result | ( ) pass ( ) fail — notes: |
-|---|---|
+| ------ | -------------------------- |
 
-## 4. A copy onto an oversize destination is refused before anything is written — *(ticket criterion 4, spec item 10, second half)*
+## 4. A copy onto an oversize destination is refused before anything is written — _(ticket criterion 4, spec item 10, second half)_
 
 **You need:** a source message that is larger than a second tag's user memory —
 e.g. a full NTAG215 message copied onto an NTAG213 (496 vs 144 bytes), or the
@@ -166,9 +166,9 @@ that does not name the sizes; a silent refusal; or an assumed fit reported as
 verified.
 
 | Result | ( ) pass ( ) fail — notes: |
-|---|---|
+| ------ | -------------------------- |
 
-## 5. A never-written tag resets; the same tag refuses the second time — *(ticket criterion 5, spec item 11)*
+## 5. A never-written tag resets; the same tag refuses the second time — _(ticket criterion 5, spec item 11)_
 
 **You need:** a **fresh T5577** you can afford to lose, and patience. Read this
 whole item before starting: the second half destroys the first half's evidence.
@@ -189,8 +189,8 @@ whole item before starting: the second half destroys the first half's evidence.
 
 - **First reset:** the tag reads as empty afterwards (no Identity). The outcome is
   worded as **blanked**, never as "verified". **1 chirp** (done) — and note that
-  it is *one*, because nothing about this is uncertain.
-- **Second reset:** *this tag will not accept writes*, with the likely cause
+  it is _one_, because nothing about this is uncertain.
+- **Second reset:** _this tag will not accept writes_, with the likely cause
   named — the chip has already been written, or was never writable. **3 chirps**
   and the **LED held on for two seconds**. The tag is unchanged, and the app does
   not claim a copy.
@@ -202,12 +202,12 @@ though the app broke rather than the chip refusing); as "unknown" (which invites
 discarding a tag that may be fine); or as "blanked" (a lie); one chirp for the
 refusal; no LED hold; or the app assigning the blame to the payload.
 
-| First reset | ( ) blanked, 1 chirp ( ) other: |
-|---|---|
-| Second reset | ( ) will-not-accept-writes, 3 chirps + 2 s LED ( ) other: |
-| Tag after the refusal | ( ) unchanged ( ) changed: |
+| First reset           | ( ) blanked, 1 chirp ( ) other:                           |
+| --------------------- | --------------------------------------------------------- |
+| Second reset          | ( ) will-not-accept-writes, 3 chirps + 2 s LED ( ) other: |
+| Tag after the refusal | ( ) unchanged ( ) changed:                                |
 
-## 6. A clone, a batch over several Blanks, and an authored Identity each report their own outcomes — *(ticket criterion 6)*
+## 6. A clone, a batch over several Blanks, and an authored Identity each report their own outcomes — _(ticket criterion 6)_
 
 **You need:** one written 125 kHz source tag, and **three** Blank T5577s (or as
 many as you can spare; two is a usable minimum).
@@ -232,12 +232,12 @@ chirp**. Save to library if you want the copy counted.
 
 **Expected per attempt:**
 
-| What you did | Expected message | Expected symbol |
-|---|---|---|
-| A fresh Blank | verified, count rises | **1 chirp** |
-| The same tag left on | skipped, nothing written, count does not rise | **2 chirps** |
-| Nothing readable on the Reader | refused, nothing written | **3 chirps**, LED held 2 s |
-| A tag that takes nothing | failed or unknown, count does not rise | **3 chirps** (failed) / **2 chirps** (unknown) |
+| What you did                   | Expected message                              | Expected symbol                                |
+| ------------------------------ | --------------------------------------------- | ---------------------------------------------- |
+| A fresh Blank                  | verified, count rises                         | **1 chirp**                                    |
+| The same tag left on           | skipped, nothing written, count does not rise | **2 chirps**                                   |
+| Nothing readable on the Reader | refused, nothing written                      | **3 chirps**, LED held 2 s                     |
+| A tag that takes nothing       | failed or unknown, count does not rise        | **3 chirps** (failed) / **2 chirps** (unknown) |
 
 Nothing about an attempt is silent: every attempt is a user-started operation.
 
@@ -262,12 +262,12 @@ attempts coalescing into one line; the writer at the end of a batch rejoining th
 confirmation for a tag that is no longer there; a write that reports "verified"
 without a read-back; or a count that rises for a skip.
 
-| Clone | ( ) pass ( ) fail: |
-|---|---|
-| Batch, 3 Blanks | attempts: __ verified, __ skipped, __ refused — notes: |
-| Authored Identity | ( ) pass ( ) fail: |
+| Clone             | ( ) pass ( ) fail:                                     |
+| ----------------- | ------------------------------------------------------ |
+| Batch, 3 Blanks   | attempts: __ verified, __ skipped, __ refused — notes: |
+| Authored Identity | ( ) pass ( ) fail:                                     |
 
-## 7. The four symbols are distinguishable by ear, and the gap is recorded — *(ticket criterion 7)*
+## 7. The four symbols are distinguishable by ear, and the gap is recorded — _(ticket criterion 7)_
 
 **You need:** a quiet room, the beeper audible, and nothing else to do for five
 minutes.
@@ -296,12 +296,12 @@ minutes.
 
 **Record here — this is the value the spec's open question asks for:**
 
-| Tuned `CHIRP_GAP_MS` | ______ ms (nominal 120) |
-|---|---|
-| 1 vs 2 distinguishable | ( ) yes ( ) no |
-| 2 vs 3 distinguishable | ( ) yes ( ) no |
-| 3 + 2 s LED usable in a loud room | ( ) yes ( ) no |
-| 20-attempt batch still intelligible | ( ) yes ( ) no — this is the spec's batch-intelligibility open question |
+| Tuned `CHIRP_GAP_MS`                | 400 ms (nominal 120)                                                    |
+| ----------------------------------- | ----------------------------------------------------------------------- |
+| 1 vs 2 distinguishable              | (x) yes ( ) no                                                          |
+| 2 vs 3 distinguishable              | (x) yes ( ) no                                                          |
+| 3 + 2 s LED usable in a loud room   | (x) yes ( ) no                                                          |
+| 20-attempt batch still intelligible | (x) yes ( ) no — this is the spec's batch-intelligibility open question |
 
 **A failure looks like:** 2 and 3 merging into one burst; a beep that arrives
 after the screen has already told you the result by more than a moment; a symbol
@@ -315,15 +315,28 @@ Fill this in only with what you observed. An unticked item is worth more than a
 guessed tick: the whole point of this checklist is that no test in the repository
 can answer it.
 
-| Item | Result | Reader firmware | Date | Initials |
-|---|---|---|---|---|
-| 1. Classic 1K, 4-byte UID, memory dump names no family | not run | | | |
-| 2. NTAG, 7-byte UID, no raw fallback | not run | | | |
-| 3. Copy verifies by Records comparison | not run | | | |
-| 4. Oversize destination refused before writing | not run | | | |
-| 5. Fresh reset blanks; second reset refuses (3 chirps + LED) | not run | | | |
-| 6. Clone, batch, authored Identity report their own outcomes | not run | | | |
-| 7. Four symbols distinguishable; `CHIRP_GAP_MS` recorded | not run | | | |
+| Item                                                         | Result                                                                                | Reader firmware | Date       | Initials |
+| ------------------------------------------------------------ | ------------------------------------------------------------------------------------- | --------------- | ---------- | -------- |
+| 1. Classic 1K, 4-byte UID, memory dump names no family       | works                                                                                 | v0.2.0          | 2026-11-22 | A.B.     |
+| 2. NTAG, 7-byte UID, no raw fallback                         | works                                                                                 |                 |            |          |
+| 3. Copy verifies by Records comparison                       | flow does not work? Performed Read Source -> Remove Source -> Write Dest, check error |                 |            |          |
+| 4. Oversize destination refused before writing               | no other card                                                                         |                 |            |          |
+| 5. Fresh reset blanks; second reset refuses (3 chirps + LED) | after blanking an empty tag, refuses to be read or written anymore (lost)             |                 |            |          |
+| 6. Clone, batch, authored Identity report their own outcomes | works?                                                                                |                 |            |          |
+| 7. Four symbols distinguishable; `CHIRP_GAP_MS` recorded     | good                                                                                  |                 |            |          |
+
+Proof
+
+1. docs/superpowers/images/Screenshot 2026-11-22 at 13.40.29.png & docs/superpowers/images/Screenshot 2026-11-22 at 13.40.47.png
+2. docs/superpowers/images/Screenshot 2026-11-22 at 13.42.04.png
+3. docs/superpowers/images/Screenshot 2026-11-22 at 13.44.11.png
+
+**Adjudicated:** what this run did and did not establish is recorded in
+[`e2e/09-hardware-run.md`](e2e/09-hardware-run.md), with the screenshots under
+`e2e/screenshots/hardware-*.png`. Items 1, 2 and 7 passed; item 3 was blocked
+by the recorded Copy defect; item 4 was not run; item 5's second half — the
+refusal ticket 12 exists for — was never reached; item 6 was signed off without
+an observation. The chirp gap was tuned here and is now 400 ms.
 
 ## What a completed checklist then licenses
 
@@ -331,7 +344,7 @@ Only what it observed. A pass on item 1 does not license 13.56 MHz Copy on a tag
 family nobody tried; the spec's open questions stay open until a tag settles them:
 
 - whether a 10-byte-UID tag is latched at all, and whether its length byte reads
-  `0x0A` (the decoder supports the width; the *claim* needs a tag);
+  `0x0A` (the decoder supports the width; the _claim_ needs a tag);
 - whether a password-protected 13.56 MHz destination can be told from a read-only
   one — Copy must report the merged condition until a tag proves otherwise;
 - the real duration of one firmware chirp, and therefore the final `CHIRP_GAP_MS`;

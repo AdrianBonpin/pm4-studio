@@ -17,9 +17,11 @@ import type { BlankResult, EraseResult, WriteResult } from "../types";
  * must produce. A table read back out of the module under test would agree with
  * any edit, including a wrong one; these tables would not.
  *
- * What this file cannot settle: the real duration of one firmware chirp, and
- * therefore whether 120 ms makes one, two and three chirps distinguishable by
- * ear. That is tuning on hardware, and the spec records it as open.
+ * What this file cannot settle: the real duration of one firmware chirp. The gap
+ * was tuned by ear on hardware and is asserted below as the measured value — 120 ms
+ * ran two chirps together, so "needs you" was indistinguishable from "done";
+ * 400 ms separated one, two and three cleanly and stayed intelligible across a
+ * twenty-attempt batch.
  */
 
 /** The count each symbol must produce, written out again on purpose. */
@@ -219,7 +221,8 @@ describe("the alphabet", () => {
   });
 
   it("separates chirps with one named gap rather than a value at each call site", () => {
-    expect(CHIRP_GAP_MS).toBe(120);
+    // The value tuned on hardware, written out here so a silent change fails.
+    expect(CHIRP_GAP_MS).toBe(400);
     for (const symbol of SIGNAL_SYMBOLS) {
       expect(chirpSequenceFor(symbol).gapMs, symbol).toBe(CHIRP_GAP_MS);
     }
