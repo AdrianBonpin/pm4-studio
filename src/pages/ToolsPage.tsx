@@ -124,7 +124,7 @@ export function ToolsPage({ connected }: ToolsPageProps) {
           </div>
         )}
 
-        <div className="flex items-center gap-2">
+        <div className="flex max-w-2xl items-center gap-2">
           <Input
             className="font-mono"
             value={rawHex}

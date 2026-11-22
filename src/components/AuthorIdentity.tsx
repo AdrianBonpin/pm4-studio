@@ -270,7 +270,7 @@ export function AuthorIdentity({ connected, library, onDeviceError }: AuthorIden
           </div>
 
           {mode === "parts" ? (
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid max-w-2xl gap-4 sm:grid-cols-3">
               {PART_FIELDS.map((field) => (
                 <label key={field.id} className="flex flex-col gap-1.5">
                   <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">
@@ -287,7 +287,7 @@ export function AuthorIdentity({ connected, library, onDeviceError }: AuthorIden
               ))}
             </div>
           ) : (
-            <label className="flex flex-col gap-1.5">
+            <label className="flex max-w-sm flex-col gap-1.5">
               <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">
                 Five-byte Identity
               </span>

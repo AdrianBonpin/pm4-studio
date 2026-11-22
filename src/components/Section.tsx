@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { PAGE_RULE } from "../lib/uiConstants";
 
 interface SectionProps {
   title: string;
@@ -10,14 +11,22 @@ interface SectionProps {
 /**
  * Flat page section separated by a hairline. Deliberately not a card: nesting
  * bordered containers around every group is the "cardocalypse" pattern.
+ *
+ * The hairline is the page's structure, not the section's own property: it
+ * reaches both edges of the content area (`PAGE_RULE` cancels the pane's inset
+ * and re-applies it to this section's own content), so a page reads as one panel
+ * rather than as a column of rules floating in the middle of the window. A rule
+ * *inside* a body is drawn by the body and stays at its inset.
  */
 export function Section({ title, hint, actions, children }: SectionProps) {
   return (
-    <section className="border-t border-border pt-6 first:border-t-0 first:pt-0">
+    <section className={`${PAGE_RULE} border-t border-border pt-6 first:border-t-0 first:pt-0`}>
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h2 className="font-heading text-sm text-text">{title}</h2>
-          {hint && <p className="mt-1 text-xs leading-relaxed text-text-muted">{hint}</p>}
+          {hint && (
+            <p className="mt-1 max-w-prose text-xs leading-relaxed text-text-muted">{hint}</p>
+          )}
         </div>
         {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
       </div>
