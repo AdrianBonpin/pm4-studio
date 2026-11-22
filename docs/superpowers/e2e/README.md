@@ -118,11 +118,11 @@ a device call from a fixture.
 
 | Area | Report | Screenshots |
 |---|---|---|
-| Shell, five destinations, four toast corners | [01-shell-and-corners.md](01-shell-and-corners.md) | 8 |
-| 125 kHz: Read · Write · Reset · Clone · Batch | [02-125-khz.md](02-125-khz.md) | 10 |
-| 13.56 MHz: Read · Write · Copy · Erase · Memory | [03-13-56-mhz.md](03-13-56-mhz.md) | 12 |
-| Library: both collections, with and without a selection | [04-library.md](04-library.md) | 8 |
-| Settings: four groups; Tools | [05-settings-and-tools.md](05-settings-and-tools.md) | 12 |
+| Shell, five destinations, four toast corners | [01-shell-and-corners.md](01-shell-and-corners.md) | 18 |
+| 125 kHz: Read · Write · Clear · Clone · Batch | [02-125-khz.md](02-125-khz.md) | 18 |
+| 13.56 MHz: Read · Write · Copy · Erase · Memory | [03-13-56-mhz.md](03-13-56-mhz.md) | 21 |
+| Library: both collections, with and without a selection | [04-library.md](04-library.md) | 10 |
+| Settings: four groups; Tools | [05-settings-and-tools.md](05-settings-and-tools.md) | 15 |
 | The long-label sweep at the minimum size | [06-long-label-sweep.md](06-long-label-sweep.md) | — |
 | Release-build proofs | [07-release-build-proof.md](07-release-build-proof.md) | 2 |
 | Every finding, in one place | [08-findings.md](08-findings.md) | — |

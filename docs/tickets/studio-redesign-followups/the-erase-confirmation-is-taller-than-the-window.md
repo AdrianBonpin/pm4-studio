@@ -11,7 +11,7 @@ Measured during ticket 20's verification:
 
 Nothing else in the app puts its own action buttons into the overflow: every other confirmation fits, with the longest of them (Reset) ending at 863 px of content whose buttons are the last thing on screen.
 
-**Blocked by:** None. Evidence: `docs/superpowers/e2e/08-findings.md` (finding F3), `docs/superpowers/e2e/03-13-56-mhz.md`, and the pre-fix pair `screenshots/hf-erase-confirmation-900.png` / `-980.png` beside the post-fix `screenshots/hf-erase-confirmation-fixed-900.png` / `-fixed-980.png`.
+**Blocked by:** None. Evidence: `docs/superpowers/e2e/08-findings.md` (finding F3), `docs/superpowers/e2e/03-13-56-mhz.md`, and the pre-fix pair `screenshots/hf-erase-confirmation-before-900.png` / `-before-980.png` beside the post-fix `screenshots/hf-erase-confirmation-fixed-900.png` / `-fixed-980.png`.
 
 **Seams:**
 - Visual gate (existing) — catches a confirmation whose action buttons are not in the viewport at 900×700; misses whether the copy is worth reading.
