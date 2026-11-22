@@ -10,17 +10,17 @@ import { Notice, NOTICE_TONES, type NoticeTone } from "./Notice";
  * A notice is a condition the user is in: a library file that cannot be written
  * to, a migration warning, an invalid Record, a pending confirmation. It used to
  * be drawn as a coloured rule down the left edge of a rounded box, which
- * announced the severity with a bar and nothing else — no word said which case it
+ * announced the tone with a bar and nothing else — no word said which case it
  * was, so a user who cannot tell the accent hues apart got one bar for three
  * different meanings.
  *
  * The replacement is a whole box: a border on all four sides, a tint of the same
- * hue, a leading word that names the severity, and an icon whose *shape* differs
+ * hue, a leading word that names the tone, and an icon whose *shape* differs
  * per tone. The last two are the channels that survive colour blindness, which is
  * why they are asserted here rather than described in a comment.
  *
  * These are the primitive's own properties. That each site kept its words, its
- * severity and its dismiss control is asserted where the site is rendered.
+ * tone and its dismiss control is asserted where the site is rendered.
  */
 
 /** The icon shape lucide put in the markup, e.g. `octagon-alert`. */
@@ -39,24 +39,24 @@ describe("the notice", () => {
     // redesign removes.
     expect(root.className).toMatch(/(^|\s)border(\s|$)/);
     expect(root.className).not.toContain("border-l");
-    // The tint: severity is also a filled surface, so the box reads as a state.
+    // The tint: the tone is also a filled surface, so the box reads as a state.
     expect(root.className).toContain("bg-err/10");
   });
 
-  it("names its severity in words, in every tone", () => {
+  it("names its tone in words, in every tone", () => {
     for (const tone of NOTICE_TONES) {
-      const { container, unmount } = render(<Notice tone={tone} label={`Severity: ${tone}`} />);
+      const { container, unmount } = render(<Notice tone={tone} label={`Tone: ${tone}`} />);
 
-      expect(screen.getByText(`Severity: ${tone}`)).toBeTruthy();
+      expect(screen.getByText(`Tone: ${tone}`)).toBeTruthy();
       expect((container.firstElementChild as HTMLElement).dataset.tone).toBe(tone);
       unmount();
     }
   });
 
-  it("gives every tone an icon of its own shape, so the shape carries the severity", () => {
+  it("gives every tone an icon of its own shape, so the shape carries the tone", () => {
     const shapes = new Map<NoticeTone, string | null>();
     for (const tone of NOTICE_TONES) {
-      const { container, unmount } = render(<Notice tone={tone} label={`Severity: ${tone}`} />);
+      const { container, unmount } = render(<Notice tone={tone} label={`Tone: ${tone}`} />);
       shapes.set(tone, iconShape(container));
       unmount();
     }
@@ -65,8 +65,8 @@ describe("the notice", () => {
     for (const tone of NOTICE_TONES) {
       expect(shapes.get(tone), `tone ${tone} renders no icon`).not.toBeNull();
     }
-    // And no two tones share one: a shape that stood for two severities would
-    // carry nothing.
+    // And no two tones share one: a shape that stood for two tones would carry
+    // nothing.
     expect(new Set(shapes.values()).size).toBe(NOTICE_TONES.length);
     // Distinct from the words, too: two channels, not one written twice.
     expect(shapes.get("err")).not.toBe(shapes.get("warn"));
@@ -84,7 +84,7 @@ describe("the notice", () => {
     render(<Notice tone="err" role="status" label="Not written" title="The tag never answered" />);
 
     const notice = screen.getByRole("status", { name: "Not written" });
-    // The severity is the name; what the condition is stays readable inside it.
+    // The tone is the name; what the condition is stays readable inside it.
     expect(notice.textContent).toContain("The tag never answered");
   });
 
