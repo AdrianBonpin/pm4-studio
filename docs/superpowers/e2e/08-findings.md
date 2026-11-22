@@ -15,8 +15,8 @@ saying whether the tree still matches it.
 |---|---|---|
 | F1 — the capability limits contradict the app | **fixed** | `9189c35` (integrated in `2febeea`) |
 | F2 — Copy refuses a destination that holds no message | **fixed** | `73688fe` (integrated in `335b1fe`) |
-| F3 — the Erase confirmation is taller than the window | **fixed** | `79a98f6` (`review/findings`) |
-| F4 — Reset is called "Blank" in its own panel | **fixed** | `79a98f6` (`review/findings`) |
+| F3 — the Erase confirmation is taller than the window | **fixed** | `8c6d9d8` (`review/findings`) |
+| F4 — Reset is called "Blank" in its own panel | **fixed** | `8c6d9d8` (`review/findings`) |
 
 F1 and F2 also had their follow-up tickets closed (`Status: done`, criteria ticked)
 in `review/findings`, because a ticket that still reads `ready` is a second
