@@ -302,7 +302,7 @@ function HfReadout({ read, draft }: { read: HfRead; draft: DraftAction }) {
       </div>
 
       {cardType.variants.length > 1 && (
-        <p className="text-xs leading-relaxed text-text-muted">
+        <p className="max-w-prose text-xs leading-relaxed text-text-muted">
           {variantsNote(cardType.variants)}
         </p>
       )}

@@ -176,7 +176,7 @@ const NOT_A_SWITCHER: Record<string, string> = {
   "../../pages/DraftsCollection.tsx":
     "a Draft row: the same list-and-detail shape, with the Draft's own facts on the row",
   "../WriteDraftMode.tsx":
-    "a Draft row: the row is the saved thing, and choosing one opens it beside the list",
+    "a Draft row: the row is the saved thing, and choosing one opens it below the list",
 };
 
 /**
@@ -186,7 +186,7 @@ const NOT_A_SWITCHER: Record<string, string> = {
  * unexplained one is how this guard stops guarding. The Toggle is the one pill
  * left in the interface because a switch is a physical affordance and reads as
  * one — its track and its knob are the same shape for the same reason. The
- * bullet dot is a marker on a line of prose: it carries no action, is eight
+ * bullet dot is a marker on a line of prose: it carries no action, is four
  * pixels square and is not a control at all.
  */
 const PILL: Record<string, string> = {

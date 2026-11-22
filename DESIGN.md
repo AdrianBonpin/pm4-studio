@@ -258,8 +258,9 @@ background, it gets a hairline. A drop shadow is a different world's vocabulary.
 
 - **Radii:** `rounded` 4px for badges and for every option in a switcher, 6px
   (`rounded-md`) for every button, 8px (`rounded-lg`) for inputs, 12px
-  (`rounded-xl`) for cards, and `full` for the Toggle alone. A button is a
-  rectangle and a switcher is a chip; containers are neither.
+  (`rounded-xl`) for cards, and `full` for the Toggle, the only fully rounded
+  control in the interface. A button is a rectangle and a switcher is built from
+  the same shape; containers are neither.
 - **Borders:** one pixel, `--color-border`, brightening to `--color-border-hover`
   on hover. A focus ring is `ring-1`/`ring-2` in the accent, never a border colour
   change alone.
@@ -301,7 +302,9 @@ rendering of it — a band page's modes, Library's Collections, Settings' groups
 Quiet level, the corner the messages appear in and the two ways of entering an
 Identity are all this control — so the shape is set once there and never overridden
 at a call site. It is a group of toggle buttons and not a tab strip: it owns no
-panel and hides nothing from find-in-page, and it holds one row at 900×700.
+panel and hides nothing from find-in-page, and at 900×700 it holds one row —
+except the Toast-corner control, which is the one documented two-column grid —
+and no option's label wraps onto a second line.
 
 ### Badges
 

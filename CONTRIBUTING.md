@@ -183,7 +183,7 @@ bun run verify         # design check, types, build, tests, Rust tests
 It runs, in order:
 
 ```sh
-bun run build          # design:check -> tsc --noEmit -> vite build
+bun run build          # design:check -> tokens:check -> tsc --noEmit -> vite build
 bun run test           # vitest, with jsdom for component tests
 bun run verify:rust    # cargo test in src-tauri
 ```
@@ -191,7 +191,8 @@ bun run verify:rust    # cargo test in src-tauri
 The **design check is part of `bun run build`**, so a rule the vendored detector
 encodes fails the build and therefore fails `verify`. It is not a separate step
 somebody has to remember, and it is not advisory. While iterating, the fast steps
-are `bun run design:check`, `bun run typecheck` and `bun run test`; the Rust step
-is the slow one, and it stays in the gate because nothing is verified by memory.
+are `bun run design:check`, `bun run tokens:check`, `bun run typecheck` and
+`bun run test`; the Rust step is the slow one, and it stays in the gate because
+nothing is verified by memory.
 
 A pull request that has not run `bun run verify` is not ready to be reviewed.

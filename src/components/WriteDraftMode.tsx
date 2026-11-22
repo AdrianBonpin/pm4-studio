@@ -99,8 +99,7 @@ export function WriteDraftMode({ connected }: WriteDraftModeProps) {
         >
           {matches.length === 0 ? (
             <p className="text-sm leading-relaxed text-text-muted">
-              No Draft matches “{query.trim()}”.{" "}
-              {total === 1 ? "There is 1 Draft." : `There are ${total} Drafts.`}
+              No Draft matches “{query.trim()}”. There are {total} Drafts.
             </p>
           ) : (
             matches.map((draft) => (
