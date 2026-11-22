@@ -22,8 +22,8 @@ import { NOTICE_TONE_CLASS, NOTICE_TONES, type NoticeTone } from "../../lib/noti
  * replaces was announced by a coloured rule down the left edge: the hue was the
  * only thing saying "this is a warning" and not "this is a failure", so a user
  * who cannot distinguish the accent colours lost the distinction entirely, and a
- * screenshot with the bar cropped off lost it too. So a notice now carries the
- * severity through four channels at once:
+ * screenshot with the bar cropped off lost it too. So a notice now carries its
+ * tone through four channels at once:
  *
  *   1. **A word.** `label` is required and in the tone's ink. "Check this", "Not
  *      written", "Saving is off". It is the channel that needs no eyesight for
@@ -32,9 +32,9 @@ import { NOTICE_TONE_CLASS, NOTICE_TONES, type NoticeTone } from "../../lib/noti
  *      circle, a clock. Distinct silhouettes, so the tone survives colour
  *      blindness. It is `aria-hidden`, because the words already say it and a
  *      screen reader reading "warning warning" helps nobody.
- *   3. **A tint.** The whole box is filled with 10% of the hue, so severity is a
- *      surface rather than a line.
- *   4. **A border on all four sides.** Severity is not one edge of the box.
+ *   3. **A tint.** The whole box is filled with 10% of the hue, so a notice's tone
+ *      is a surface rather than a line.
+ *   4. **A border on all four sides.** A tone is not one edge of the box.
  *
  * Three deliberate omissions:
  *
@@ -69,12 +69,21 @@ interface ToneStyle {
 /**
  * Tone → the box this app draws it in: the frame on four sides and the shape of
  * the icon. The hue's *ink* is `lib/noticeTone`'s `NOTICE_TONE_CLASS`, so a tone's
- * colour is named once for the whole app rather than once per surface; this table
- * adds what only a box needs. Between them they are the only classes that name a
- * notice hue, and a call site passes a tone, never a colour.
+ * colour is named once for the whole app; this table adds what only a box needs,
+ * and a call site passes a tone, never a colour.
  *
- * The intensities follow the existing surfaces: `err`/`warn` at 50% of the hue on
- * the border and 10% on the fill, `ok` one step quieter because a confirmed
+ * The frame is named in two places, and this is one of them: `ui/ToastViewport`
+ * draws a message's border from the same hues at `warn/50`, `ok/40` and `err/60`,
+ * where a notice draws `warn/50`, `ok/40` and `err/50`. The intensities differ by
+ * **surface**, not by severity, and the reason is what the two things are. A notice
+ * sits in the page's own flow, on the canvas, with a 10% tint of its hue behind it,
+ * so a half-strength edge is enough to close the box. A message floats over
+ * whatever the user was reading, its card is `bg-surface/95` rather than a tint, so
+ * its edge has to carry the hue alone against any background — and `err`, the one
+ * that must survive being read past, is a step firmer for it.
+ *
+ * The rest follows the existing surfaces: `err`/`warn` at 50% of the hue on the
+ * border and 10% on the fill, `ok` one step quieter at 40% because a confirmed
  * outcome should not shout, and `muted` in the world's own hairline.
  */
 const TONE: Record<NoticeTone, ToneStyle> = {
@@ -86,16 +95,21 @@ const TONE: Record<NoticeTone, ToneStyle> = {
 };
 
 interface NoticeProps {
-  /** Which severity this is. Decides the tint, the border, the ink and the shape. */
+  /**
+   * The tone: how much attention this condition claims. It decides the tint, the
+   * border, the ink and the shape — and it is a tone, not the seam's severity,
+   * because a condition has no outcome to read a severity from (see
+   * `lib/noticeTone`).
+   */
   tone: NoticeTone;
   /**
-   * The severity in words — the leading line. Required, because a notice that
-   * does not say what it is leans on its hue, which is the defect this replaces.
+   * The tone in words — the leading line. Required, because a notice that does
+   * not say what it is leans on its hue, which is the defect this replaces.
    * Where the site has a better word than the tone's own ("Not written" rather
    * than "Check this"), it passes that word instead.
    */
   label: string;
-  /** Optional second line: what this condition is, when the label is its severity. */
+  /** Optional second line: what this condition is, when the label is its tone. */
   title?: ReactNode;
   /** The detail: the sentence, the facts, the controls the condition offers. */
   children?: ReactNode;
