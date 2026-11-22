@@ -13,6 +13,7 @@ lands on and what those seams miss, the tracker, a status, and acceptance criter
 |---|---|---|
 | [The capability limits contradict the app](the-capability-limits-contradict-the-app.md) | high | Diagnostics stops telling the user that NDEF is unavailable and that long UIDs are raw, in a build that does both |
 | [Copy refuses a destination that holds no message](copy-refuses-a-destination-that-holds-no-message.md) | high | Copy works onto the empty tag that is the ordinary destination for a copy |
+| [Clearing a tag must leave it usable; destroying it must be its own action](clearing-a-tag-must-leave-it-usable.md) | high | Reset stops consuming tags: Clear leaves a live rewritable chip, and Destroy is the deliberate all-zero write |
 | [Reset's refusal was never seen, and a blanked tag may stop answering](resets-refusal-was-never-seen-on-hardware.md) | high | Ticket 12's central claim is observed on hardware, and the app stops promising a blanked tag still reads |
 | [Device commands run on the main thread](device-commands-run-on-the-main-thread.md) | high | A slow, wedged or absent Reader cannot freeze the window, and no new command can reintroduce it |
 | [The Erase confirmation is taller than the window](the-erase-confirmation-is-taller-than-the-window.md) | medium | Erase's own buttons are on screen at 900×700, and its copy is worth reading |

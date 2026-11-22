@@ -295,6 +295,22 @@ the usual 24-byte `0x0073` payload (`00 01 01` then all zeros). It is not a
 factory reset and it does not unlock a locked chip; neither is reachable over
 this protocol.
 
+**Measured 2026-11-22 — this payload destroys the chip.** On a factory T5577 the
+write lands: the tag stops presenting an Identity, which is why the app reports
+`blanked`. The chip then **locks**. It still latches and modulates, so every
+reader reaches it, but it accepts no further data. Two `0x0073` writes were
+acknowledged by the device and ignored by the chip, the second one after lifting
+the tag off the Reader and re-presenting it to force a re-latch. Presence came
+back as `TagPresence::Blank` before and after both attempts.
+
+The consequence is not the one this section used to describe. A blanked T5577 is
+not "empty"; it is a tag that reads as nothing, forever, while looking alive to
+every reader it meets. Zero is therefore **not** a safe cleared value — clearing
+has to leave a non-zero placeholder Identity so the chip keeps working (see
+`docs/tickets/studio-redesign-followups/clearing-a-tag-must-leave-it-usable.md`),
+and the all-zero write is retained only as a deliberate destroy.
+
+
 The read path cannot confirm it the way a clone is confirmed. An all-zero data
 field decodes as "no reading", so a Tag that has been blanked reads as **empty**
 — the same as no Tag at all. That is why the app reports `blanked` rather than
