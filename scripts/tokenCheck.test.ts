@@ -450,4 +450,8 @@ describe("the ordinary verification command", () => {
   it("fails `bun run verify` with it", () => {
     expect([...reachableScripts("verify")]).toContain("tokens:check");
   });
+
+  it("is the command the agent instructions name", () => {
+    expect(readFileSync(resolve(repoRoot, "AGENTS.md"), "utf8")).toContain("bun run tokens:check");
+  });
 });
