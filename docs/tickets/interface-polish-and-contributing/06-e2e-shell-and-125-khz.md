@@ -16,13 +16,13 @@ two reports.
   renders, that no control's label wraps at the minimum, and that a message appears in each
   corner; misses everything about real hardware, which the fixture cannot stand for.
 
-- [ ] Every image in the shell and corners report is re-captured at both viewports, from this branch.
-- [ ] Every image in the 125 kHz report is re-captured at both viewports, from this branch.
-- [ ] The shell report still shows all five destinations and a message in each of the four corners.
-- [ ] The 125 kHz report still shows all five modes, including a readout, a confirmation, and the confirmation that destroys a Tag.
-- [ ] The 125 kHz report names its five modes with the glossary's words — Clear, and Destroy for the destructive one — and no longer calls the everyday operation Reset.
-- [ ] Each report's claims are re-checked and corrected where the new shape or width changed them.
-- [ ] No image from the previous capture survives in either report.
+- [x] Every image in the shell and corners report is re-captured at both viewports, from this branch.
+- [x] Every image in the 125 kHz report is re-captured at both viewports, from this branch.
+- [x] The shell report still shows all five destinations and a message in each of the four corners.
+- [x] The 125 kHz report still shows all five modes, including a readout, a confirmation, and the confirmation that destroys a Tag.
+- [x] The 125 kHz report names its five modes with the glossary's words — Clear, and Destroy for the destructive one — and no longer calls the everyday operation Reset.
+- [x] Each report's claims are re-checked and corrected where the new shape or width changed them.
+- [x] No image from the previous capture survives in either report.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/39
-**Status:** ready
+**Status:** done

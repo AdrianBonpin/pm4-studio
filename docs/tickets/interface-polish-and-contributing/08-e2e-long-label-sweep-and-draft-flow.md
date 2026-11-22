@@ -19,12 +19,12 @@ before the Draft list exists.
   the cleared state, the choice, and the write panel appearing for it; misses the Draft's
   Records being correct on a Tag, which no fixture can show.
 
-- [ ] The long-label sweep is re-run at 900×700 over every destination and every mode, and every label stays on one line.
-- [ ] The sweep report states which labels it covers and records that each mode is one click from the others.
-- [ ] A new report exists for the Draft list, with images for: the list on arrival with nothing chosen, a query that narrows it, a query that matches nothing, the query cleared, a Draft chosen, and the write panel that follows.
-- [ ] The new report says plainly what the fixture backend can and cannot stand for.
-- [ ] The E2E index links the new report and lists it beside the existing ones.
-- [ ] No claim in either report rests on an image taken before this branch.
+- [x] The long-label sweep is re-run at 900×700 over every destination and every mode, and every label stays on one line.
+- [x] The sweep report states which labels it covers and records that each mode is one click from the others.
+- [x] A new report exists for the Draft list, with images for: the list on arrival with nothing chosen, a query that narrows it, a query that matches nothing, the query cleared, a Draft chosen, and the write panel that follows.
+- [x] The new report says plainly what the fixture backend can and cannot stand for.
+- [x] The E2E index links the new report and lists it beside the existing ones.
+- [x] No claim in either report rests on an image taken before this branch.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/41
-**Status:** ready
+**Status:** done

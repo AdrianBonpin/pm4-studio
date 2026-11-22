@@ -148,12 +148,21 @@ Evidence: `screenshots/lf-reset-confirmation-980.png`,
 
 Ticket: `docs/tickets/studio-redesign-followups/reset-is-called-blank-in-its-own-panel.md`
 
-> **Fixed.** The mode's name and the panel's words are one name now: `lib/lfModes`
-> owns "Reset" for the pill, `lib/blankTag` owns the panel's heading, its controls and
-> its outcome words, and `lib/blankTag.test.ts` binds the two so they cannot drift
-> apart again. The factory-restore denial left the panel — it is one of the Reader's
-> capability limits and is stated there once — and the page subtitle no longer ends
-> "…or blank a tag". "Blank" survives as the noun it is, in Clone and Batch.
+> **Fixed.** The mode's name and the panel's words are one name now, and the name
+> is **Clear**: `lib/lfModes` owns "Clear" for the switcher's option, `lib/clearTag`
+> owns the panel's heading ("Clear a tag"), its controls and its outcome words, and
+> `lib/clearTag.test.ts` binds the two so they cannot drift apart again. The
+> destructive write is no longer the routine one: **Destroy** is a separate entry
+> point on the panel's first screen, with its own read, its own confirmation and
+> its own danger button. The factory-restore denial left the panel — it is one of
+> the Reader's capability limits (`Factory restore and unlock`, "Not possible.") and
+> is stated there once — and the page subtitle no longer ends "…or blank a tag".
+> "Blank" survives as the noun it is, in Clone and Batch.
+>
+> The two images above are the **pre-fix record** of the panel as F4 saw it, and are
+> kept for that reason. The panel as it ships now is captured in
+> [02-125-khz.md](02-125-khz.md) as `lf-clear-panel-{980,900}.png`,
+> `lf-clear-confirmation-{980,900}.png` and `lf-destroy-confirmation-{980,900}.png`.
 
 ## Observations — recorded, no ticket
 
