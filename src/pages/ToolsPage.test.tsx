@@ -200,3 +200,58 @@ describe("Tools holds the console and nothing else", () => {
     expect(backend.callsTo("led_off")).toHaveLength(0);
   });
 });
+
+/** The seven presets, written out here the way the page should show them. */
+const PRESET_LABELS = [
+  "Wake 0x51",
+  "LF read 0x72",
+  "HF poll 0x69",
+  "Beep 0x53",
+  "LED off 0x55",
+  "Version 0x54",
+  "NTAG info 0x83",
+];
+
+/**
+ * The seven frame presets are buttons, and pressing one fills the frame field.
+ *
+ * They used to be drawn as chips, which is what the mode switch also looked
+ * like — so the one row on the page that performs an operation was shaped like
+ * the one control on every page that chooses a mode. Pressing a preset sends
+ * nothing: it writes a frame into the box the user is about to edit, and Send
+ * is still the only thing that sends.
+ */
+describe("the console's frame presets", () => {
+  it("are quiet buttons rather than a row of options", () => {
+    mountConsole(FULL);
+
+    // Every preset is on screen, named as the frame it types.
+    expect(PRESET_LABELS.map((label) => screen.getByRole("button", { name: label }))).toHaveLength(
+      PRESET_LABELS.length,
+    );
+
+    for (const label of PRESET_LABELS) {
+      const button = screen.getByRole("button", { name: label });
+      // A preset is the app's button component in its quiet variant: the answer
+      // only that component gives, so a hand-rolled button cannot stand in for
+      // it.
+      expect(button.getAttribute("data-variant"), label).toBe("ghost");
+      // And it is not a choice between alternatives: nothing reports it as
+      // pressed, and no group claims one of the presets is the current one.
+      expect(button.getAttribute("aria-pressed"), label).toBeNull();
+      expect(button.closest('[role="group"]'), label).toBeNull();
+    }
+  });
+
+  it("fills the frame field when pressed, and sends nothing", async () => {
+    const { backend, ui } = mountConsole(FULL);
+
+    await ui.user.click(screen.getByRole("button", { name: "NTAG info 0x83" }));
+
+    const frame = screen.getByPlaceholderText("55 00 51 00 01 01 FE 01");
+    expect((frame as HTMLInputElement).value).toBe("55 00 83 00 00 FF 00");
+    // Filling the box is not sending it: the instrument still waits for Send.
+    expect(backend.callsTo("raw_send")).toHaveLength(0);
+    expect(screen.queryByText(/Sending/)).toBeNull();
+  });
+});

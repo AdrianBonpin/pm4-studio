@@ -19,12 +19,12 @@ instead of three times.
 - The Tools page as rendered — catches that pressing a preset fills the frame field and
   sends nothing; misses whether the control still looks like a chip.
 
-- [ ] The Identity entry offers its two choices as one labelled group of options, with the chosen one reported as pressed.
-- [ ] Each option in that group is reachable and operable by keyboard alone.
-- [ ] Choosing either option shows that option's own entry form; a value entered under one is not used by the other.
-- [ ] The seven console presets are the app's button component, in its quiet secondary vocabulary, and pressing one fills the frame field without sending.
-- [ ] No second implementation of a two-or-more-option switcher remains in the interface.
-- [ ] `bun run verify` passes, and no test mocks an app-internal module.
+- [x] The Identity entry offers its two choices as one labelled group of options, with the chosen one reported as pressed.
+- [x] Each option in that group is reachable and operable by keyboard alone.
+- [x] Choosing either option shows that option's own entry form; a value entered under one is not used by the other.
+- [x] The seven console presets are the app's button component, in its quiet secondary vocabulary, and pressing one fills the frame field without sending.
+- [x] No second implementation of a two-or-more-option switcher remains in the interface.
+- [x] `bun run verify` passes, and no test mocks an app-internal module.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/33
-**Status:** ready
+**Status:** done

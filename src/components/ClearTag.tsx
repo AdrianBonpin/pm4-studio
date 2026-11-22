@@ -173,7 +173,7 @@ export function ClearTag({ connected, onDeviceError }: ClearTagProps) {
               confirmation. A user clearing tags all day cannot arrive here by
               repeating the everyday action, and what it does is stated where it is
               offered rather than discovered afterwards. */}
-          <div className="flex flex-col gap-2 border-t border-line pt-4">
+          <div className="flex flex-col gap-2 border-t border-border pt-4">
             <p className="text-sm font-medium text-text">{DESTROY_PANEL_TITLE}</p>
             <p className="max-w-prose text-xs leading-relaxed text-text-muted">
               {DESTROY_PANEL_HINT}
