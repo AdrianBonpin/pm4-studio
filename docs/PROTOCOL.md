@@ -1012,6 +1012,28 @@ would have shown `0S07` as part of a bank card.
    app must not claim it sets the lock bit, because it does not know which byte
    would.
 
+   **Measured 2026-11-22 — the leading `01 01` pair is a suspect, and this test
+   did not clear it.** The write payload is built in one place and always carries
+   `payload[1] = 0x01, payload[2] = 0x01`, for Clone, Write, Clear and Destroy
+   alike; the datasheet puts the per-block lock bit inside the same standard-write
+   command as the data. So a payload constant that lands on the lock bit would make
+   **every** write single-use. `examples/lockprobe.rs` exists to test exactly that:
+   it writes identity A, re-reads, writes identity B, re-reads, and can send the
+   payload with the `01 01` pair cleared.
+
+   The first tag tried read as `55 00 84 82 12` and refused writes **both** with
+   the flags and with them cleared — so on that tag the flags are not what refuses,
+   and the tag is unwritable by any payload. That is the ADR 0007 ambiguity shown
+   empirically: a read-only EM4100 fob and a locked T5577 are indistinguishable from
+   this Reader, and nothing here says which it was.
+
+   **Still open, and it needs one writable T5577:** clear the flags, write A, write
+   B. If B takes, the `01 01` pair is the lock and every tag this app has ever
+   written was made single-use by the app rather than by the chip. If B is refused,
+   the flags are innocent and these tags lock after one write for their own reasons.
+   Until that runs, **no claim that Clear is safer than Destroy is evidence-based** —
+   the payload shape argument does not survive a single-write tag.
+
 Solved: **125 kHz write/clone** — command `0x0073`, see above.
 Solved: **multi-report reassembly** — verified in both directions, with real
 boundaries, see "Multi-report frames".

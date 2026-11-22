@@ -13,6 +13,7 @@ lands on and what those seams miss, the tracker, a status, and acceptance criter
 |---|---|---|
 | [The capability limits contradict the app](the-capability-limits-contradict-the-app.md) | high | Diagnostics stops telling the user that NDEF is unavailable and that long UIDs are raw, in a build that does both |
 | [Copy refuses a destination that holds no message](copy-refuses-a-destination-that-holds-no-message.md) | high | Copy works onto the empty tag that is the ordinary destination for a copy |
+| [Does every write from this app lock the tag?](every-write-may-lock-the-tag.md) | high | The one measurement that decides whether tags are single-use because of this app's payload, or on their own |
 | [Clearing a tag must leave it usable; destroying it must be its own action](clearing-a-tag-must-leave-it-usable.md) | high | **Done** (hardware criterion open): the overwrite stops consuming tags — Clear leaves a live rewritable chip, Destroy is the deliberate all-zero write behind its own gate |
 | [The refusal was never seen, and a zeroed tag accepts no new Identity](resets-refusal-was-never-seen-on-hardware.md) | high | Ticket 12's central claim is observed on hardware, and the payload question is decided: Clear's placeholder stays usable, Destroy's zero does not |
 | [Device commands run on the main thread](device-commands-run-on-the-main-thread.md) | high | A slow, wedged or absent Reader cannot freeze the window, and no new command can reintroduce it |
