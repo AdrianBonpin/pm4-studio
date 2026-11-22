@@ -115,7 +115,7 @@ export function ToolsPage({ connected }: ToolsPageProps) {
       >
         {/* Said before the console is used, not after a frame is refused. */}
         {capability?.readOnly && (
-          <div className="mb-3 rounded-lg border border-warn/50 bg-warn/10 px-3 py-2">
+          <div className="mb-3 max-w-prose rounded-lg border border-warn/50 bg-warn/10 px-3 py-2">
             <p className="text-xs font-medium text-warn">{READ_ONLY_TITLE}</p>
             <p className="mt-1 text-xs leading-relaxed text-text-muted">{READ_ONLY_BODY}</p>
             <p className="mt-1 font-mono text-[11px] leading-relaxed text-text-muted">
@@ -163,7 +163,7 @@ export function ToolsPage({ connected }: ToolsPageProps) {
 
         {/* A frame this build will not send: about the build, not the Tag. */}
         {refusal && (
-          <div className="mt-3 rounded-lg border border-warn/50 bg-warn/10 px-3 py-2">
+          <div className="mt-3 max-w-prose rounded-lg border border-warn/50 bg-warn/10 px-3 py-2">
             <p className="text-xs font-medium text-warn">{BUILD_REFUSAL_LABEL}</p>
             <p className="mt-1 text-xs leading-relaxed text-text">{refusal.message}</p>
             <p className="mt-1 text-xs leading-relaxed text-text-muted">{BUILD_REFUSAL_DETAIL}</p>

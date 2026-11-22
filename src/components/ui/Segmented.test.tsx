@@ -25,12 +25,13 @@ import { renderUi } from "../../test/dom";
  * look-alike that happens to satisfy the contract behaviourally still diverges
  * the first time the switch changes shape.
  *
- * One block after it scans for the pill for the same reason. The switch is a
- * 4px chip and a button is a 6px rectangle (DESIGN.md, "Shapes"); neither number
- * is asserted here, because a class string cannot honestly own a painted radius.
- * What is asserted is only the thing a class string *can* own: that the fully
- * rounded shape is not drawn by a control any more, so the next restyle has to
- * argue with this file before it hands a switcher or a button the pill back.
+ * One block after it scans for the pill for the same reason. The switch and a
+ * button are two different shapes, settled in `DESIGN.md` under "Shapes";
+ * neither corner radius is asserted here, because a class string cannot honestly
+ * own a painted radius. What is asserted is only the thing a class string *can*
+ * own: that the fully rounded shape is not drawn by a control any more, so the
+ * next restyle has to argue with this file before it hands a switcher or a
+ * button the pill back.
  */
 
 /** A three-option switch, and the value it was last asked for. */
@@ -167,8 +168,8 @@ const SWITCHER = "./Segmented.tsx";
  * An exemption needs a reason and is checked like the design allow-list: an
  * unexplained one is how this guard stops guarding. Each is a row in a list
  * where the row *is* the item — it carries its own name and facts, and choosing
- * it opens that item beside the list. A switch holds a fixed set of labels and
- * hides nothing; a list of saved things is neither.
+ * it opens that item's own panel, wherever the layout puts it. A switch holds a
+ * fixed set of labels and hides nothing; a list of saved things is neither.
  */
 const NOT_A_SWITCHER: Record<string, string> = {
   "../../pages/LibraryPage.tsx":
