@@ -371,7 +371,7 @@ function DataGroup({ library }: { library: LibraryState }) {
 
           {importPreview && importPath && (
             <Notice tone="pending" label="Pending">
-              <p className="text-sm leading-relaxed text-text">
+              <p className="max-w-prose text-sm leading-relaxed text-text">
                 {describeImportPreview(importPreview)}
               </p>
               <code className="select-text break-all font-mono text-[11px] text-text-muted">
