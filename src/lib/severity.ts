@@ -27,7 +27,7 @@
 import type {
   BatchAttemptOutcome,
   BatchAttemptResult,
-  BlankResult,
+  ClearResult,
   EraseResult,
   RefusalCause,
   WriteOutcome,
@@ -63,8 +63,24 @@ export type OutcomeKind =
   | "already-saved"
   /** A write whose read-back proved it. */
   | "verified"
-  /** A Reset that left no Identity on the Tag. */
-  | "blanked"
+  /**
+   * A **Clear** whose read-back presented the placeholder. Success: the tag stopped
+   * being a working credential and stayed a live, rewritable chip, and the read-back
+   * positively confirmed both halves of that.
+   */
+  | "cleared"
+  /**
+   * A **Destroy** the user asked for, whose read-back found no Identity.
+   *
+   * A completed operation, and never a failure: the user chose the destructive
+   * action and the app carried it out. It is **warning** rather than success
+   * because its only evidence is an absence — a tag that reads as carrying nothing
+   * and a tag lifted off the Reader look the same — so the spec's *needs you*
+   * symbol ("completed, result needs checking") is exactly right, and it is also
+   * what keeps a destruction audibly distinct from a Clear. It says nothing about
+   * recovery: a destroyed tag cannot be recovered or reused.
+   */
+  | "destroyed"
   /** A readout's message became a Draft. About this machine's library, not the
    *  Tag: a Draft is authored here and no Tag was written to. */
   | "drafted"
@@ -101,8 +117,8 @@ export type OutcomeKind =
   | "unreadable"
   /** Attempted and did not work. */
   | "failed"
-  /** A Reset this Tag will not accept writes for; nothing changed. */
-  | "reset-refused"
+  /** A Clear or Destroy this Tag will not accept writes for; nothing changed. */
+  | "clear-refused"
   /** Refused because the running build sends only non-changing commands. */
   | "refused-by-build"
   /**
@@ -177,7 +193,8 @@ export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
   "saved",
   "already-saved",
   "verified",
-  "blanked",
+  "cleared",
+  "destroyed",
   "drafted",
   "erased",
   "data-cleared",
@@ -186,7 +203,7 @@ export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
   "failed",
   "skipped",
   "unreadable",
-  "reset-refused",
+  "clear-refused",
   "refused-by-build",
   "reader-absent",
   "reader-gone",
@@ -211,7 +228,14 @@ const SEVERITY_OF: Record<OutcomeKind, Severity> = {
   saved: "success",
   "already-saved": "info",
   verified: "success",
-  blanked: "success",
+  // Clear's read-back is a positive confirmation — the placeholder is on the tag —
+  // so it is the alphabet's "completed and confirmed good".
+  cleared: "success",
+  // Destroy is completed and asked for, so it is not a failure. It is *needs you*
+  // because the confirmation is an absence, which cannot be told from a tag that
+  // left the field, and because that is what distinguishes it by ear from a Clear.
+  // ADR 0009's three symbols are unchanged: this is its two-chirp row.
+  destroyed: "warning",
   drafted: "success",
   erased: "success",
   "data-cleared": "success",
@@ -220,7 +244,7 @@ const SEVERITY_OF: Record<OutcomeKind, Severity> = {
   failed: "error",
   skipped: "error",
   unreadable: "error",
-  "reset-refused": "error",
+  "clear-refused": "error",
   "refused-by-build": "error",
   "reader-absent": "info",
   "reader-gone": "error",
@@ -294,8 +318,9 @@ export function refusalKind(cause: RefusalCause | null): OutcomeKind {
  * The discriminator a 125 kHz copy write gets.
  *
  * `already-carries` is the guard's refusal and is named as a skip, with the same
- * severity a refusal has; `blanked` and `erased` are things a copy cannot do, so
- * they are reported as a failure rather than as a success nobody would believe.
+ * severity a refusal has; `cleared`, `destroyed` and `erased` are things a copy
+ * cannot do, so they are reported as a failure rather than as a success nobody
+ * would believe.
  */
 export function copyWriteKind(
   outcome: WriteOutcome,
@@ -309,7 +334,8 @@ export function copyWriteKind(
     case "unverified":
       return "unverified";
     case "failed":
-    case "blanked":
+    case "cleared":
+    case "destroyed":
     case "erased":
       return "failed";
   }
@@ -317,7 +343,8 @@ export function copyWriteKind(
 
 /**
  * The discriminator a whole-NDEF-message write gets. A Draft or a Snapshot write
- * cannot blank or erase a Tag, so either is a bug reported as a failure.
+ * cannot clear, destroy or erase a Tag, so any of them is a bug reported as a
+ * failure.
  */
 export function ndefWriteKind(outcome: WriteOutcome): OutcomeKind {
   switch (outcome) {
@@ -328,18 +355,27 @@ export function ndefWriteKind(outcome: WriteOutcome): OutcomeKind {
     case "unverified":
       return "unverified";
     case "failed":
-    case "blanked":
+    case "cleared":
+    case "destroyed":
     case "erased":
       return "failed";
   }
 }
 
-/** The discriminator one Reset gets. `willNotAcceptWrites` is its own finding
- *  about the Tag (ADR 0007), not a failure of the attempt. */
-export function blankKind(outcome: BlankResult["outcome"]): OutcomeKind {
+/**
+ * The discriminator one Clear or Destroy gets.
+ *
+ * `cleared` and `destroyed` are distinct kinds with their own severities, and this
+ * function is the only place either is chosen: nothing can report a destruction in
+ * the colour or the sound of a clear. `willNotAcceptWrites` is its own finding
+ * about the Tag (ADR 0007), not a failure of the attempt.
+ */
+export function clearKind(outcome: ClearResult["outcome"]): OutcomeKind {
   switch (outcome) {
-    case "blanked":
-      return "blanked";
+    case "cleared":
+      return "cleared";
+    case "destroyed":
+      return "destroyed";
     case "refused":
       return "refused";
     case "unverified":
@@ -347,7 +383,7 @@ export function blankKind(outcome: BlankResult["outcome"]): OutcomeKind {
     case "failed":
       return "failed";
     case "willNotAcceptWrites":
-      return "reset-refused";
+      return "clear-refused";
   }
 }
 

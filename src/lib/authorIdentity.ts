@@ -265,14 +265,15 @@ export function authorWriteNotice(result: WriteResult, targetId: string): WriteN
         tone,
         text: `Not written: the write could not be sent${result.message ? ` (${result.message})` : ""}.`,
       };
-    case "blanked":
-      // A hand-authored write aims at an Identity, so this cannot happen. Naming
-      // it is better than wording it as a result.
+    case "cleared":
+    case "destroyed":
+      // A hand-authored write aims at an Identity, so neither can happen. Naming it
+      // is better than wording it as a result.
       return {
         tone,
         text:
-          "Unexpected outcome: this write reported a blanked tag, which authoring cannot do. " +
-          "Nothing here counts it as written.",
+          "Unexpected outcome: this write reported a cleared or destroyed tag, which authoring " +
+          "cannot do. Nothing here counts it as written.",
       };
     case "erased":
       // Erasing NDEF content is its own operation with its own notice; see

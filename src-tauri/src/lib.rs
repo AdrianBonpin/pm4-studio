@@ -4,7 +4,7 @@ mod atomic_file;
 pub mod author_identity;
 mod clear_data;
 pub mod batch;
-pub mod blank;
+pub mod clear;
 pub mod console;
 pub mod identity;
 pub mod library;
@@ -24,7 +24,7 @@ pub mod write_outcome;
 mod test_frames;
 
 use batch::BatchAttempt;
-use blank::BlankAttempt;
+use clear::ClearAttempt;
 use identity::Identity;
 use library::{
     Draft, InsertOutcome, Library, LibraryProblem, LibraryStore, Open, SaveError, Snapshot,
@@ -531,62 +531,91 @@ fn lf_clone_attempt(
     })
 }
 
-/// What one guarded blanking attempt produced, in the shape the webview reads.
+/// What one guarded Clear or Destroy produced, in the shape the webview reads.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct BlankResult {
-    /// The Identity the user confirmed, which is what was blanked.
+pub struct ClearResult {
+    /// The Identity the user confirmed, which is what was overwritten.
     pub customer: u8,
     pub data32: u32,
-    /// "refused" | "blanked" | "unverified" | "failed" — see `write_outcome`.
-    /// Never "verified": a blanking write creates no copy to verify.
+    /// "clear" | "destroy" — the operation the user chose, echoed back so the
+    /// interface can never word a result for a different action than it asked for.
+    pub operation: &'static str,
+    /// "refused" | "cleared" | "destroyed" | "unverified" | "failed" |
+    /// "willNotAcceptWrites" — see `write_outcome`. Never "verified": neither
+    /// operation places a copy.
     pub outcome: &'static str,
+    /// True only when the re-read presented the cleared placeholder. Mirror of
+    /// `outcome == "cleared"`, and never true for a destroy.
+    pub cleared: bool,
     /// True only when the re-read found no Identity. Mirror of
-    /// `outcome == "blanked"`.
-    pub blanked: bool,
-    /// The Identity the Tag still presents, when it still presents one.
-    pub still_identifies: Option<String>,
-    /// Why the Tag was not blanked, when it was not.
+    /// `outcome == "destroyed"`, and never true for a clear.
+    pub destroyed: bool,
+    /// The Identity the Tag presents, when it presented one: the placeholder after
+    /// a Clear that landed, and what it kept when the write did not take.
+    pub presents: Option<String>,
+    /// Why the Tag was not overwritten as asked, when it was not.
     pub message: Option<String>,
 }
 
-/// Blank the Identity on the 125 kHz tag on the reader.
+/// Clear or destroy the Identity on the 125 kHz tag on the reader.
 ///
-/// `customer` and `data32` are the Identity the user confirmed in the UI. The
-/// guard refuses unless the tag in the write position presents exactly that
-/// Identity, so a confirmation can never be applied to a different tag — and
-/// refuses outright when no tag can be read, per ADR 0001. There is no
-/// "write anyway": neither refusal is a prompt.
+/// `customer` and `data32` are the Identity the user confirmed in the UI, and
+/// `operation` is which of the two writes they asked for. The guard refuses unless
+/// the tag in the write position presents exactly that Identity, so a confirmation
+/// can never be applied to a different tag — and refuses outright when no tag can
+/// be read, per ADR 0001. There is no "write anyway": neither refusal is a prompt.
 ///
-/// Nothing is recorded in the library. Blanking destroys an Identity rather than
-/// copying one, so no Snapshot's confirmed-copy count may move; a Snapshot that
-/// describes the destroyed value stays exactly as it is, because a Snapshot
-/// records what a Tag held when it was read, not what a Tag holds now.
+/// The two operations write two different payloads and report two different
+/// outcomes, and neither can be reported as the other:
+///
+///   * `clear` writes the non-zero placeholder (customer `0x00`, data32
+///     `0x00FFFFFF`). The tag stops being a working credential and stays a live,
+///     rewritable chip: it still reads as a Tag, so a Clone or an authored Identity
+///     can be written onto it next.
+///   * `destroy` writes the neutral Identity (all zeroes). Measured on hardware,
+///     a T5577 written with it stops presenting an Identity, keeps answering every
+///     reader, and permanently refuses further data. It is the deliberate,
+///     destructive operation and it is never the default.
+///
+/// Nothing is recorded in the library. Neither operation copies an Identity, so no
+/// Snapshot's confirmed-copy count may move; a Snapshot that describes the
+/// overwritten value stays exactly as it is, because a Snapshot records what a Tag
+/// held when it was read, not what a Tag holds now.
 #[tauri::command]
-fn lf_blank(
+fn lf_clear(
     state: State<'_, AppState>,
     customer: u8,
     data32: u32,
-) -> Result<BlankResult, String> {
+    operation: String,
+) -> Result<ClearResult, String> {
+    // The wire name is closed: an unknown operation is an error rather than a
+    // default, because defaulting here would silently pick one of two irreversible
+    // writes.
+    let operation = clear::LfOperation::from_wire(&operation)?;
     // Built without `Identity::new`: a reading is not range-checked, and a tag
     // whose data field carries bits this app cannot encode is still a tag the
-    // user may want to blank.
+    // user may want to clear.
     let confirmed = Identity { customer, data32 };
-    let attempt = with_reader(&state, |r| Ok(r.lf_blank_attempt(confirmed)))?;
-    if matches!(attempt, BlankAttempt::Failed(_)) {
+    let attempt = with_reader(&state, |r| Ok(r.lf_clear_attempt(confirmed, operation)))?;
+    if matches!(attempt, ClearAttempt::Failed(_)) {
         // A transport error means the handle is suspect; drop it so the next
         // call re-enumerates instead of failing forever.
         if let Ok(mut slot) = state.reader.lock() {
             *slot = None;
         }
     }
-    let verdict = blank::verdict(&attempt);
-    Ok(BlankResult {
+    let verdict = clear::verdict(operation, &attempt);
+    let cleared = matches!(verdict.outcome, write_outcome::WriteOutcome::Cleared);
+    let destroyed = matches!(verdict.outcome, write_outcome::WriteOutcome::Destroyed);
+    Ok(ClearResult {
         customer,
         data32,
+        operation: operation.as_str(),
         outcome: verdict.outcome.as_str(),
-        blanked: matches!(verdict.outcome, write_outcome::WriteOutcome::Blanked),
-        still_identifies: verdict.still_identifies.map(|id| id.id()),
+        cleared,
+        destroyed,
+        presents: verdict.presented.map(|id| id.id()),
         message: verdict.message,
     })
 }
@@ -1845,7 +1874,7 @@ pub fn run() {
             lf_identity_preview_hex,
             lf_write,
             lf_clone_attempt,
-            lf_blank,
+            lf_clear,
             hf_ndef_preview,
             hf_ndef_write,
             hf_password_status,

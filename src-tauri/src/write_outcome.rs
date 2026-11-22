@@ -1,14 +1,18 @@
 //! What became of one attempted write, and which outcomes are copies.
 //!
-//! A write produces one of six outcomes, and only one of them is evidence that
+//! A write produces one of these outcomes, and only one of them is evidence that
 //! a copy exists:
 //!
 //!   * `Refused` — the guard stopped it, so nothing was transmitted.
 //!   * `Verified` — transmitted, and the read-back presented the target
 //!     Identity. This is the only confirmed copy.
-//!   * `Blanked` — transmitted with the neutral Identity, and the read-back
-//!     presented no Identity at all. The Tag no longer carries a credential.
-//!     This is a *destruction*, never a copy: nothing in the library gained one.
+//!   * `Cleared` — transmitted with the cleared placeholder Identity, and the
+//!     read-back presented exactly that placeholder. The Tag carries a value no
+//!     system issued, and it is still a Tag the app can see and write to. Never
+//!     a copy: nothing in the library gained one.
+//!   * `Destroyed` — transmitted with the neutral Identity, and the read-back
+//!     presented no Identity at all. The Tag keeps answering readers and
+//!     permanently refuses further data. Never a copy.
 //!   * `Erased` — transmitted an empty NDEF TLV, and the read-back presented a
 //!     Tag with a valid zero-length NDEF message. The Tag keeps its identity,
 //!     its Capability Container and its format; only the NDEF *content* is gone.
@@ -25,16 +29,24 @@
 //! Nothing here touches the Reader, so every rule below is provable with no
 //! hardware attached.
 //!
-//! # Blanking inverts the success condition
+//! # Clearing is judged by a positive read-back; destroying by an absence
 //!
-//! The Identity codec treats an all-zero data field as "no reading", so a Tag
-//! that has been blanked reads back as *nothing* rather than as a neutral
-//! Identity. Judging a blanking write by the copy rule would therefore call
-//! every successful blanking "unverified", which is why `classify_blank`
-//! exists: for a blanking write, "the read-back presents no Identity" **is**
-//! the success condition, and "the read-back still presents an Identity" is the
-//! failure. The two rules live here together so that neither can drift into the
-//! other's territory.
+//! The two operations do not have the same success condition, and one classifier
+//! cannot serve both:
+//!
+//!   * **Clear** writes the non-zero placeholder ([`Identity::CLEARED`]), so its
+//!     success is the ordinary kind: the read-back presents exactly that value.
+//!     This is a *positive* confirmation — the same shape a copy uses — which is
+//!     why a cleared Tag is one the app can see and write to again.
+//!   * **Destroy** writes the all-zero data field, which the Identity codec
+//!     decodes as "no reading", so its success condition is the *absence* of an
+//!     Identity. Judging it by the copy rule would call every successful destroy
+//!     "unverified", which is why `classify_destroy` exists (ADR 0003).
+//!
+//! The two words are kept apart everywhere: a Clear that landed is `Cleared` and
+//! a Destroy that landed is `Destroyed`, and neither classifier can produce the
+//! other's outcome. That is what stops a destructive result being reported in the
+//! words of a reversible one.
 //!
 //! # Erasing inverts it again, and needs its own word
 //!
@@ -55,10 +67,15 @@ pub enum WriteOutcome {
     Refused,
     /// The write was transmitted and the read-back matched the target Identity.
     Verified,
-    /// A blanking write was transmitted and the Tag no longer presents an
-    /// Identity. Distinct from `Verified` on purpose: a blanking write is not a
-    /// copy, and it is not "verified" in the sense a copy is.
-    Blanked,
+    /// A clearing write was transmitted and the Tag presents exactly the
+    /// cleared placeholder Identity. Distinct from `Verified` on purpose: this
+    /// places a value nobody issued, not the user's credential, and it is not
+    /// "verified" in the sense a copy is.
+    Cleared,
+    /// A destroying write was transmitted and the Tag no longer presents an
+    /// Identity. Distinct from `Verified` on purpose: a destroy is not a copy,
+    /// and it is not "verified" in the sense a copy is.
+    Destroyed,
     /// An erasing write was transmitted and the Tag reads back as present with a
     /// valid, zero-length NDEF message. Distinct from `Verified` on purpose: an
     /// erase destroys content rather than placing a copy, and it is not
@@ -66,10 +83,10 @@ pub enum WriteOutcome {
     Erased,
     /// The write was transmitted, but the read-back could not confirm it.
     Unverified,
-    /// The write could not be transmitted, or a blanking write was transmitted
+    /// The write could not be transmitted, or a clearing write was transmitted
     /// and the Tag still presents an Identity.
     Failed,
-    /// A blanking write was transmitted and the Tag still presents an Identity,
+    /// A clearing write was transmitted and the Tag still presents an Identity,
     /// so it will not accept a write. Distinct from `Failed` because it is not a
     /// generic failure but a fact about the chip — it has already been written
     /// once, or it was never writable — and distinct from `Unverified` because
@@ -83,7 +100,8 @@ impl WriteOutcome {
         match self {
             WriteOutcome::Refused => "refused",
             WriteOutcome::Verified => "verified",
-            WriteOutcome::Blanked => "blanked",
+            WriteOutcome::Cleared => "cleared",
+            WriteOutcome::Destroyed => "destroyed",
             WriteOutcome::Erased => "erased",
             WriteOutcome::Unverified => "unverified",
             WriteOutcome::Failed => "failed",
@@ -119,8 +137,8 @@ pub enum Evidence {
     /// attempt whose result is unknown.
     Declined,
     /// The write was transmitted; this is what the Tag read back, if anything.
-    /// `None` means the read-back reported no Identity, which is a blanked Tag
-    /// for a blanking write and an unknown result for a copying one.
+    /// `None` means the read-back reported no Identity, which is a destroyed Tag
+    /// for a destroying write and an unknown result for a copying one.
     Readback(Option<Identity>),
     /// The write was transmitted, but the Tag could not be read back at all, so
     /// nothing is known about what it now carries.
@@ -143,37 +161,68 @@ pub fn classify(evidence: Evidence, target: Identity) -> WriteOutcome {
     }
 }
 
-/// Classify one *blanking* attempt, where success is the absence of an Identity.
+/// Classify one *clearing* attempt, where success is the read-back presenting
+/// the cleared placeholder.
 ///
-/// This is deliberately not `classify` with a neutral target: `classify` would
-/// compare the read-back against an Identity, and a blanked Tag has no Identity
-/// to compare against. Each case is its own fact:
+/// This is a positive confirmation, unlike destroying: the write aimed at
+/// [`Identity::CLEARED`], so the ordinary rule applies — the read-back either
+/// presents that value or it does not. Each case is its own fact:
 ///
 ///   * nothing was transmitted → `Refused` or `Failed`, as for a copy;
-///   * transmitted and the Tag presents no Identity → `Blanked`;
+///   * transmitted and the read-back presents the placeholder → `Cleared`;
+///   * transmitted and the read-back presents any *other* Identity, or no
+///     Identity at all → `WillNotAcceptWrites`. A chip that does not carry the
+///     value it was just sent is one that will not take a write (ADR 0007);
+///   * transmitted but the Tag could not be read back → `Unverified`.
+///
+/// A `Cleared` outcome is never a confirmed copy: the placeholder is not the
+/// user's credential, so it must not raise any Snapshot's count.
+pub fn classify_clear(evidence: Evidence) -> WriteOutcome {
+    match evidence {
+        Evidence::Refused => WriteOutcome::Refused,
+        Evidence::NotTransmitted => WriteOutcome::Failed,
+        // The device declined to act, so nothing was written: the clear did not
+        // take.
+        Evidence::Declined => WriteOutcome::Failed,
+        Evidence::Readback(Some(found)) if found == Identity::CLEARED => WriteOutcome::Cleared,
+        // Including a read-back that presents no Identity: the Tag does not
+        // carry the placeholder, which is the only thing this write asked for.
+        Evidence::Readback(_) => WriteOutcome::WillNotAcceptWrites,
+        Evidence::ReadbackUnreadable => WriteOutcome::Unverified,
+    }
+}
+
+/// Classify one *destroying* attempt, where success is the absence of an
+/// Identity.
+///
+/// This is deliberately not `classify` with a neutral target: `classify` would
+/// compare the read-back against an Identity, and a destroyed Tag has no
+/// Identity to compare against. Each case is its own fact:
+///
+///   * nothing was transmitted → `Refused` or `Failed`, as for a copy;
+///   * transmitted and the Tag presents no Identity → `Destroyed`;
 ///   * transmitted and the Tag still presents an Identity →
 ///     `WillNotAcceptWrites`, because a chip that reads back its own Identity
 ///     after a write is one that will not take one: it has already been written
 ///     once, or it was never writable. Its own outcome, not `Failed`, because
 ///     the useful reading is about the chip rather than about the attempt
 ///     (ADR 0007);
-///   * transmitted but the Tag could not be read back → `Unverified`, because
-///     the write may or may not have landed.
+///   * transmitted but the Tag could not be read back → `Unverified`.
 ///
-/// A `Blanked` outcome is never a confirmed copy: it destroys an Identity
-/// rather than creating one, so it must not raise any Snapshot's count. Nor is
-/// `WillNotAcceptWrites`: it places nothing.
-pub fn classify_blank(evidence: Evidence) -> WriteOutcome {
+/// A `Destroyed` outcome is never a confirmed copy, and it is never `Cleared`:
+/// the two operations have different success evidence, so one cannot stand in
+/// for the other.
+pub fn classify_destroy(evidence: Evidence) -> WriteOutcome {
     match evidence {
         Evidence::Refused => WriteOutcome::Refused,
         Evidence::NotTransmitted => WriteOutcome::Failed,
         // The device declined to act, so nothing was written and the Tag still
-        // carries its Identity: the blank did not take.
+        // carries its Identity: the destroy did not take.
         Evidence::Declined => WriteOutcome::Failed,
-        Evidence::Readback(None) => WriteOutcome::Blanked,
-        // A Tag that still presents an Identity was not blanked. Any Identity
-        // counts here, including a different one: a read-back that reports an
-        // Identity at all is not a blank.
+        Evidence::Readback(None) => WriteOutcome::Destroyed,
+        // A Tag that still presents an Identity was not destroyed. Any Identity
+        // counts here, including the cleared placeholder: a read-back that
+        // reports an Identity at all is not a destruction.
         Evidence::Readback(Some(_)) => WriteOutcome::WillNotAcceptWrites,
         Evidence::ReadbackUnreadable => WriteOutcome::Unverified,
     }
@@ -360,7 +409,8 @@ mod tests {
         let names: Vec<&str> = [
             WriteOutcome::Refused,
             WriteOutcome::Verified,
-            WriteOutcome::Blanked,
+            WriteOutcome::Cleared,
+            WriteOutcome::Destroyed,
             WriteOutcome::Erased,
             WriteOutcome::Unverified,
             WriteOutcome::Failed,
@@ -374,7 +424,8 @@ mod tests {
             vec![
                 "refused",
                 "verified",
-                "blanked",
+                "cleared",
+                "destroyed",
                 "erased",
                 "unverified",
                 "failed",
@@ -383,18 +434,87 @@ mod tests {
         );
     }
 
-    // ---- reset: a read-back that still identifies is its own fact --------
+    /// What a **Clear** read back: the placeholder, or anything else.
+    fn cleared() -> Identity {
+        Identity::CLEARED
+    }
+
+    // ---- clear: success is the placeholder on the Tag -------------------
 
     #[test]
-    fn a_blank_whose_readback_still_identifies_will_not_accept_writes() {
+    fn a_cleared_write_is_never_a_confirmed_copy_and_never_unknown() {
+        // The placeholder is not the user's credential, so nothing in the library
+        // gained a copy; and a read-back that presented it is a definite result.
+        assert!(!WriteOutcome::Cleared.counts_as_confirmed_copy());
+        assert!(!WriteOutcome::Cleared.is_unknown());
+    }
+
+    #[test]
+    fn a_transmitted_clear_whose_readback_presents_the_placeholder_is_cleared() {
+        assert_eq!(
+            classify_clear(Evidence::Readback(Some(cleared()))),
+            WriteOutcome::Cleared
+        );
+    }
+
+    #[test]
+    fn a_clear_that_left_another_identity_behind_will_not_accept_writes() {
+        // The chip kept something that is not the placeholder, so the write did
+        // not take. That is a fact about the chip, not a generic failure and not
+        // an unknown (ADR 0007).
+        let outcome = classify_clear(Evidence::Readback(Some(target())));
+        assert_eq!(outcome, WriteOutcome::WillNotAcceptWrites);
+        assert!(!outcome.is_unknown());
+        assert!(!outcome.counts_as_confirmed_copy());
+    }
+
+    #[test]
+    fn a_clear_that_left_the_tag_carrying_nothing_did_not_take() {
+        // Clear aims at a value, so a Tag reading as carrying no Identity does
+        // not satisfy it. This is the one case a destroying write calls success
+        // and a clearing write does not, which is why the two classifiers are not
+        // one function with a flag.
+        assert_eq!(
+            classify_clear(Evidence::Readback(None)),
+            WriteOutcome::WillNotAcceptWrites
+        );
+        assert_eq!(
+            classify_destroy(Evidence::Readback(None)),
+            WriteOutcome::Destroyed
+        );
+    }
+
+    #[test]
+    fn a_clear_refusal_stays_a_refusal_and_a_lost_transmission_stays_failed() {
+        assert_eq!(classify_clear(Evidence::Refused), WriteOutcome::Refused);
+        assert_eq!(
+            classify_clear(Evidence::NotTransmitted),
+            WriteOutcome::Failed
+        );
+        assert_eq!(classify_clear(Evidence::Declined), WriteOutcome::Failed);
+    }
+
+    #[test]
+    fn a_clear_whose_read_back_could_not_be_read_is_unknown_not_cleared() {
+        let outcome = classify_clear(Evidence::ReadbackUnreadable);
+        assert_eq!(outcome, WriteOutcome::Unverified);
+        assert!(outcome.is_unknown());
+        assert!(!outcome.counts_as_confirmed_copy());
+    }
+
+    // ---- destroy: a read-back that still identifies is its own fact -----
+
+    #[test]
+    fn a_destroy_whose_readback_still_identifies_will_not_accept_writes() {
         // The tag read back, and it still carries an Identity: the write did not
         // take. That is evidence about the chip, not a generic failure and not an
         // unknown, so it gets its own outcome (ADR 0007).
-        let outcome = classify_blank(Evidence::Readback(Some(target())));
+        let outcome = classify_destroy(Evidence::Readback(Some(target())));
         assert_eq!(outcome, WriteOutcome::WillNotAcceptWrites);
         assert_ne!(outcome, WriteOutcome::Failed);
         assert_ne!(outcome, WriteOutcome::Unverified);
-        assert_ne!(outcome, WriteOutcome::Blanked);
+        assert_ne!(outcome, WriteOutcome::Destroyed);
+        assert_ne!(outcome, WriteOutcome::Cleared);
         assert!(!outcome.is_unknown());
         assert!(!outcome.counts_as_confirmed_copy());
     }
@@ -404,7 +524,7 @@ mod tests {
         // The guard never saw it: bytes were sent. Reporting a refusal would say
         // nothing was attempted, which is the opposite of what happened.
         assert_ne!(
-            classify_blank(Evidence::Readback(Some(other()))),
+            classify_destroy(Evidence::Readback(Some(other()))),
             WriteOutcome::Refused
         );
     }
@@ -476,64 +596,92 @@ mod tests {
         );
     }
 
-    // ---- blanking: success is the absence of an Identity -----------------
+    // ---- destroying: success is the absence of an Identity ---------------
 
     #[test]
-    fn a_blanked_write_is_not_a_confirmed_copy() {
-        // The whole counting rule in one line: blanking destroys an Identity,
-        // so it can never raise a Snapshot's count of Tags that carry it.
-        assert!(!WriteOutcome::Blanked.counts_as_confirmed_copy());
+    fn a_destroyed_write_is_not_a_confirmed_copy() {
+        // The whole counting rule in one line: destroying an Identity can never
+        // raise a Snapshot's count of Tags that carry it.
+        assert!(!WriteOutcome::Destroyed.counts_as_confirmed_copy());
     }
 
     #[test]
-    fn a_blanked_write_is_not_unknown() {
-        // A blanking write whose read-back reports nothing is a definite
+    fn a_destroyed_write_is_not_unknown() {
+        // A destroying write whose read-back reports nothing is a definite
         // result, not a shrug: this is the expected evidence of success.
-        assert!(!WriteOutcome::Blanked.is_unknown());
+        assert!(!WriteOutcome::Destroyed.is_unknown());
     }
 
     #[test]
-    fn a_transmitted_blank_with_no_identity_reading_is_blanked() {
+    fn a_transmitted_destroy_with_no_identity_reading_is_destroyed() {
         assert_eq!(
-            classify_blank(Evidence::Readback(None)),
-            WriteOutcome::Blanked
+            classify_destroy(Evidence::Readback(None)),
+            WriteOutcome::Destroyed
         );
     }
 
     #[test]
-    fn a_transmitted_blank_that_still_presents_an_identity_will_not_accept_writes() {
-        // The blank did not take. That is not "unknown" — the Tag was read and it
-        // still carries a credential — and it is no longer a generic failure
+    fn a_transmitted_destroy_that_still_presents_an_identity_will_not_accept_writes() {
+        // The destroy did not take. That is not "unknown" — the Tag was read and
+        // it still carries a credential — and it is no longer a generic failure
         // either: it is the one thing this app can learn about whether a 125 kHz
         // tag accepts writes (ADR 0007).
-        let outcome = classify_blank(Evidence::Readback(Some(target())));
+        let outcome = classify_destroy(Evidence::Readback(Some(target())));
         assert_eq!(outcome, WriteOutcome::WillNotAcceptWrites);
         assert!(!outcome.counts_as_confirmed_copy());
 
         // A different Identity is just as much a Tag that took nothing.
         assert_eq!(
-            classify_blank(Evidence::Readback(Some(other()))),
+            classify_destroy(Evidence::Readback(Some(other()))),
             WriteOutcome::WillNotAcceptWrites
         );
     }
 
     #[test]
-    fn a_blanking_refusal_stays_a_refusal_and_a_lost_transmission_stays_failed() {
-        assert_eq!(classify_blank(Evidence::Refused), WriteOutcome::Refused);
+    fn a_destroy_refusal_stays_a_refusal_and_a_lost_transmission_stays_failed() {
+        assert_eq!(classify_destroy(Evidence::Refused), WriteOutcome::Refused);
         assert_eq!(
-            classify_blank(Evidence::NotTransmitted),
+            classify_destroy(Evidence::NotTransmitted),
             WriteOutcome::Failed
         );
     }
 
     #[test]
-    fn a_blank_whose_read_back_could_not_be_read_is_unknown_not_blanked() {
-        // Nothing was observed after the write, so claiming the Tag is blank
+    fn a_destroy_whose_read_back_could_not_be_read_is_unknown_not_destroyed() {
+        // Nothing was observed after the write, so claiming the Tag is destroyed
         // would be a claim about a credential the app did not see.
-        let outcome = classify_blank(Evidence::ReadbackUnreadable);
+        let outcome = classify_destroy(Evidence::ReadbackUnreadable);
         assert_eq!(outcome, WriteOutcome::Unverified);
         assert!(outcome.is_unknown());
         assert!(!outcome.counts_as_confirmed_copy());
+    }
+
+    #[test]
+    fn neither_classifier_can_produce_the_other_outcome() {
+        // The requirement, at the pure seam: a Clear that landed is never
+        // reported as a Destroy, and a Destroy that landed is never reported as
+        // a Clear — for any evidence either classifier can be handed.
+        let every_evidence = [
+            Evidence::Refused,
+            Evidence::NotTransmitted,
+            Evidence::Declined,
+            Evidence::Readback(None),
+            Evidence::Readback(Some(target())),
+            Evidence::Readback(Some(cleared())),
+            Evidence::ReadbackUnreadable,
+        ];
+        for evidence in every_evidence {
+            assert_ne!(
+                classify_clear(evidence),
+                WriteOutcome::Destroyed,
+                "a clear must never report a destroy: {evidence:?}"
+            );
+            assert_ne!(
+                classify_destroy(evidence),
+                WriteOutcome::Cleared,
+                "a destroy must never report a clear: {evidence:?}"
+            );
+        }
     }
 
     #[test]

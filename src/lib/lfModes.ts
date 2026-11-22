@@ -8,16 +8,16 @@
  *
  * This lives outside the page for the reason `lib/hfWorkspace` does: the mode's
  * name is user-facing copy, and copy that nothing can check is copy that drifts.
- * It drifted once — the pill said **Reset** while the panel behind it said
- * *Blank a tag*, repeated the verb five times, and spent a paragraph denying a
- * factory restore that the right name would never have suggested (GLOSSARY puts
- * "blank (as a verb)" on Reset's *Avoid* line). `lib/blankTag.test.ts` now asserts
- * that the mode's name and the panel's words are the same name, so the two cannot
- * part company again.
+ * It drifted twice: the pill said **Reset** while the panel behind it said *Blank a
+ * tag*, and then **Reset** turned out to name the destructive operation a user
+ * reaches for by habit. The mode is now **Clear** — named for what it does, the
+ * everyday operation that leaves the tag alive — and **Destroy** is a separate
+ * control inside it. `lib/clearTag.test.ts` asserts that the mode's name and the
+ * panel's words are the same name, so the two cannot part company again.
  */
 
 /** Every operation the 125 kHz page offers. */
-export type LfMode = "read" | "write" | "reset" | "clone" | "batch";
+export type LfMode = "read" | "write" | "clear" | "clone" | "batch";
 
 /** One mode, as the switch shows it. */
 export interface LfModeOption {
@@ -29,7 +29,7 @@ export interface LfModeOption {
  * The canonical order. Not alphabetical and not historical: this is the order a
  * user actually moves through.
  */
-export const LF_MODE_ORDER: readonly LfMode[] = ["read", "write", "reset", "clone", "batch"];
+export const LF_MODE_ORDER: readonly LfMode[] = ["read", "write", "clear", "clone", "batch"];
 
 /**
  * The words on the switch. One name per mode, and the same name everywhere the
@@ -39,7 +39,7 @@ export const LF_MODE_ORDER: readonly LfMode[] = ["read", "write", "reset", "clon
 export const LF_MODE_LABEL: Record<LfMode, string> = {
   read: "Read",
   write: "Write",
-  reset: "Reset",
+  clear: "Clear",
   clone: "Clone",
   batch: "Batch",
 };

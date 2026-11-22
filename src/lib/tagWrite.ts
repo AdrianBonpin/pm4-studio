@@ -206,14 +206,16 @@ export function writeNotice(result: NdefWriteResult): WriteNotice {
           result.message ? ` (${result.message})` : ""
         }. The tag was not changed.`,
       };
-    case "blanked":
-      // An NDEF write replaces a message and can never blank a Tag. Reaching
-      // here is a bug worth naming rather than a result worth wording.
+    case "cleared":
+    case "destroyed":
+      // An NDEF write replaces a message and can never clear or destroy a 125 kHz
+      // Identity. Reaching here is a bug worth naming rather than a result worth
+      // wording.
       return {
         tone,
         text:
-          "Unexpected outcome: this write reported a blanked tag, which writing an NDEF " +
-          "message cannot do. Re-read the tag before trusting what it holds.",
+          "Unexpected outcome: this write reported a cleared or destroyed tag, which writing " +
+          "an NDEF message cannot do. Re-read the tag before trusting what it holds.",
       };
     case "erased":
       // Erasing is its own operation with its own word and its own notice; see

@@ -320,19 +320,21 @@ impl BatchRun {
                 BatchOutcome::Write(WriteOutcome::Verified) => counts.verified += 1,
                 BatchOutcome::Write(WriteOutcome::Refused) => counts.refused += 1,
                 BatchOutcome::Write(WriteOutcome::Unverified) => counts.unverified += 1,
-                // A copying attempt can never blank a Tag, so `Blanked` is not
-                // a shape this run produces. Counting it as failed keeps the
-                // totals honest rather than dropping an attempt on the floor.
+                // A copying attempt can never clear or destroy a Tag, so
+                // `Cleared` and `Destroyed` are not shapes this run produces.
+                // Counting them as failed keeps the totals honest rather than
+                // dropping an attempt on the floor.
                 BatchOutcome::Write(WriteOutcome::Failed) => counts.failed += 1,
-                BatchOutcome::Write(WriteOutcome::Blanked) => counts.failed += 1,
+                BatchOutcome::Write(WriteOutcome::Cleared) => counts.failed += 1,
+                BatchOutcome::Write(WriteOutcome::Destroyed) => counts.failed += 1,
                 // Nor can a copying run conclude that a chip refuses writes:
-                // that classification belongs to Reset, where a blanking write
-                // was sent and the Tag still identified. Same treatment as
-                // `Blanked` for the same reason.
+                // that classification belongs to Clear and Destroy, where a write
+                // was sent and the Tag still identified. Same treatment for the
+                // same reason.
                 BatchOutcome::Write(WriteOutcome::WillNotAcceptWrites) => counts.failed += 1,
                 // Nor can it erase NDEF content: erasing is its own operation
                 // with its own word, and a copying run never reaches it. Same
-                // treatment as `Blanked` for the same reason.
+                // treatment for the same reason.
                 BatchOutcome::Write(WriteOutcome::Erased) => counts.failed += 1,
             }
         }

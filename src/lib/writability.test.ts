@@ -65,15 +65,15 @@ describe("the app's source, read rather than assumed", () => {
   it("is found, so an empty scan cannot pass as a clean one", () => {
     expect(Object.keys(SOURCES).length).toBeGreaterThan(30);
     expect(Object.keys(SOURCES).some((file) => file.endsWith("/App.tsx"))).toBe(true);
-    expect(Object.keys(SOURCES).some((file) => file.endsWith("/BlankTag.tsx"))).toBe(true);
+    expect(Object.keys(SOURCES).some((file) => file.endsWith("/ClearTag.tsx"))).toBe(true);
   });
 });
 
 describe("the app's command surface", () => {
   const commands = invokedCommands();
 
-  it("includes the Reset write itself", () => {
-    expect(commands).toContain("lf_blank");
+  it("includes the Clear and Destroy write itself", () => {
+    expect(commands).toContain("lf_clear");
     expect(commands).toContain("lf_poll");
   });
 
@@ -87,7 +87,7 @@ describe("the app's command surface", () => {
 
   it("still offers the commands the documented capabilities need", () => {
     // The guard must not pass by the app having no commands at all.
-    for (const command of ["lf_write", "lf_blank", "raw_send", "console_capability"]) {
+    for (const command of ["lf_write", "lf_clear", "raw_send", "console_capability"]) {
       expect(commands, command).toContain(command);
     }
   });

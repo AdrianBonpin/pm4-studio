@@ -27,7 +27,7 @@
 //! checksummed over its whole payload is ignored, while the `len & 0xFF`
 //! checksum is accepted. `xor_checksum` and `stream::encode_frame` reproduce it.
 
-use crate::blank::{self, BlankAttempt, BlankReadback, BlankScan};
+use crate::clear::{self, ClearAttempt, ClearReadback, ClearScan, LfOperation};
 use crate::identity::{Identity, TagPresence};
 use crate::stream::{split_reports, ReportStream};
 use crate::wire_record::Wire;
@@ -646,9 +646,9 @@ impl Reader {
     /// is only concluded after the whole window reports none. A transport error
     /// leaves the Tag's state unknown, which is reported as such rather than as
     /// a blank.
-    fn read_after_blank(&self) -> BlankAttempt {
+    fn read_after_clear(&self) -> ClearAttempt {
         const ATTEMPTS: usize = 8;
-        let mut scan = BlankScan::new();
+        let mut scan = ClearScan::new();
         for attempt in 0..ATTEMPTS {
             if attempt > 0 {
                 std::thread::sleep(std::time::Duration::from_millis(250));
@@ -657,48 +657,53 @@ impl Reader {
             match self.lf_read_presence_once() {
                 Ok(presence) => {
                     if let Some(readback) = scan.observe(presence) {
-                        return BlankAttempt::Transmitted(readback);
+                        return ClearAttempt::Transmitted(readback);
                     }
                 }
                 // The write already went out, so a failing read leaves the Tag
                 // in an unknown state rather than unwritten.
-                Err(_) => return BlankAttempt::Transmitted(BlankReadback::Unreadable),
+                Err(_) => return ClearAttempt::Transmitted(ClearReadback::Unreadable),
             }
         }
-        BlankAttempt::Transmitted(scan.finish(ATTEMPTS))
+        ClearAttempt::Transmitted(scan.finish(ATTEMPTS))
     }
 
-    /// Blank a 125 kHz Tag's Identity, read first and judged honestly.
+    /// Overwrite a 125 kHz Tag's Identity with `operation`'s payload, read first
+    /// and judged honestly.
     ///
-    /// `confirmed` is the Identity the user agreed to destroy. It is compared
+    /// `confirmed` is the Identity the user agreed to overwrite. It is compared
     /// byte for byte with what the Tag in the write position presents, so a
     /// confirmation cannot be applied to a different Tag, and it is deliberately
     /// not range-checked: a Tag whose data field carries the reserved high byte
-    /// still reads and is still fair game to blank.
+    /// still reads and is still fair game to overwrite.
     ///
-    /// The write itself is `0x0073` with the neutral Identity. It is not a
-    /// factory reset and it does not unlock a locked T5577; a chip that has
-    /// stopped accepting writes stays that way, which is why the UI warns about
-    /// it before this is called.
-    pub fn lf_blank_attempt(&self, confirmed: Identity) -> BlankAttempt {
+    /// The write itself is `0x0073` with one of two payloads:
+    /// [`LfOperation::Clear`](crate::clear::LfOperation::Clear) writes the non-zero
+    /// placeholder and leaves the Tag live and rewritable;
+    /// [`LfOperation::Destroy`](crate::clear::LfOperation::Destroy) writes the
+    /// neutral Identity, which on a T5577 stops the Tag presenting an Identity and
+    /// permanently refuses further data. Neither is a factory reset and neither
+    /// unlocks a locked T5577, which is why the UI states what each does before this
+    /// is called.
+    pub fn lf_clear_attempt(&self, confirmed: Identity, operation: LfOperation) -> ClearAttempt {
         let presence = match self.read_presence_in_position() {
             Ok(presence) => presence,
             // No reading means the guard cannot be satisfied: nothing is sent.
-            Err(e) => return BlankAttempt::Refused(e),
+            Err(e) => return ClearAttempt::Refused(e),
         };
         let current = match presence {
             TagPresence::Identified(identity) => Some(identity),
             _ => None,
         };
-        let decision = blank::decide(presence, confirmed);
-        if let Some(refusal) = decision.refusal_message(confirmed, current) {
-            return BlankAttempt::Refused(refusal);
+        let decision = clear::decide(presence, confirmed, operation);
+        if let Some(refusal) = decision.refusal_message(operation, confirmed, current) {
+            return ClearAttempt::Refused(refusal);
         }
 
-        if let Err(e) = self.lf_write(Identity::BLANK) {
-            return BlankAttempt::Failed(e);
+        if let Err(e) = self.lf_write(operation.payload()) {
+            return ClearAttempt::Failed(e);
         }
-        self.read_after_blank()
+        self.read_after_clear()
     }
 
     /// 13.56 MHz ISO14443-A poll.

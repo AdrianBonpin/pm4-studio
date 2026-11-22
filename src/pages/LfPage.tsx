@@ -4,7 +4,7 @@ import { Button } from "../components/ui/Button";
 import { Segmented, type SegmentedOption } from "../components/ui/Segmented";
 import { AuthorIdentity } from "../components/AuthorIdentity";
 import { BatchMode } from "../components/BatchMode";
-import { BlankTag } from "../components/BlankTag";
+import { ClearTag } from "../components/ClearTag";
 import { CloneWizard } from "../components/CloneWizard";
 import { Field, Readout, Section } from "../components/Section";
 import { useLfPoller } from "../hooks/useReader";
@@ -28,7 +28,8 @@ import type { LfCard } from "../types";
  *
  * The names are `lib/lfModes`', not this page's: the mode's name and the panel's
  * own heading are the same name, and a test binds them so they cannot drift apart
- * the way "Reset" and "Blank a tag" once did.
+ * the way "Reset" and "Blank a tag" once did, and the way the mode then named the
+ * destructive operation a user reached for by habit.
  */
 const MODES: readonly SegmentedOption<LfMode>[] = LF_MODES.map((option: LfModeOption) => ({
   value: option.id,
@@ -52,7 +53,7 @@ interface LfPageProps {
  * It used to be five stacked sections, so reaching the fifth meant scrolling
  * past four and the guided Clone came first even though reading is the thing it
  * depends on. Now the page is a workspace: a segmented control names Read,
- * Write, Reset, Clone and Batch in that order, and the one you choose is the
+ * Write, Clear, Clone and Batch in that order, and the one you choose is the
  * only one on screen. That is what removes the scroll, and it is also what lets
  * each operation be named, entered and reported on its own.
  *
@@ -98,8 +99,8 @@ export function LfPage({ connected, library, onDeviceError }: LfPageProps) {
         />
       )}
 
-      {mode === "reset" && (
-        <BlankTag connected={connected} onDeviceError={onDeviceError} />
+      {mode === "clear" && (
+        <ClearTag connected={connected} onDeviceError={onDeviceError} />
       )}
 
       {mode === "clone" && (
