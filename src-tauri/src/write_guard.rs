@@ -11,19 +11,43 @@
 //!      certainly the source tag left in place, which is the ordering that has
 //!      permanently locked a T5577.
 //!
+//! # A Tag with no Identity is a legal write position
+//!
+//! The combined read ([`Identity::from_read_payload`]) folds "no Tag latched" and
+//! "a Tag whose data field is empty" into the same `None`, because the read UI
+//! only needs to know whether there is an Identity to show. That fold is exactly
+//! wrong for a write: a Tag that is *present* and carries no Identity is a Tag
+//! the app can see and can aim at — it is the state a blanked Tag is left in, and
+//! it is not the blind write ADR 0001 refuses.
+//!
+//! The guard therefore takes [`TagPresence`] rather than `Option<Identity>`, so it
+//! can keep apart the three things a write position can be:
+//!
+//!   * nothing readable (no Tag latched, or a reply too short to decode) — refuse;
+//!   * a Tag with no Identity — a valid position, proceed;
+//!   * a Tag carrying the target Identity — refuse, the original is still there;
+//!   * a Tag carrying something else — proceed.
+//!
+//! Folding the second case into the first is what made every write path refuse a
+//! Tag this app had itself blanked: the refusal was about the *reading* being
+//! empty, when the refusal is about the *Tag* being unseen.
+//!
 //! This module decides only. It sends nothing, and it cannot see whether the
 //! device accepts the payload afterwards.
 
-use crate::identity::Identity;
+use crate::identity::{Identity, TagPresence};
 
 /// What the guard decides about one attempted write.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WriteDecision {
-    /// A tag was read and it does not already present the target Identity.
+    /// A tag was seen in the write position — with no Identity, or with one that
+    /// is not the target — so the write may proceed.
     Proceed,
-    /// Refused: nothing could be read in the write position.
+    /// Refused: nothing readable in the write position, so the write would be
+    /// blind (ADR 0001, first condition).
     RefuseUnreadable,
-    /// Refused: the tag already presents the target Identity.
+    /// Refused: the tag already presents the target Identity (ADR 0001, second
+    /// condition).
     RefuseSameIdentity,
 }
 
@@ -110,15 +134,34 @@ impl WriteDecision {
 }
 
 /// Decide whether writing `target` may proceed, given what the tag in the write
-/// position reads as.
+/// position is.
 ///
-/// `current` is `None` when the tag could not be read. The decision is closed:
-/// anything other than a reading that differs from the target refuses.
-pub fn decide(current: Option<Identity>, target: Identity) -> WriteDecision {
-    match current {
-        None => WriteDecision::RefuseUnreadable,
-        Some(current) if current == target => WriteDecision::RefuseSameIdentity,
-        Some(_) => WriteDecision::Proceed,
+/// The decision is closed: the only two shapes that proceed are a Tag that was
+/// seen and carries no Identity, and a Tag that was seen carrying something other
+/// than the target. Everything the app could not see refuses, and so does the Tag
+/// that already presents the target.
+///
+/// `presence` is [`TagPresence`] rather than `Option<Identity>` because a Tag that
+/// is present with no Identity and a field with no Tag in it are different facts,
+/// and only one of them is ADR 0001's blind write.
+///
+/// `target` is never range-checked: whether the Identity can be *encoded* is
+/// [`Identity::write_payload`]'s decision, and a caller that reaches this point
+/// with an unencodable target is refused there rather than here.
+pub fn decide(presence: TagPresence, target: Identity) -> WriteDecision {
+    match presence {
+        // ADR 0001's first condition: nothing was seen, so writing would be
+        // writing blind. A reply too short to decode says nothing about the
+        // field, so it is not evidence that a Tag is there either.
+        TagPresence::Absent | TagPresence::Unreadable => WriteDecision::RefuseUnreadable,
+        // A Tag was seen and carries no Identity: the write position is known and
+        // there is nothing of the user's to destroy under it. This is a legal
+        // write position, not a blind write.
+        TagPresence::Blank => WriteDecision::Proceed,
+        TagPresence::Identified(current) if current == target => {
+            WriteDecision::RefuseSameIdentity
+        }
+        TagPresence::Identified(_) => WriteDecision::Proceed,
     }
 }
 
@@ -142,7 +185,7 @@ mod tests {
 
     #[test]
     fn refuses_when_no_tag_could_be_read() {
-        let decision = decide(None, written_tag());
+        let decision = decide(TagPresence::Absent, written_tag());
         assert_eq!(decision, WriteDecision::RefuseUnreadable);
         assert!(!decision.allows_write());
     }
@@ -151,16 +194,65 @@ mod tests {
     fn refuses_when_the_tag_already_presents_the_target_identity() {
         // The stored read-back is the exact case that locked a chip: the source
         // tag left on the Reader while the same Identity was written.
-        let decision = decide(Some(written_tag()), written_tag());
+        let decision = decide(TagPresence::Identified(written_tag()), written_tag());
         assert_eq!(decision, WriteDecision::RefuseSameIdentity);
         assert!(!decision.allows_write());
     }
 
     #[test]
     fn allows_a_write_when_the_tag_reads_as_something_else() {
-        let decision = decide(Some(other_tag()), written_tag());
+        let decision = decide(TagPresence::Identified(other_tag()), written_tag());
         assert_eq!(decision, WriteDecision::Proceed);
         assert!(decision.allows_write());
+    }
+
+    #[test]
+    fn a_tag_that_is_present_with_no_identity_is_a_valid_write_position() {
+        // The state a blanked Tag is left in: latched and modulating, with no
+        // Identity to replace. It is not an empty field — the Tag was seen — so
+        // this is not ADR 0001's blind write, and refusing it made every write
+        // path refuse a Tag this app had itself blanked.
+        let decision = decide(TagPresence::Blank, written_tag());
+        assert_eq!(decision, WriteDecision::Proceed);
+        assert!(decision.allows_write());
+    }
+
+    #[test]
+    fn a_blank_write_position_raises_no_refusal_cause() {
+        // Nothing was refused, so naming a cause would blame a condition the
+        // guard never raised.
+        assert_eq!(
+            RefusalCause::of(decide(TagPresence::Blank, written_tag())),
+            None
+        );
+    }
+
+    #[test]
+    fn a_present_tag_with_no_identity_is_not_the_unreadable_case() {
+        // The whole defect in one assertion: the two used to arrive here as the
+        // same value, so a blanked Tag was worded as "could not read the tag on
+        // the reader" and refused forever.
+        assert_ne!(
+            decide(TagPresence::Blank, written_tag()),
+            decide(TagPresence::Absent, written_tag())
+        );
+        assert_ne!(
+            decide(TagPresence::Blank, written_tag()),
+            decide(TagPresence::Unreadable, written_tag())
+        );
+    }
+
+    #[test]
+    fn an_undecodable_reply_still_refuses() {
+        // ADR 0001 is not weakened by the blank case: a reply too short to hold
+        // the fields says nothing about the Tag, so it is not evidence of one.
+        let decision = decide(TagPresence::Unreadable, written_tag());
+        assert_eq!(decision, WriteDecision::RefuseUnreadable);
+        assert!(!decision.allows_write());
+        assert_eq!(
+            RefusalCause::of(decision),
+            Some(RefusalCause::Unreadable)
+        );
     }
 
     #[test]
@@ -171,7 +263,7 @@ mod tests {
             data32: 0x00AB_CDEF,
         };
         assert_eq!(
-            decide(Some(same_customer_other_card), target),
+            decide(TagPresence::Identified(same_customer_other_card), target),
             WriteDecision::Proceed
         );
 
@@ -180,9 +272,29 @@ mod tests {
             data32: target.data32,
         };
         assert_eq!(
-            decide(Some(same_card_other_customer), target),
+            decide(TagPresence::Identified(same_card_other_customer), target),
             WriteDecision::Proceed
         );
+    }
+
+    #[test]
+    fn the_decision_table_is_closed() {
+        // Every presence this codec can produce, against the target: the whole
+        // guard in one table, so a change here is a visible decision.
+        let target = written_tag();
+        let table = [
+            (TagPresence::Absent, WriteDecision::RefuseUnreadable),
+            (TagPresence::Unreadable, WriteDecision::RefuseUnreadable),
+            (TagPresence::Blank, WriteDecision::Proceed),
+            (
+                TagPresence::Identified(target),
+                WriteDecision::RefuseSameIdentity,
+            ),
+            (TagPresence::Identified(other_tag()), WriteDecision::Proceed),
+        ];
+        for (presence, expected) in table {
+            assert_eq!(decide(presence, target), expected, "{presence:?}");
+        }
     }
 
     #[test]

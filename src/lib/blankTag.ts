@@ -167,9 +167,10 @@ export function blankNotice(result: BlankResult): WriteNotice {
       return {
         tone: "ok",
         text:
-          "Blanked — the tag no longer presents an Identity. It will probably read as empty " +
-          "now, showing no Identity at all, which is the expected result. Put it back on the " +
-          "reader to check, and note that it may refuse further writes." +
+          "Blanked — the tag no longer presents an Identity. Reading it again shows no " +
+          "Identity at all, which is the expected result of blanking. The Identity is gone; " +
+          "whether this chip will accept a new one depends on the chip itself, and this Reader " +
+          "cannot tell without writing to it." +
           " No copy was recorded: blanking destroys an Identity rather than copying one.",
       };
     case "willNotAcceptWrites":

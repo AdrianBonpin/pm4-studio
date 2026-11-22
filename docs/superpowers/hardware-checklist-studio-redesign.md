@@ -168,10 +168,22 @@ verified.
 | Result | ( ) pass ( ) fail — notes: |
 | ------ | -------------------------- |
 
-## 5. A never-written tag resets; the same tag refuses the second time — _(ticket criterion 5, spec item 11)_
+## 5. A never-written tag resets; the same tag is refused next time — _(ticket criterion 5, spec item 11)_
 
 **You need:** a **fresh T5577** you can afford to lose, and patience. Read this
 whole item before starting: the second half destroys the first half's evidence.
+
+There are **two different refusals** in this item, and confusing them is the
+easiest mistake to make while reading the result. Read the two before you start:
+
+- **"nothing to blank"** — the tag is on the reader and carries no Identity, so
+  there is nothing for the write to destroy. **Nothing is sent**, so nothing has
+  been learned about the chip. This is what a second Reset of the tag you just
+  blanked produces.
+- **"this tag will not accept writes"** — a blanking write **was sent** and the
+  re-read still found an Identity. That is evidence about the chip: it kept what
+  it had. Only a transmission can produce it, so it cannot happen on a tag that
+  reads as carrying nothing.
 
 **Steps**
 
@@ -190,21 +202,32 @@ whole item before starting: the second half destroys the first half's evidence.
 - **First reset:** the tag reads as empty afterwards (no Identity). The outcome is
   worded as **blanked**, never as "verified". **1 chirp** (done) — and note that
   it is _one_, because nothing about this is uncertain.
-- **Second reset:** _this tag will not accept writes_, with the likely cause
-  named — the chip has already been written, or was never writable. **3 chirps**
-  and the **LED held on for two seconds**. The tag is unchanged, and the app does
-  not claim a copy.
-- **A re-read after the refusal** shows the same Identity the tag had before the
-  attempt at the second reset.
+- **Second reset, on a tag that now carries no Identity:** refused **before
+  anything is sent**, worded as *nothing to blank* — the tag is still on the
+  reader and already has no Identity. **1 chirp** for a refusal, no three-chirp
+  attention signal, no LED hold: the chip was never asked to do anything, so this
+  is not a verdict on it. The tag is unchanged.
+- **The tag after both attempts:** still latches and reads as carrying no
+  Identity. Whether it will accept a new Identity is **not** established here —
+  see the follow-up ticket, where this is the open question.
+- **"Will not accept writes" is a separate observation**, and it needs a tag that
+  refuses a write it was actually sent: the re-read has to find an Identity after
+  the blanking write. Use a tag that is already written, or a chip suspected of
+  being locked. If none is available, record the outcome as **not observed** — do
+  not take the second Reset above as evidence for it.
 
-**A failure looks like:** the second reset reported as "failed" (which reads as
-though the app broke rather than the chip refusing); as "unknown" (which invites
-discarding a tag that may be fine); or as "blanked" (a lie); one chirp for the
-refusal; no LED hold; or the app assigning the blame to the payload.
+**A failure looks like:** the second reset reported as "will not accept writes"
+when the tag was already blank (nothing about the chip was tested, and the three
+chirps report a finding nobody made); as "failed" (which reads as though the app
+broke rather than the chip refusing); as "unknown" (which invites discarding a tag
+that may be fine); or as "blanked" (a lie). Also a failure: one chirp where the
+outcome is a transmitted write the chip refused, no LED hold, or the app
+assigning the blame to the payload.
 
-| First reset           | ( ) blanked, 1 chirp ( ) other:                           |
-| --------------------- | --------------------------------------------------------- |
-| Second reset          | ( ) will-not-accept-writes, 3 chirps + 2 s LED ( ) other: |
+| First reset                           | ( ) blanked, 1 chirp ( ) other:                           |
+| ------------------------------------- | --------------------------------------------------------- |
+| Second reset (tag carries no Identity) | ( ) refused: nothing to blank, 1 chirp ( ) other:        |
+| A blanking write the chip refused      | ( ) will-not-accept-writes, 3 chirps + 2 s LED ( ) not observed ( ) other: |
 | Tag after the refusal | ( ) unchanged ( ) changed:                                |
 
 ## 6. A clone, a batch over several Blanks, and an authored Identity each report their own outcomes — _(ticket criterion 6)_
@@ -321,7 +344,7 @@ can answer it.
 | 2. NTAG, 7-byte UID, no raw fallback                         | works                                                                                 |                 |            |          |
 | 3. Copy verifies by Records comparison                       | flow does not work? Performed Read Source -> Remove Source -> Write Dest, check error |                 |            |          |
 | 4. Oversize destination refused before writing               | no other card                                                                         |                 |            |          |
-| 5. Fresh reset blanks; second reset refuses (3 chirps + LED) | after blanking an empty tag, refuses to be read or written anymore (lost)             |                 |            |          |
+| 5. Fresh reset blanks; same tag is refused next time             | after blanking an empty tag, refuses to be read or written anymore (lost)             |                 |            |          |
 | 6. Clone, batch, authored Identity report their own outcomes | works?                                                                                |                 |            |          |
 | 7. Four symbols distinguishable; `CHIRP_GAP_MS` recorded     | good                                                                                  |                 |            |          |
 
@@ -335,8 +358,10 @@ Proof
 [`e2e/09-hardware-run.md`](e2e/09-hardware-run.md), with the screenshots under
 `e2e/screenshots/hardware-*.png`. Items 1, 2 and 7 passed; item 3 was blocked
 by the recorded Copy defect; item 4 was not run; item 5's second half — the
-refusal ticket 12 exists for — was never reached; item 6 was signed off without
-an observation. The chirp gap was tuned here and is now 400 ms.
+refusal ticket 12 exists for — was never reached, and the expectation written for
+it was wrong in any case: a second Reset of a freshly blanked tag is refused
+before anything is sent, because there is nothing to blank. Item 6 was signed off
+without an observation. The chirp gap was tuned here and is now 400 ms.
 
 ## What a completed checklist then licenses
 
