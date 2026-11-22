@@ -14,6 +14,17 @@ export type Status =
 
 export const POLL_INTERVAL_MS = 380;
 
+/**
+ * One connection attempt at a time, across every mount of this hook.
+ *
+ * A development build mounts effects twice (React's StrictMode), so the startup
+ * effect below asked the backend to open the Reader twice in the same tick. That
+ * is not merely wasteful: opening enumerates HID devices, and two attempts
+ * racing at that boundary is what used to wedge the window. Nothing is lost by
+ * dropping the second one — it would have produced the same answer as the first.
+ */
+let connectInFlight = false;
+
 /** Connection state plus the reader operations every page shares. */
 export function useReader() {
   const [status, setStatus] = useState<Status>("idle");
@@ -31,37 +42,44 @@ export function useReader() {
   }, []);
 
   const connect = useCallback(async () => {
-    setStatus("connecting");
-    setError(null);
-    try {
-      const d = await invoke<DeviceInfo>("connect");
-      if (!mounted.current) return;
-      setInfo(d);
-      setStatus("connected");
-    } catch (e) {
-      if (!mounted.current) return;
-      setError(String(e));
-      // The badge states what is wrong, not merely that something is: an
-      // unplugged Reader is a normal state, not a fault.
-      const failure = classifyDeviceFailure(String(e));
-      setStatus(
-        failure === "absent" ? "absent" : failure === "wedged" ? "wedged" : "error",
-      );
-      setInfo(null);
-      setFirmware(null);
-      return;
-    }
+    if (connectInFlight) return;
+    connectInFlight = true;
 
-    // The revision is asked for after the handle is open, and its wait is
-    // bounded in Rust, so a silent Reader cannot hold the shell in "connecting".
     try {
-      const revision = await invoke<string>("firmware_version");
-      if (!mounted.current) return;
-      setFirmware(revision);
-    } catch (e) {
-      if (!mounted.current) return;
-      setFirmware(null);
-      setError(String(e));
+      setStatus("connecting");
+      setError(null);
+      try {
+        const d = await invoke<DeviceInfo>("connect");
+        if (!mounted.current) return;
+        setInfo(d);
+        setStatus("connected");
+      } catch (e) {
+        if (!mounted.current) return;
+        setError(String(e));
+        // The badge states what is wrong, not merely that something is: an
+        // unplugged Reader is a normal state, not a fault.
+        const failure = classifyDeviceFailure(String(e));
+        setStatus(
+          failure === "absent" ? "absent" : failure === "wedged" ? "wedged" : "error",
+        );
+        setInfo(null);
+        setFirmware(null);
+        return;
+      }
+
+      // The revision is asked for after the handle is open, and its wait is
+      // bounded in Rust, so a silent Reader cannot hold the shell in "connecting".
+      try {
+        const revision = await invoke<string>("firmware_version");
+        if (!mounted.current) return;
+        setFirmware(revision);
+      } catch (e) {
+        if (!mounted.current) return;
+        setFirmware(null);
+        setError(String(e));
+      }
+    } finally {
+      connectInFlight = false;
     }
   }, []);
 

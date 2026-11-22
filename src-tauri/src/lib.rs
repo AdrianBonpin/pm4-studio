@@ -38,6 +38,7 @@ use reader::{DeviceInfo, Frame, HfCard, LfCard, LfWriteAttempt, Reader, REPORT_L
 use write_outcome::Evidence;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 use tauri_plugin_dialog::DialogExt;
@@ -96,17 +97,43 @@ pub struct RawResponse {
     pub raw: String,
 }
 
+/// Open the Reader and return what it says about itself.
+///
+/// `async` on purpose. A synchronous command is dispatched on the main thread, so
+/// opening the device there — and `HidApi::new()` enumerates every HID device —
+/// freezes the window: the event loop is inside this call, the pointer turns into
+/// a wait cursor, and nothing repaints until enumeration returns. As an async
+/// command this runs on the runtime instead, and the main thread stays free.
+///
+/// The guard matters for the same reason the freezing was possible: React's
+/// StrictMode mounts effects twice in a development build, so `useReader` used to
+/// ask to connect twice at startup. The first attempt held the reader slot while
+/// it enumerated, and because the second was dispatched on the main thread it
+/// waited on that mutex forever. A concurrent attempt now returns immediately
+/// with a reason instead of queueing, and the slot is only taken once the device
+/// is open — never across the blocking work.
 #[tauri::command]
-fn connect(state: State<'_, AppState>) -> Result<DeviceInfo, String> {
-    let mut slot = state
-        .reader
-        .lock()
-        .map_err(|_| "internal state lock poisoned".to_string())?;
-    let r = Reader::open()?;
-    let info = r.info.clone();
-    r.wake().ok();
-    *slot = Some(r);
-    Ok(info)
+async fn connect(state: State<'_, AppState>) -> Result<DeviceInfo, String> {
+    static CONNECTING: AtomicBool = AtomicBool::new(false);
+
+    if CONNECTING.swap(true, Ordering::SeqCst) {
+        return Err("a connection attempt is already running".to_string());
+    }
+
+    let outcome = (|| -> Result<DeviceInfo, String> {
+        let r = Reader::open()?;
+        let info = r.info.clone();
+        r.wake().ok();
+        let mut slot = state
+            .reader
+            .lock()
+            .map_err(|_| "internal state lock poisoned".to_string())?;
+        *slot = Some(r);
+        Ok(info)
+    })();
+
+    CONNECTING.store(false, Ordering::SeqCst);
+    outcome
 }
 
 #[tauri::command]
