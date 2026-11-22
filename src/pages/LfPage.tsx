@@ -52,7 +52,7 @@ interface LfPageProps {
  *
  * It used to be five stacked sections, so reaching the fifth meant scrolling
  * past four and the guided Clone came first even though reading is the thing it
- * depends on. Now the page is a workspace: a segmented control names Read,
+ * depends on. Now the page is a workspace: a switcher names Read,
  * Write, Clear, Clone and Batch in that order, and the one you choose is the
  * only one on screen. That is what removes the scroll, and it is also what lets
  * each operation be named, entered and reported on its own.

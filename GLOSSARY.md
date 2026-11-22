@@ -105,7 +105,7 @@ over the fact text of each item, with whitespace compacted before comparing, and
 list returned untouched when nothing is typed. One rule serves both of Library's
 Collections; a Snapshot's facts and a Draft's facts differ, the comparison does not.
 It is a plain substring, not a fuzzy or ranked match, and it never reorders.
-_Avoid_: filter, find, quick-find, fuzzy search, ranking
+_Avoid_: filter, query, find, quick-find, fuzzy search, ranking
 
 **Writability**:
 Whether a 125 kHz Tag will accept a write. Not observable by reading and not

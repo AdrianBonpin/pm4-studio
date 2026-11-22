@@ -2,7 +2,7 @@
  * A mode a page remembers, for the length of a session.
  *
  * The band pages are workspaces: one operation visible at a time, chosen from a
- * segmented control (spec, "Navigation and page shape"). Leaving 125 kHz to check
+ * switcher (spec, "Navigation and page shape"). Leaving 125 kHz to check
  * something in the Library and coming back must not cost the user their place,
  * so the chosen mode outlives the page's unmount.
  *

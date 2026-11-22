@@ -2,7 +2,7 @@
  * The 13.56 MHz page's modes, in the order the work is done.
  *
  * The band page is a workspace rather than a column of every panel: one mode is
- * visible at a time, chosen from the shell's segmented switch. The order here is
+ * visible at a time, chosen from the shell's switcher. The order here is
  * that switch's order, and it is the work order rather than history or the
  * alphabet — read what is there, then write, then copy a whole message, then
  * erase, then look at the raw bytes when none of the four explained the Tag.
