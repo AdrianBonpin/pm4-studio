@@ -292,6 +292,11 @@ describe("the confirmations tell the truth before the write", () => {
     expect(screen.getByText(/cannot tell whether a tag will accept a write/i)).toBeTruthy();
     expect(screen.getByText(/may permanently refuse every later write/i)).toBeTruthy();
     expect(screen.getByText(/clone an Identity onto it, or author one/i)).toBeTruthy();
+    // The caveat the spec, ADR 0007 and ticket 12 all require, asserted where the
+    // user reads it rather than only in the facts array: the placeholder's safety
+    // is an argument from the payload's shape, not a measurement.
+    expect(screen.getByText(/only clear a tag you can afford to lose/i)).toBeTruthy();
+    expect(screen.getByText(/an argument, not a measurement/i)).toBeTruthy();
   });
 
   it("never offers, or hints at, a way to check the tag first", async () => {

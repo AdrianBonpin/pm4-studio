@@ -1474,7 +1474,7 @@ pub fn erase_ndef(reader: &Reader) -> EraseReport {
         // future change to the shared vocabulary from silently wording an erase as
         // a write.
         WriteOutcome::Cleared | WriteOutcome::Destroyed => Some(
-            "the erase reported a cleared or destroyed Tag, which clearing NDEF content cannot              produce"
+            "the erase reported a cleared or destroyed Tag, which clearing NDEF content cannot produce"
                 .to_string(),
         ),
         WriteOutcome::Verified => Some(

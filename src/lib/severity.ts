@@ -3,7 +3,7 @@
  * discriminator, the signal a severity becomes, and the tone it wears on screen.
  *
  * These live here rather than inside `lib/outcome.ts` for one reason. The wording
- * modules — `lib/writeOutcome`, `lib/tagWrite`, `lib/blankTag`, `lib/eraseTag`,
+ * modules — `lib/writeOutcome`, `lib/tagWrite`, `lib/clearTag`, `lib/eraseTag`,
  * `lib/batchClone` — both word a result and render a notice beside it, and ADR
  * 0008 says severity is chosen in one place. If they could not read the severity
  * from the seam, they would have to decide a second one, and the second one drifts

@@ -35,13 +35,13 @@ operation.
 ## Decision
 
 The app never offers a writability probe, in any surface, behind any
-acknowledgement. Reset is documented as the writability test and says so before
+acknowledgement. Clear is documented as the writability test and says so before
 it runs: a 125 kHz tag that has already been written may permanently refuse
 further writes, this Reader cannot tell a writable T5577 from a locked one or
 from a read-only EM4100, and the attempt is safe only on a tag the user can
 afford to lose.
 
-A refused Reset produces its own outcome — *this tag will not accept writes* —
+A refused Clear produces its own outcome — *this tag will not accept writes* —
 separate from a generic failure and from *unverified*, with the likely cause
 named. The capability limits state the limit once, so its absence reads as a
 documented constraint rather than an oversight.
