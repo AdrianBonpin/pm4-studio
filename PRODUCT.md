@@ -61,11 +61,11 @@ cannot support is labelled unavailable rather than hidden.
 - **Stack:** Tauri 2, React 18, TypeScript, Vite, bun, and Rust with `hidapi`.
   NDEF encoding and decoding are implemented in-repo; the dependency list stays
   short on purpose.
-- **Bands.** 125 kHz: read an Identity, write one, Reset a Tag, Clone, and batch
-  Clone. 13.56 MHz: read a UID, card type, capacity and NDEF message; write a
+- **Bands.** 125 kHz: read an Identity, write one, Clear a Tag (or Destroy one),
+  Clone, and batch Clone. 13.56 MHz: read a UID, card type, capacity and NDEF message; write a
   message; copy a whole message between Tags; erase NDEF content; dump memory.
 - **Vocabulary.** `GLOSSARY.md` is binding. A Tag is not a badge, a fob, a chip or
-  a card; an Identity is not a UID; a Reset is not a factory restore; a Signal is
+  a card; an Identity is not a UID; a Clear is not a factory restore; a Signal is
   audible and a Toast is on screen.
 - **Writability is unknowable before a write.** The 125 kHz reply carries no
   writability flag, so the app states that the first write is the test and does
@@ -79,7 +79,8 @@ cannot support is labelled unavailable rather than hidden.
   access, transparent APDU passthrough, T5577 configuration-block writes, a
   writability probe, Windows and Linux targets, and any network feature.
 - **Terminology the interface owns:** Outcome, Signal, Toast, Quiet level, Blank,
-  Snapshot, Draft, Record, Collection, Diagnostics, Reset, Erase, Copy, Clone.
+  Snapshot, Draft, Record, Collection, Diagnostics, Clear, Cleared, Destroy,
+  Erase, Copy, Clone.
 
 ## Brand Commitments
 
