@@ -476,8 +476,10 @@ export const outcomes = {
   /**
    * The Reader itself failed. The classification decides the kind, so the
    * severity and the remedy come from the same answer: an unplugged Reader is a
-   * warning with the plug-in remedy, a Reader held by another process is an error
-   * telling you to close it.
+   * *state* — said on screen, silent, with the plug-in remedy; a Reader held by
+   * another process is an error telling you to close it; a Reader that stopped
+   * answering is attention, because it is present and broken and only a replug
+   * clears it.
    *
    * The shell used to render this as a strip that pushed the page down; it now
    * arrives here, carrying the reconnect action the strip offered.
