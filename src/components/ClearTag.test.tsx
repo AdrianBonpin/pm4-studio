@@ -8,6 +8,7 @@ import {
   CLEAR_READ_CONTROL,
   DESTROY_ACTION_LABEL,
   DESTROY_ENTER_CONTROL,
+  DESTROY_PANEL_TITLE,
   clearConfirmation,
   destroyConfirmation,
 } from "../lib/clearTag";
@@ -355,4 +356,27 @@ describe("a tag that will not accept writes", () => {
     expect(text).not.toMatch(/confirmed cop(y|ies)/i);
     expect(text).not.toMatch(/verified/i);
   });
+});
+
+describe("the divider above Destroy", () => {
+  /**
+   * The hairline was written as `border-line` — a colour the palette does not
+   * define — so Tailwind resolved nothing and the block had no separation above
+   * it. jsdom cannot see a painted border, so what is held here is the class the
+   * paint comes from: a `border-t` naming `--color-border`, which DESIGN.md makes
+   * the world's only hairline. `bun run tokens:check` refuses the whole shape of
+   * the old bug; this holds the one place it was.
+   */
+  for (const connected of [true, false]) {
+    it(`is a hairline in the palette whether the Reader is ${connected ? "attached" : "absent"}`, () => {
+      renderUi(<ClearTag connected={connected} />);
+
+      const divider = screen.getByText(DESTROY_PANEL_TITLE).parentElement;
+      const classes = divider?.className.split(/\s+/) ?? [];
+
+      expect(classes).toContain("border-t");
+      expect(classes).toContain("border-border");
+      expect(classes).not.toContain("border-line");
+    });
+  }
 });

@@ -16,11 +16,11 @@ rather than waiting to be run by hand.
   fire; misses typo'd utilities of other kinds (spacing, type sizes), which stay out of
   its remit.
 
-- [ ] The Destroy block on the Clear panel is separated from what is above it by a visible hairline, in both the connected and the disconnected state.
-- [ ] A class naming an undefined border colour fails the build, and the failure names the class and where it is.
-- [ ] The gate stays silent for border widths, styles, sides, opacity modifiers, arbitrary values, and colour names written in prose or comments.
-- [ ] It runs inside `bun run build`, so `bun run verify` fails with it.
-- [ ] The gate is covered by a test that would fail if it stopped reporting the typo it was built for.
+- [x] The Destroy block on the Clear panel is separated from what is above it by a visible hairline, in both the connected and the disconnected state.
+- [x] A class naming an undefined border colour fails the build, and the failure names the class and where it is.
+- [x] The gate stays silent for border widths, styles, sides, opacity modifiers, arbitrary values, and colour names written in prose or comments.
+- [x] It runs inside `bun run build`, so `bun run verify` fails with it.
+- [x] The gate is covered by a test that would fail if it stopped reporting the typo it was built for.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/35
-**Status:** ready
+**Status:** done

@@ -25,7 +25,7 @@ bun run verify   # the gate
 claiming a change is done. It runs, in order:
 
 ```bash
-bun run build        # design gate, then tsc --noEmit, then vite build
+bun run build        # design gate, token gate, then tsc --noEmit, then vite build
 bun run test         # vitest + jsdom
 bun run verify:rust  # cd src-tauri && cargo test
 ```
@@ -109,6 +109,22 @@ The detector catches what it encodes and nothing else: taste, hierarchy, copy
 quality and the rendered page are the skill's and the reviewer's job. No edit hook
 is installed: the check is a command a person or CI runs, not something that fires
 on every save.
+
+### The token gate
+
+```bash
+bun run tokens:check
+```
+
+Reads the palette out of `src/index.css` and every interface source under `src/`
+(tests excluded: a test asserting a bad class is gone must be able to name it). A
+class naming a border colour the palette does not define fails it, with the class
+and the line — Tailwind silently drops such a class, so nothing else in the build
+would notice. **It is a gate:** a violation, a missing palette, a palette defining
+nothing, an unscannable target and a target with no sources in it all exit
+non-zero, and `bun run build` runs it, so `bun run verify` fails with it. Its
+remit is that one shape only; `border-2`, `border-t`, `border-none`,
+`border-border/50` and `border-[#123456]` are not defects.
 
 ## Updating the vendored skill
 
