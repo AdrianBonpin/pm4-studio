@@ -11,7 +11,6 @@ import {
   erasedPagesLabel,
   type NdefErasePreview,
 } from "../lib/eraseTag";
-import { pagesLabel } from "../lib/tagWrite";
 import { outcomes, report } from "../lib/outcome";
 import type { EraseResult } from "../types";
 
@@ -154,19 +153,13 @@ export function EraseNdef({ connected }: EraseNdefProps) {
                 </li>
               ))}
             </ul>
+            {/* The two limits, as one sentence each and one paragraph between them:
+                a single destructive action does not need nine blocks of prose, and
+                at 900×700 it needs its own buttons on screen (follow-up ticket
+                "The Erase confirmation is taller than the window"). */}
             <p className="max-w-prose text-xs leading-relaxed text-text-muted">
-              {confirmation.notReadOnly}
+              {confirmation.notReadOnly} {confirmation.notPasswordRemoval}
             </p>
-            <p className="max-w-prose text-xs leading-relaxed text-text-muted">
-              {confirmation.notPasswordRemoval}
-            </p>
-            {preview.tag && (
-              <p className="font-mono text-[11px] text-text-muted">
-                tag {preview.tag.uid} · clears {preview.clearsBytes}{" "}
-                {preview.clearsBytes === 1 ? "byte" : "bytes"} ·{" "}
-                {pagesLabel(preview.pages)} of user memory
-              </p>
-            )}
             <div className="flex flex-wrap items-center gap-2">
               <Button variant="danger" disabled={busy} onClick={() => void erase()}>
                 <Eraser size={13} />{" "}
@@ -175,11 +168,10 @@ export function EraseNdef({ connected }: EraseNdefProps) {
               <Button variant="ghost" disabled={busy} onClick={cancel}>
                 Keep the content
               </Button>
+              <span className="text-[11px] leading-relaxed text-text-muted">
+                Keep the tag on the Reader until the result appears.
+              </span>
             </div>
-            <p className="text-[11px] leading-relaxed text-text-muted">
-              Keep the tag on the Reader until the result appears. Polling is suspended while
-              the erase runs.
-            </p>
           </Notice>
         )}
 

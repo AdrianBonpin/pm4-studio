@@ -4,7 +4,12 @@ import { screen, waitFor, within } from "@testing-library/react";
 import { LfPage } from "./LfPage";
 import { fakeBackend, renderUi, type CommandAnswer } from "../test/dom";
 import { SNAPSHOT, libraryState, libraryView } from "../test/libraryState";
-import { blankConfirmation } from "../lib/blankTag";
+import {
+  RESET_ACTION_LABEL,
+  RESET_PANEL_TITLE,
+  RESET_READ_CONTROL,
+  resetConfirmation,
+} from "../lib/blankTag";
 import { replacementConfirmation } from "../lib/replacement";
 import type { IdentityPreview, LfCard, WriteResult } from "../types";
 import type { LibraryState } from "../hooks/useLibrary";
@@ -168,12 +173,12 @@ describe("the 125 kHz workspace", () => {
     expect(screen.queryByRole("heading", { name: "Read a tag" })).toBeNull();
 
     await user.click(switcher().getByRole("button", { name: "Reset" }));
-    expect(screen.getByRole("heading", { name: "Blank a tag" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: RESET_PANEL_TITLE })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Author an Identity" })).toBeNull();
 
     await user.click(switcher().getByRole("button", { name: "Clone" }));
     expect(screen.getByRole("heading", { name: "Clone a tag" })).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Blank a tag" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: RESET_PANEL_TITLE })).toBeNull();
 
     await user.click(switcher().getByRole("button", { name: "Batch" }));
     expect(screen.getByRole("heading", { name: "Batch clone" })).toBeTruthy();
@@ -211,7 +216,7 @@ describe("the 125 kHz workspace", () => {
     for (const heading of [
       "Read a tag",
       "Author an Identity",
-      "Blank a tag",
+      RESET_PANEL_TITLE,
       "Clone a tag",
       "Batch clone",
     ]) {
@@ -438,9 +443,9 @@ describe("Reset", () => {
     const { user } = renderPage({ lf_poll: () => SOURCE });
 
     await user.click(switcher().getByRole("button", { name: "Reset" }));
-    await user.click(screen.getByRole("button", { name: "Read the tag to blank" }));
+    await user.click(screen.getByRole("button", { name: RESET_READ_CONTROL }));
 
-    expect(await screen.findByText(blankConfirmation(SOURCE.id).title)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Blank this tag permanently" })).toBeTruthy();
+    expect(await screen.findByText(resetConfirmation(SOURCE.id).title)).toBeTruthy();
+    expect(screen.getByRole("button", { name: RESET_ACTION_LABEL })).toBeTruthy();
   });
 });

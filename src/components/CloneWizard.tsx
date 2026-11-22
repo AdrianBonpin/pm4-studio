@@ -9,7 +9,8 @@ import {
   replacementActionVariant,
 } from "./ReplacementConfirmation";
 import { useLfPoller } from "../hooks/useReader";
-import { outcomes, report, type Outcome, type OutcomeKind } from "../lib/outcome";
+import { outcomes, report, toneForSeverity, type Outcome, type OutcomeKind } from "../lib/outcome";
+import { NOTICE_TONE_CLASS } from "../lib/noticeTone";
 import { replacementConfirmation } from "../lib/replacement";
 import { confirmedCopiesLabel } from "../lib/writeOutcome";
 import type { LfCard, WriteResult } from "../types";
@@ -68,10 +69,11 @@ interface CloneWizardProps {
  *   - `unverified` — needs you: the write was sent and the read-back could not
  *     confirm it, which is neither success nor failure, and is never shown as a
  *     failure;
- *   - `skipped` / `unreadable` — the guard refused, and the two conditions are
- *     named apart because they have two different fixes: a Tag that already
- *     carries this Identity is the wrong Tag, while nothing readable is a Tag
- *     that is not there;
+ *   - `skipped` / `unreadable` — the guard refused, so both are attention (three
+ *     chirps: "refused, nothing changed"). The two conditions are named apart in
+ *     words because they have two different fixes: a Tag that already carries
+ *     this Identity is the wrong Tag, while nothing readable is a Tag that is not
+ *     there;
  *   - `failed` — the write could not be sent at all.
  *
  * The blank is read before it is written, and that reading is what the
@@ -402,12 +404,11 @@ function CloneResult({
       // would name a condition nobody established.
       title: outcome.message,
       advice: outcome.detail ?? null,
-      tone: "err" as const,
     };
 
   return (
     <div className="flex flex-col gap-3">
-      <p className={`flex items-start gap-2 text-sm ${RESULT_TONE_CLASS[copy.tone]}`}>
+      <p className={`flex items-start gap-2 text-sm ${toneClass(outcome)}`}>
         <AlertTriangle size={15} className="mt-0.5 shrink-0" />
         <span className="select-text">{copy.title}</span>
       </p>
@@ -423,8 +424,6 @@ function CloneResult({
   );
 }
 
-type ResultTone = "warn" | "err";
-
 /**
  * The state a write left the flow in, and what to do about it.
  *
@@ -432,43 +431,41 @@ type ResultTone = "warn" | "err";
  * the reported message: the message is the outcome's own (the guard's words), and
  * it has already been said.
  */
-const RESULT_COPY: Partial<
-  Record<OutcomeKind, { title: string; advice: string | null; tone: ResultTone }>
-> = {
+const RESULT_COPY: Partial<Record<OutcomeKind, { title: string; advice: string | null }>> = {
   unverified: {
     title: "Unknown — the tag did not read back",
     advice:
       "The write was sent, so the tag may or may not carry this identity. Read the tag on the " +
       "reader to find out what it holds. Nothing was counted as a copy.",
-    tone: "warn",
   },
   skipped: {
     title: "Skipped — the tag already carries this identity",
     advice:
       "Nothing was written and nothing was counted. Take the tag off the reader and put a " +
       "different one on — a tag that already presents this identity is never written again.",
-    tone: "warn",
   },
   unreadable: {
     title: "Not written — nothing readable on the reader",
     advice:
       "The write was refused rather than sent blind, so the tag in the write position was not " +
       "touched. Seat a 125 kHz tag that reads, then start the clone again.",
-    tone: "err",
   },
   refused: {
     title: "Not written — the guard refused the write",
     advice: "Nothing was written. Check the tag on the reader and start the clone again.",
-    tone: "err",
   },
   failed: {
     title: "Not written — the write could not be sent",
     advice: "The tag was not written. Check the Reader is still connected and try again.",
-    tone: "err",
   },
 };
 
-const RESULT_TONE_CLASS: Record<ResultTone, string> = {
-  warn: "text-warn",
-  err: "text-err",
-};
+/**
+ * The end state's ink comes from the outcome's severity, not from a table here:
+ * `RESULT_COPY` supplies the words, and the seam has already decided how loud the
+ * result is. A local tone table was a second severity decision — it said "warn"
+ * for a skip that the seam sounds as attention (ADR 0008).
+ */
+function toneClass(outcome: Outcome): string {
+  return NOTICE_TONE_CLASS[toneForSeverity(outcome.severity)];
+}

@@ -5,6 +5,23 @@ verification itself. The defects have follow-up tickets under
 `docs/tickets/studio-redesign-followups/`; nothing was quietly fixed here, and no
 existing ticket was edited.
 
+## Status of the defects, read after the fact
+
+This file is a record of what the verification saw, so it is annotated rather than
+rewritten: each finding keeps the words it was written in, and carries a line
+saying whether the tree still matches it.
+
+| Finding | State | Fixed by |
+|---|---|---|
+| F1 — the capability limits contradict the app | **fixed** | `9189c35` (integrated in `2febeea`) |
+| F2 — Copy refuses a destination that holds no message | **fixed** | `73688fe` (integrated in `335b1fe`) |
+| F3 — the Erase confirmation is taller than the window | **fixed** | `8c6d9d8` (`review/findings`) |
+| F4 — Reset is called "Blank" in its own panel | **fixed** | `8c6d9d8` (`review/findings`) |
+
+F1 and F2 also had their follow-up tickets closed (`Status: done`, criteria ticked)
+in `review/findings`, because a ticket that still reads `ready` is a second
+statement of a defect that is no longer there.
+
 ## Defects — with follow-up tickets
 
 ### F1 — The capability limits contradict the app that shows them
@@ -38,6 +55,13 @@ whole redesign was commissioned to remove.
 
 Ticket: `docs/tickets/studio-redesign-followups/the-capability-limits-contradict-the-app.md`
 
+> **Fixed — `9189c35`, integrated in `2febeea`.** Both entries were rewritten: the
+> *NDEF messages* entry now says NDEF is available through the Type 2 TLV and names
+> what is read, written and erased, and the *7- and 10-byte UIDs* entry says all
+> three widths decode from the reply's own length byte, with 10 bytes unconfirmed on
+> hardware. `readerIdentity.test.ts` now fails if either retired claim comes back.
+> The paragraphs above describe the build this verification saw, not this one.
+
 ### F2 — Copy refuses a destination that holds no message
 
 **Severity: high.** Copying onto a tag that is NDEF formatted with an empty NDEF
@@ -63,6 +87,13 @@ a destination that already holds a message, which is the only kind Copy accepts.
 
 Ticket: `docs/tickets/studio-redesign-followups/copy-refuses-a-destination-that-holds-no-message.md`
 
+> **Fixed — `73688fe`, integrated in `335b1fe`.** `copyDestination` now carries
+> *holds nothing* (`empty`) separately from *could not be read* (`unreadable`), so an
+> empty or TLV-less destination proceeds to the confirmation with nothing to replace,
+> and an unformatted destination is refused as unformatted rather than as a failed
+> read. `hfCopy.test.ts` covers all three. The paragraphs above describe the build
+> this verification saw.
+
 ### F3 — The Erase confirmation is taller than the window
 
 **Severity: medium.** The confirmation runs to eight paragraphs, and its own
@@ -83,6 +114,18 @@ Evidence: `screenshots/hf-erase-confirmation-980.png`,
 
 Ticket: `docs/tickets/studio-redesign-followups/the-erase-confirmation-is-taller-than-the-window.md`
 
+> **Fixed.** The confirmation is five blocks instead of nine: the third fact (which
+> restated the second's "pages 0 to 3 are never written") is gone, its page extent
+> folded into `eraseWhere`; the two denial paragraphs are one sentence each in a
+> single paragraph; the mono summary line and the trailing paragraph went, with the
+> byte count into `eraseWhere` and *keep the tag on the Reader* into the action row.
+> Re-measured at 900×700 with the dev fixture: the confirm button's bottom edge is at
+> **y=678 in a 700 px window**, where it was at 777. The danger variant, both
+> accessible names and the two-button shape are unchanged. **The class-level gate:**
+> a jsdom test cannot measure layout, so the gate for "a confirmation's own buttons
+> are in the viewport at 900×700" is the visual sweep (this file's sibling reports),
+> and the reason it cannot be a unit test is recorded here rather than left implied.
+
 ### F4 — Reset is called "Blank" in its own panel
 
 **Severity: low (vocabulary).** The mode is **Reset**. Its panel says *Blank a
@@ -95,6 +138,13 @@ Evidence: `screenshots/lf-reset-confirmation-980.png`,
 `screenshots/lf-reset-confirmation-900.png`.
 
 Ticket: `docs/tickets/studio-redesign-followups/reset-is-called-blank-in-its-own-panel.md`
+
+> **Fixed.** The mode's name and the panel's words are one name now: `lib/lfModes`
+> owns "Reset" for the pill, `lib/blankTag` owns the panel's heading, its controls and
+> its outcome words, and `lib/blankTag.test.ts` binds the two so they cannot drift
+> apart again. The factory-restore denial left the panel — it is one of the Reader's
+> capability limits and is stated there once — and the page subtitle no longer ends
+> "…or blank a tag". "Blank" survives as the noun it is, in Clone and Batch.
 
 ## Observations — recorded, no ticket
 

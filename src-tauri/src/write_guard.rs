@@ -93,14 +93,9 @@ impl RefusalCause {
         }
     }
 
-    /// The cause of a read that failed before the guard could decide.
-    ///
-    /// A Tag that could not be read at all is ADR 0001's first case whichever
-    /// way the failure arrived: the guard is given `None` and refuses, and a
-    /// transport error on the read reaches the same place.
-    pub fn when_unreadable() -> RefusalCause {
-        RefusalCause::Unreadable
-    }
+    // A read that failed before the guard could decide (a transport error, say)
+    // is ADR 0001's first case too, so the call site names `Unreadable` directly.
+    // A constructor for it could only ever return that one variant.
 }
 
 impl WriteDecision {
@@ -325,8 +320,10 @@ mod tests {
     #[test]
     fn a_read_that_failed_before_the_guard_decided_is_the_unreadable_cause() {
         // ADR 0001's first case, whichever way it arrives: nothing could be read
-        // in the write position, so the fix is to seat a Tag that reads.
-        assert_eq!(RefusalCause::when_unreadable(), RefusalCause::Unreadable);
+        // in the write position, so the fix is to seat a Tag that reads. This is
+        // the cause `reader.rs` names when the read itself failed.
+        assert_eq!(RefusalCause::of(WriteDecision::RefuseUnreadable), Some(RefusalCause::Unreadable));
+        assert_eq!(RefusalCause::Unreadable.as_str(), "unreadable");
     }
 
     #[test]

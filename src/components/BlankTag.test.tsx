@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { screen, waitFor } from "@testing-library/react";
 import { BlankTag } from "./BlankTag";
 import { fakeBackend, renderUi } from "../test/dom";
-import { blankConfirmation } from "../lib/blankTag";
+import { RESET_ACTION_LABEL, RESET_READ_CONTROL, resetConfirmation } from "../lib/blankTag";
 import { subscribeSignals, type SignalSymbol } from "../lib/signal";
 import { toastStore } from "../lib/toastStore";
 import type { BlankResult, LfCard } from "../types";
@@ -57,7 +57,7 @@ function hearSignals(): { symbols: SignalSymbol[]; stop: () => void } {
 }
 
 /** The heading the confirmation gives the Identity it is about to destroy. */
-const TITLE = blankConfirmation(CARD.id).title;
+const TITLE = resetConfirmation(CARD.id).title;
 
 /** Read the Tag and stop with its confirmation on screen. */
 async function upToConfirmation(reply: BlankResult = BLANKED) {
@@ -69,7 +69,7 @@ async function upToConfirmation(reply: BlankResult = BLANKED) {
     <BlankTag connected onDeviceError={() => {}} />,
   );
 
-  await user.click(screen.getByRole("button", { name: "Read the tag to blank" }));
+  await user.click(screen.getByRole("button", { name: RESET_READ_CONTROL }));
   await screen.findByText(TITLE);
 
   return { backend, user };
@@ -84,13 +84,13 @@ describe("blanking a Tag", () => {
     expect(backend.callsTo("lf_blank")).toHaveLength(0);
     expect(screen.queryByText(TITLE)).toBeNull();
     // The flow is back at its start, with nothing destroyed.
-    expect(screen.getByRole("button", { name: "Read the tag to blank" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: RESET_READ_CONTROL })).toBeTruthy();
   });
 
   it("blanks the Identity that was read when confirmed", async () => {
     const { backend, user } = await upToConfirmation();
 
-    await user.click(screen.getByRole("button", { name: "Blank this tag permanently" }));
+    await user.click(screen.getByRole("button", { name: RESET_ACTION_LABEL }));
 
     await waitFor(() => {
       expect(backend.callsTo("lf_blank")).toHaveLength(1);
@@ -119,7 +119,7 @@ describe("the confirmation tells the truth before the write", () => {
     // exactly the write and the way out of it.
     await upToConfirmation();
 
-    expect(screen.getByRole("button", { name: "Blank this tag permanently" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: RESET_ACTION_LABEL })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Keep the tag as it is" })).toBeTruthy();
     expect(screen.getAllByRole("button")).toHaveLength(2);
 
@@ -132,7 +132,7 @@ describe("a tag that will not accept writes", () => {
   it("is reported as such, not as a generic failure or an unknown", async () => {
     const { user } = await upToConfirmation(WILL_NOT_ACCEPT);
 
-    await user.click(screen.getByRole("button", { name: "Blank this tag permanently" }));
+    await user.click(screen.getByRole("button", { name: RESET_ACTION_LABEL }));
 
     // Two outcomes were reported, because the flow is two operations: the read
     // that produced the confirmation, and the blanking write. The newest is the
@@ -151,7 +151,7 @@ describe("a tag that will not accept writes", () => {
     const { symbols, stop } = hearSignals();
     const { user } = await upToConfirmation(WILL_NOT_ACCEPT);
 
-    await user.click(screen.getByRole("button", { name: "Blank this tag permanently" }));
+    await user.click(screen.getByRole("button", { name: RESET_ACTION_LABEL }));
 
     await waitFor(() => {
       // The read that produced the confirmation sounds *done*; the refusal that
@@ -165,7 +165,7 @@ describe("a tag that will not accept writes", () => {
   it("shows what the tag still reads, and never claims a copy or a blank", async () => {
     const { user } = await upToConfirmation(WILL_NOT_ACCEPT);
 
-    await user.click(screen.getByRole("button", { name: "Blank this tag permanently" }));
+    await user.click(screen.getByRole("button", { name: RESET_ACTION_LABEL }));
 
     await screen.findByText(/will not accept writes/i);
     expect(screen.getByText(/Still on the tag/)).toBeTruthy();
@@ -183,7 +183,7 @@ describe("a never-written tag", () => {
     const { symbols, stop } = hearSignals();
     const { backend, user } = await upToConfirmation(BLANKED);
 
-    await user.click(screen.getByRole("button", { name: "Blank this tag permanently" }));
+    await user.click(screen.getByRole("button", { name: RESET_ACTION_LABEL }));
 
     expect(backend.callsTo("lf_blank")).toHaveLength(1);
     const [toast] = await waitFor(() => {
@@ -191,7 +191,8 @@ describe("a never-written tag", () => {
       expect(toastStore.getState().toasts.length).toBe(2);
       return toastStore.getState().toasts;
     });
-    expect(toast?.message).toContain("Blanked");
+    // The interface says Reset; the outcome kind and the wire value stay `blanked`.
+    expect(toast?.message).toContain("Reset —");
     expect(toast?.message).not.toMatch(/verified/i);
     expect(toast?.severity).toBe("success");
     expect(symbols).toEqual(["done", "done"]);

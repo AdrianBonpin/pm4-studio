@@ -1,26 +1,49 @@
 /**
- * Blanking a Tag's Identity: the confirmation the user reads, and the wording of
+ * **Reset** a Tag's Identity: the confirmation the user reads, and the wording of
  * what came of it.
  *
- * Blanking writes the neutral Identity onto a 125 kHz Tag. It is **not** a
- * factory reset and it does **not** unlock a locked chip: neither is reachable
- * over this protocol. The words here are therefore "blank"/"blanked" and never
- * "reset", "restore", "unlock", "wipe", "erase" or "format" — each of those
- * promises something the hardware cannot do.
+ * The operation is called **Reset** everywhere a user reads it: the mode pill in
+ * `lib/lfModes`, this module's heading, its controls, and the words its outcome
+ * arrives in. GLOSSARY.md puts "blank (as a verb)" on Reset's *Avoid* line — the
+ * verb invited the factory-restore reading this redesign set out to end, and the
+ * panel then had to spend a paragraph denying it. "Blank" survives only as the
+ * noun: the state of a Tag that carries no Identity, which Clone and Batch write
+ * onto.
  *
- * The outcome model lives in Rust (`src-tauri/src/write_outcome.rs` and
- * `src-tauri/src/blank.rs`) and reaches this module already decided. The rule
- * that matters here: a blanked Tag reads as *empty*, because the Identity codec
- * treats an all-zero data field as "no reading". So "blanked" is a definite
- * result, and it is never worded as "verified" — a blanking write adds no copy
- * of anything, and it must not look like one.
+ * What Reset does *not* do is stated once, where this Reader's every other limit
+ * is stated: `READER_CAPABILITY_LIMITS`' *Factory restore and unlock* entry. A
+ * factory configuration cannot be written back and a locked Tag cannot be
+ * recovered, which is why no paragraph here repeats it.
+ *
+ * The wire vocabulary keeps its own word. The Rust command is `lf_blank`, the
+ * result's outcome is `blanked`, and `src-tauri/src/blank.rs` owns the model. That
+ * is a protocol and storage vocabulary, not interface copy, and renaming it would
+ * break the library's count rule for nothing a user can see. The rule that matters
+ * here: a Tag after a Reset reads as *empty*, because the Identity codec treats an
+ * all-zero data field as "no reading". So "blanked" is a definite result, and it is
+ * never worded as "verified" — a Reset adds no copy of anything, and it must not
+ * look like one.
  */
 
 import type { BlankResult } from "../types";
+import { blankKind, severityOf, toneForSeverity } from "./severity";
 import type { WriteNotice } from "./writeOutcome";
 
-/** The one verb this feature may use for itself. */
-export const BLANK_ACTION_LABEL = "Blank tag";
+/** The verb this feature may use for itself, as the button that does it. */
+export const RESET_ACTION_LABEL = "Reset this tag permanently";
+
+/** The panel's heading. The mode pill in `lib/lfModes` says the same word. */
+export const RESET_PANEL_TITLE = "Reset a tag";
+
+/** The line under the heading: what a Reset does, with no factory-restore denial. */
+export const RESET_PANEL_HINT =
+  "Overwrite a Tag's Identity with nothing, so the Tag carries no assigned value.";
+
+/** The control that starts the flow. */
+export const RESET_READ_CONTROL = "Read the tag to reset";
+
+/** The control that starts over once an attempt is done. */
+export const RESET_ANOTHER_CONTROL = "Reset another tag";
 
 /** One fact the user must read before the write is offered. */
 export interface BlankFact {
@@ -38,7 +61,7 @@ export interface BlankFact {
  * still presses the button has been told, in as many words, that the attempt is
  * the only test there is.
  */
-export const BLANK_FACTS: readonly BlankFact[] = [
+export const RESET_FACTS: readonly BlankFact[] = [
   {
     title: "This is permanent",
     detail:
@@ -52,7 +75,7 @@ export const BLANK_FACTS: readonly BlankFact[] = [
   {
     title: "A tag already written once may refuse forever",
     detail:
-      "A T5577 that has already been written may permanently refuse every later write while still reading back the Identity it carries. This Reader cannot tell a tag that will refuse from one that will accept. A blanked tag may be unusable for further writes: a T5577 test tag has already been permanently locked by an earlier write experiment, so this is a real hazard rather than a theoretical one.",
+      "A T5577 that has already been written may permanently refuse every later write while still reading back the Identity it carries. This Reader cannot tell a tag that will refuse from one that will accept. A tag Reset once may be unusable for further writes: a T5577 test tag has already been permanently locked by an earlier write experiment, so this is a real hazard rather than a theoretical one.",
   },
   {
     title: "Only attempt this on a tag you can afford to lose",
@@ -62,23 +85,16 @@ export const BLANK_FACTS: readonly BlankFact[] = [
   {
     title: "The tag may read as empty",
     detail:
-      "A tag that carries no Identity reads as nothing, so reading it again will probably show no Identity at all. That is the expected result of blanking, not a failure.",
+      "A tag that carries no Identity reads as nothing, so reading it again will probably show no Identity at all. That is the expected result of a Reset, not a failure.",
   },
 ];
 
 /**
- * The denial, stated as plainly as the facts above it. Blanking is the only
- * operation this protocol offers, so the app says what it is not as well.
+ * Shown beside the outcome: why a Tag with no Identity reports nothing, so an
+ * expected empty read is not taken for a broken Tag.
  */
-export const BLANK_IS_NOT_A_FACTORY_RESET =
-  "Blanking is not a factory reset and it does not unlock the tag. Neither can be reached over this protocol: a factory configuration cannot be written back, and a tag that has stopped accepting writes stays that way.";
-
-/**
- * Shown beside the outcome: why a blanked tag reports nothing, so an expected
- * empty read is not taken for a broken Tag.
- */
-export const BLANK_OUTCOME_HINT =
-  "A tag with no Identity reads as empty, so a blanked tag is expected to show no Identity. Blanking is not a copy: no Snapshot's confirmed-copy count moves.";
+export const RESET_OUTCOME_HINT =
+  "A tag with no Identity reads as empty, so a tag Reset once is expected to show no Identity. Reset is not a copy: no Snapshot's confirmed-copy count moves.";
 
 /** The confirmation, ready to render. */
 export interface BlankConfirmation {
@@ -88,7 +104,6 @@ export interface BlankConfirmation {
   readonly title: string;
   readonly action: string;
   readonly facts: readonly BlankFact[];
-  readonly notFactoryReset: string;
 }
 
 /**
@@ -99,13 +114,12 @@ export interface BlankConfirmation {
  * same Identity is handed to the write so the guard can refuse if the tag on the
  * Reader is a different one.
  */
-export function blankConfirmation(identity: string): BlankConfirmation {
+export function resetConfirmation(identity: string): BlankConfirmation {
   return {
     identity,
-    title: `Blank ${identity} permanently?`,
-    action: BLANK_ACTION_LABEL,
-    facts: BLANK_FACTS,
-    notFactoryReset: BLANK_IS_NOT_A_FACTORY_RESET,
+    title: `Reset the tag holding ${identity}?`,
+    action: RESET_ACTION_LABEL,
+    facts: RESET_FACTS,
   };
 }
 
@@ -134,15 +148,15 @@ export const WILL_NOT_ACCEPT_WRITES_CAUSE =
  * tag that still presents an Identity is a tag that will not accept writes, and
  * the app names the likely causes instead of reporting that nothing changed as
  * though nothing could be concluded (ADR 0007). Silence is worded as the expected
- * result of a blank, with the one caveat an empty reading cannot exclude.
+ * result of a Reset, with the one caveat an empty reading cannot exclude.
  */
-export function blankCheckNotice(read: { readonly id: string } | null): WriteNotice {
+export function resetCheckNotice(read: { readonly id: string } | null): WriteNotice {
   if (read === null) {
     return {
       tone: "ok",
       text:
-        "No Identity read. That is the expected result for a blanked tag — though an empty " +
-        "reader looks the same, so re-seat the tag on the reader and check again if you " +
+        "No Identity read. That is the expected result for a tag with no Identity — though an " +
+        "empty reader looks the same, so re-seat the tag on the reader and check again if you " +
         "want to be sure.",
     };
   }
@@ -157,45 +171,49 @@ export function blankCheckNotice(read: { readonly id: string } | null): WriteNot
 }
 
 /**
- * What to tell the user about one blanking attempt, in the words of its actual
- * outcome. A blanked Tag is "blanked" — never "verified" — and nothing else is
- * ever described as blanked.
+ * What to tell the user about one Reset, in the words of its actual outcome.
+ *
+ * The words say **Reset**, because that is the name of the thing the user did. A
+ * Reset that took is a definite result — the tag presents no Identity — and it is
+ * never "verified": no copy was placed.
  */
-export function blankNotice(result: BlankResult): WriteNotice {
+export function resetNotice(result: BlankResult): WriteNotice {
+  // The severity is the seam's, so a refusal of the write cannot be drawn
+  // calmer than the three chirps it sounds.
+  const tone = toneForSeverity(severityOf(blankKind(result.outcome)));
   switch (result.outcome) {
     case "blanked":
       return {
-        tone: "ok",
+        tone,
         text:
-          "Blanked — the tag no longer presents an Identity. Reading it again shows no " +
-          "Identity at all, which is the expected result of blanking. The Identity is gone; " +
-          "whether this chip will accept a new one depends on the chip itself, and this Reader " +
+          "Reset — the tag no longer presents an Identity. Reading it again shows no " +
+          "Identity at all, which is the expected result of a Reset. The Identity is gone; " +
+          "whether this tag will accept a new one depends on the tag itself, and this Reader " +
           "cannot tell without writing to it." +
-          " No copy was recorded: blanking destroys an Identity rather than copying one.",
+          " No copy was recorded: Reset destroys an Identity rather than copying one.",
       };
     case "willNotAcceptWrites":
       return {
-        tone: "err",
+        tone,
         text: `${WILL_NOT_ACCEPT_WRITES} ${WILL_NOT_ACCEPT_WRITES_CAUSE}`,
       };
     case "refused":
       return {
-        tone: "err",
-        text: `Not blanked: ${result.message ?? "the reader refused the write"}`,
+        tone,
+        text: `Not reset: ${result.message ?? "the reader refused the write"}`,
       };
     case "unverified":
       return {
-        tone: "warn",
+        tone,
         text:
           "Unknown: " +
-          (result.message ??
-            "the blanking write was sent but the tag could not be read back") +
+          (result.message ?? "the reset write was sent but the tag could not be read back") +
           " Read the tag on the reader to find out what it holds.",
       };
     case "failed":
       return {
-        tone: "err",
-        text: `Not blanked. ${result.message ?? "The write did not take."}`,
+        tone,
+        text: `Not reset. ${result.message ?? "The write did not take."}`,
       };
   }
 }

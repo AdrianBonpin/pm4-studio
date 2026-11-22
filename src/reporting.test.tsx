@@ -14,6 +14,7 @@ import { NTAG_CAPTURE, NTAG_UID, recordsRead } from "./test/hfState";
 import { SNAPSHOT, libraryState } from "./test/libraryState";
 import type { SaveResult } from "./lib/library";
 import { ERASE_ACTION_LABEL } from "./lib/eraseTag";
+import { RESET_ACTION_LABEL, RESET_READ_CONTROL } from "./lib/blankTag";
 import { textRecord } from "./lib/ndef";
 import { draftMessageHex } from "./lib/tagWrite";
 import { subscribeSignals, type SignalSymbol } from "./lib/signal";
@@ -361,21 +362,22 @@ const OPERATIONS: readonly Operation[] = [
     run: async () => {
       fakeBackend({ lf_poll: () => LF_CARD });
       const { user } = renderUi(<BlankTag connected />);
-      await user.click(screen.getByRole("button", { name: "Read the tag to blank" }));
+      await user.click(screen.getByRole("button", { name: RESET_READ_CONTROL }));
     },
   },
   {
-    name: "125 kHz Reset: the blanking write",
+    name: "125 kHz Reset: the reset write",
     operation: "reset",
     kind: "blanked",
     signal: "done",
-    says: "Blanked",
+    // The outcome words say Reset; the kind and the wire value stay `blanked`.
+    says: "Reset —",
     run: async () => {
       fakeBackend({ lf_poll: () => LF_CARD, lf_blank: () => BLANKED });
       const { user } = renderUi(<BlankTag connected />);
-      await user.click(screen.getByRole("button", { name: "Read the tag to blank" }));
+      await user.click(screen.getByRole("button", { name: RESET_READ_CONTROL }));
       await user.click(
-        await screen.findByRole("button", { name: "Blank this tag permanently" }),
+        await screen.findByRole("button", { name: RESET_ACTION_LABEL }),
       );
     },
   },
@@ -383,7 +385,10 @@ const OPERATIONS: readonly Operation[] = [
     name: "125 kHz Reset: the Reader could not send it",
     operation: "reader",
     kind: "reader-wedged",
-    signal: "needs-you",
+    // A wedged Reader is attached and broken: the write failed and only a replug
+    // clears it, so it is attention. An absent Reader is the silent state; a
+    // wedged one is a fault.
+    signal: "attention",
     says: "The Reader stopped responding",
     run: async () => {
       fakeBackend({
@@ -393,9 +398,9 @@ const OPERATIONS: readonly Operation[] = [
         },
       });
       const { user } = renderUi(<BlankTag connected />);
-      await user.click(screen.getByRole("button", { name: "Read the tag to blank" }));
+      await user.click(screen.getByRole("button", { name: RESET_READ_CONTROL }));
       await user.click(
-        await screen.findByRole("button", { name: "Blank this tag permanently" }),
+        await screen.findByRole("button", { name: RESET_ACTION_LABEL }),
       );
     },
   },

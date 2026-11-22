@@ -17,6 +17,7 @@ import type { DraftRecord } from "./drafts";
 import { recordKindLabel, recordSummary } from "./drafts";
 import { encodeRecords, decodeRecords } from "./ndef";
 import type { NdefTagSnapshot, WriteOutcome } from "../types";
+import { ndefWriteKind, severityOf, toneForSeverity } from "./severity";
 import type { WriteNotice } from "./writeOutcome";
 
 /** One Tag as the backend read it. One definition, in `types.ts`, so the write
@@ -173,17 +174,20 @@ export function pagesLabel(pages: readonly number[]): string {
  * right message and discarding it would be the wrong move.
  */
 export function writeNotice(result: NdefWriteResult): WriteNotice {
+  // The severity is the seam's, so the notice beside the result cannot be
+  // drawn in a calmer tone than the sound the same result made (ADR 0008).
+  const tone = toneForSeverity(severityOf(ndefWriteKind(result.outcome)));
   const wrote =
     result.wrotePages.length === 0 ? "" : ` One request wrote ${pagesLabel(result.wrotePages)}.`;
   switch (result.outcome) {
     case "verified":
       return {
-        tone: "ok",
+        tone,
         text: `Verified — the tag reads back this message.${wrote}`,
       };
     case "unverified":
       return {
-        tone: "warn",
+        tone,
         text:
           "Unknown: the write was sent but the tag did not read back as this message, so its " +
           "contents cannot be confirmed. Read the tag on 13.56 MHz to see what it holds before " +
@@ -192,12 +196,12 @@ export function writeNotice(result: NdefWriteResult): WriteNotice {
       };
     case "refused":
       return {
-        tone: "err",
+        tone,
         text: `Not written: ${result.message ?? "the write was not attempted"}.`,
       };
     case "failed":
       return {
-        tone: "err",
+        tone,
         text: `Not written: the write could not be sent${
           result.message ? ` (${result.message})` : ""
         }. The tag was not changed.`,
@@ -206,7 +210,7 @@ export function writeNotice(result: NdefWriteResult): WriteNotice {
       // An NDEF write replaces a message and can never blank a Tag. Reaching
       // here is a bug worth naming rather than a result worth wording.
       return {
-        tone: "warn",
+        tone,
         text:
           "Unexpected outcome: this write reported a blanked tag, which writing an NDEF " +
           "message cannot do. Re-read the tag before trusting what it holds.",
@@ -216,7 +220,7 @@ export function writeNotice(result: NdefWriteResult): WriteNotice {
       // `lib/eraseTag.ts`. A Draft write never clears content, so reaching here
       // is a bug worth naming rather than a result worth wording.
       return {
-        tone: "warn",
+        tone,
         text:
           "Unexpected outcome: this write reported an erased tag, which writing an NDEF " +
           "message cannot do. Re-read the tag before trusting what it holds.",

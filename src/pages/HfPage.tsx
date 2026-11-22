@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { Check } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { CopyMessage } from "../components/CopyMessage";
 import { useDraftsState } from "../components/DraftsProvider";
@@ -27,7 +26,9 @@ import {
 } from "../lib/hfRead";
 import { draftNameFromRead } from "../lib/drafts";
 import { hfSnapshotSave } from "../lib/hfSnapshot";
-import { report, outcomes, type Outcome } from "../lib/outcome";
+import { report, outcomes } from "../lib/outcome";
+import { saveNoteOf, type SaveNote } from "../lib/saveNote";
+import { SaveNoteLine } from "../components/SaveNoteLine";
 import type { LibraryState } from "../hooks/useLibrary";
 import type { TagRecordsRead } from "../lib/tagRecords";
 import type { HfCard } from "../types";
@@ -417,7 +418,7 @@ export function HfPage({
         ? outcomes.librarySaveFailed(library.error ?? "")
         : outcomes.librarySaved(result);
     report(answer);
-    setSaveNote(noteOf(answer));
+    setSaveNote(saveNoteOf(answer));
   };
 
   /**
@@ -510,7 +511,7 @@ export function HfPage({
               draft={{ busy: drafting, locked: draftLocked, run: () => void editAsDraft() }}
             />
           )}
-          <SaveNoteLine note={saveNote} />
+          <SaveNoteLine note={saveNote} className="mt-3" />
         </Section>
       )}
 
@@ -534,44 +535,4 @@ function recordsRead(): Promise<TagRecordsRead> {
   });
 }
 
-/** What a save came to, in the one place the page styles it. */
-interface SaveNote {
-  tone: "ok" | "muted" | "err";
-  text: string;
-}
 
-const NOTE_TONE = {
-  ok: "text-ok",
-  muted: "text-text-muted",
-  err: "text-err",
-} as const;
-
-/**
- * The save's own outcome, read from the outcome rather than written again: the
- * kind decides the tone, so the line beside the readout and the message in the
- * corner cannot disagree about what happened.
- */
-function noteOf(outcome: Outcome): SaveNote {
-  switch (outcome.kind) {
-    case "saved":
-      return { tone: "ok", text: outcome.message };
-    case "already-saved":
-      return { tone: "muted", text: outcome.message };
-    default:
-      return {
-        tone: "err",
-        text: outcome.detail === undefined ? outcome.message : `${outcome.message} ${outcome.detail}`,
-      };
-  }
-}
-
-/** What keeping this read in the library came to. A repeat is not a fault. */
-function SaveNoteLine({ note }: { note: SaveNote | null }) {
-  if (!note) return null;
-  return (
-    <p className={`mt-3 flex items-center gap-1 text-xs ${NOTE_TONE[note.tone]}`}>
-      {note.tone === "ok" && <Check size={12} />}
-      {note.text}
-    </p>
-  );
-}

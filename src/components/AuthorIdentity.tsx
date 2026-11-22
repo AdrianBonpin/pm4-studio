@@ -43,21 +43,15 @@ import {
   replacementConfirmation,
   type WritePosition,
 } from "../lib/replacement";
-import { NOTICE_TONE_CLASS, type WriteNotice } from "../lib/writeOutcome";
+import { NOTICE_TONE_CLASS, type NoticeTone } from "../lib/noticeTone";
+import type { WriteNotice } from "../lib/writeOutcome";
 import type { LibraryState } from "../hooks/useLibrary";
 import type { IdentityPreview, LfCard, WriteResult } from "../types";
 
 type Phase = "entry" | "confirm" | "reading" | "replacing" | "writing" | "done";
 
 /** What a Snapshot save did. A repeat is neither a fault nor a success. */
-type LibraryNote = { tone: "ok" | "muted" | "warn" | "err"; text: string };
-
-const LIBRARY_NOTE_TONE: Record<LibraryNote["tone"], string> = {
-  ok: "text-ok",
-  muted: "text-text-muted",
-  warn: "text-warn",
-  err: "text-err",
-};
+type LibraryNote = { tone: NoticeTone; text: string };
 
 interface AuthorIdentityProps {
   connected: boolean;
@@ -461,7 +455,7 @@ export function AuthorIdentity({ connected, library, onDeviceError }: AuthorIden
 
           {snapshotNote && (
             <p
-              className={`flex items-start gap-1.5 text-xs ${LIBRARY_NOTE_TONE[snapshotNote.tone]}`}
+              className={`flex items-start gap-1.5 text-xs ${NOTICE_TONE_CLASS[snapshotNote.tone]}`}
             >
               <BookmarkPlus size={12} className="mt-0.5 shrink-0" />
               <span className="select-text">{snapshotNote.text}</span>

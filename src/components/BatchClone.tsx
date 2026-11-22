@@ -47,8 +47,10 @@ interface BatchCloneProps {
  *   - `verified` — done: the read-back proved the copy, and only this adds a
  *     confirmed copy to the run's count;
  *   - `unverified` — needs you: sent, and the read-back could not confirm it;
- *   - `skipped` — needs you: the Tag already carries this Identity, so the guard
- *     refused and nothing was written or counted;
+ *   - `skipped` — attention: the Tag already carries this Identity, so the guard
+ *     refused and nothing was written or counted. A refusal is three chirps
+ *     (spec's alphabet table); what the skip means is in the ledger's words, not
+ *     in a softer sound;
  *   - `unreadable` / `failed` — attention: nothing could be read, or the write
  *     could not be sent.
  *

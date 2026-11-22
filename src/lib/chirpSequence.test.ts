@@ -3,9 +3,18 @@ import {
   ATTENTION_LED_HOLD_MS,
   CHIRP_GAP_MS,
   chirpSequenceFor,
-  chirpSequenceForOutcome,
 } from "./chirpSequence";
-import { outcomes, type Outcome } from "./outcome";
+import { outcomes, signalOf, type Outcome } from "./outcome";
+import type { ChirpSequence } from "./chirpSequence";
+
+/**
+ * What an outcome plays, read the only way the app reads it: through its
+ * severity. `report` does exactly this in production, and there is no helper that
+ * shortcuts it — a second route from an outcome to a sound is a route that drifts.
+ */
+function sequenceFor(outcome: Outcome): ChirpSequence {
+  return chirpSequenceFor(signalOf(outcome));
+}
 import { SIGNAL_SYMBOLS, type SignalSymbol } from "./signal";
 import type { BlankResult, EraseResult, WriteResult } from "../types";
 
@@ -119,10 +128,12 @@ const EXPECTED_OUTCOMES: readonly {
     chirps: 1,
   },
   {
+    // Nothing was sent, and there is no Reader to have chirped. An unplugged
+    // Reader is a state, not a fault, so the press is said and stays silent.
     what: "the beeper test with no Reader attached",
     outcome: outcomes.beepTestNoReader(),
-    symbol: "needs-you",
-    chirps: 2,
+    symbol: "silent",
+    chirps: 0,
   },
   {
     what: "the beeper test at a level that mutes it",
@@ -143,14 +154,46 @@ const EXPECTED_OUTCOMES: readonly {
     chirps: 2,
   },
   {
+    // The same state, at launch or from an operation: said on screen, never a
+    // sound. The alphabet's silent symbol is "nothing happened, nothing to act
+    // on, not an error", which is what an unplugged Reader is.
     what: "a Reader that is not plugged in",
     outcome: outcomes.readerFailure("no such device: failed to open the Reader"),
-    symbol: "needs-you",
-    chirps: 2,
+    symbol: "silent",
+    chirps: 0,
   },
   {
     what: "a write that failed",
     outcome: outcomes.write("write", writeResult("failed")),
+    symbol: "attention",
+    chirps: 3,
+  },
+  {
+    // A refusal is attention, however it is worded: the spec's table gives three
+    // chirps to "failed, refused, or the tag will not accept the write; nothing
+    // changed". This one is the guard's already-carries refusal, which the seam
+    // calls a skip — it used to be two chirps, and so sounded like a result that
+    // merely needs checking.
+    what: "a write the guard refused because the tag already carries it",
+    outcome: outcomes.write(
+      "clone",
+      writeResult("refused", {
+        refusalCause: "already-carries",
+        message: "the tag on the reader already reads as 55 00 84 82 12.",
+      }),
+    ),
+    symbol: "attention",
+    chirps: 3,
+  },
+  {
+    what: "a write the guard refused because nothing was readable",
+    outcome: outcomes.write(
+      "clone",
+      writeResult("refused", {
+        refusalCause: "unreadable",
+        message: "could not read the tag on the reader, so refusing to write blind.",
+      }),
+    ),
     symbol: "attention",
     chirps: 3,
   },
@@ -247,15 +290,15 @@ describe("the alphabet", () => {
 describe("an outcome's sound", () => {
   it("is the symbol and count written down here, for every kind of operation", () => {
     for (const row of EXPECTED_OUTCOMES) {
-      const sequence = chirpSequenceForOutcome(row.outcome);
+      const sequence = sequenceFor(row.outcome);
       expect(sequence.symbol, row.what).toBe(row.symbol);
       expect(sequence.chirps, row.what).toBe(row.chirps);
     }
   });
 
   it("distinguishes success from failure, which is the point of the alphabet", () => {
-    const done = chirpSequenceForOutcome(outcomes.tagRead("read", "55 00 84 82 12"));
-    const failure = chirpSequenceForOutcome(
+    const done = sequenceFor(outcomes.tagRead("read", "55 00 84 82 12"));
+    const failure = sequenceFor(
       outcomes.write("write", writeResult("failed")),
     );
     expect(done.chirps).not.toBe(failure.chirps);
@@ -266,21 +309,21 @@ describe("an outcome's sound", () => {
 
 describe("a poll's two empty-looking ends", () => {
   it("is silent when the field was empty, because nothing happened", () => {
-    expect(chirpSequenceForOutcome(outcomes.nothingLatched("hf-read")).chirps).toBe(0);
+    expect(sequenceFor(outcomes.nothingLatched("hf-read")).chirps).toBe(0);
   });
 
   it("needs you when a tag latched and its reply was rejected", () => {
     // Something happened and it needs a look: the tag was there, and the app
     // could not read it. Two chirps, not silence.
     const rejected = outcomes.hfReadIncomplete(null, "the poll reply carried no UID");
-    const sequence = chirpSequenceForOutcome(rejected);
+    const sequence = sequenceFor(rejected);
     expect(sequence.symbol).toBe("needs-you");
     expect(sequence.chirps).toBe(2);
   });
 
   it("never conflates the two, because telling them apart is why silence exists", () => {
-    const nothing = chirpSequenceForOutcome(outcomes.nothingLatched("hf-read"));
-    const rejected = chirpSequenceForOutcome(
+    const nothing = sequenceFor(outcomes.nothingLatched("hf-read"));
+    const rejected = sequenceFor(
       outcomes.hfReadIncomplete(null, "the poll reply carried no UID"),
     );
     expect(nothing.symbol).not.toBe(rejected.symbol);
@@ -294,6 +337,6 @@ describe("a read loop", () => {
     // background work. The completion is the operation, and it has one outcome,
     // which is one sequence.
     const completing = outcomes.tagRead("read", "55 00 84 82 12");
-    expect(chirpSequenceForOutcome(completing).chirps).toBe(1);
+    expect(sequenceFor(completing).chirps).toBe(1);
   });
 });

@@ -122,9 +122,11 @@ describe("every attempt reports itself", () => {
     await writeOnce(harness, 2);
     await writeOnce(harness, 3);
 
-    // Three attempts, three signals, three different sounds: which fob worked is
-    // audible without reading the list.
-    expect(heard.symbols).toEqual(["done", "needs-you", "attention"]);
+    // Three attempts, three signals. Only the verified one sounds "done", so which
+    // fob worked is audible without reading the list. The skip and the refusal
+    // share the attention symbol on purpose — both are refusals, which the spec's
+    // alphabet gives three chirps — and the ledger, not the beeper, says which.
+    expect(heard.symbols).toEqual(["done", "attention", "attention"]);
 
     // And three different messages, each naming its own condition.
     const messages = toastStore.getState().toasts.map((toast) => toast.message);
@@ -169,8 +171,10 @@ describe("every attempt reports itself", () => {
     await user.click(screen.getByRole("button", { name: /Write the blank on the reader/ }));
 
     await waitFor(() => expect(backend.callsTo("lf_clone_attempt")).toHaveLength(1));
-    // Heard with the remedy, as a warning rather than a refusal.
-    expect(heard.symbols).toEqual(["needs-you"]);
+    // Heard with the remedy, and as attention: a wedged Reader is present and
+    // broken, so the operation failed — "failed, nothing changed" in the spec's
+    // table. A warning said "completed, result needs checking", which this is not.
+    expect(heard.symbols).toEqual(["attention"]);
     expect(toastStore.getState().toasts[0]?.kind).toBe("reader-wedged");
     // And it stays in the ledger as an attempt that produced nothing, so a run
     // cannot lose a press.

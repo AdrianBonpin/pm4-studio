@@ -163,7 +163,8 @@ describe("the reads a clone is made of", () => {
     await user.click(await screen.findByRole("button", { name: "Use this tag" }));
 
     // The same condition the guard refuses a write on, caught at the read and
-    // reported as a skip: needs you, not a failure.
+    // reported as a skip: a refusal, so attention — with the words that say it is
+    // the wrong Tag rather than a failed read.
     const skipped = toastStore
       .getState()
       .toasts.filter((t) => t.kind === "skipped")
@@ -175,7 +176,7 @@ describe("the reads a clone is made of", () => {
     // that was tapped afterwards is read without another click.
     await screen.findByRole("button", { name: ACTION }, { timeout: 3000 });
     // Three operations were heard: source read, the skip, the destination read.
-    expect(heard.symbols).toEqual(["done", "needs-you", "done"]);
+    expect(heard.symbols).toEqual(["done", "attention", "done"]);
     expect(backend.callsTo("lf_write")).toHaveLength(0);
   });
 });
@@ -250,10 +251,14 @@ describe("what the write came to", () => {
     await user.click(screen.getByRole("button", { name: ACTION }));
 
     await waitFor(() => expect(newestToast()?.kind).toBe("skipped"));
-    // Needs you: the Tag read fine, so nothing failed — it is the wrong Tag.
-    expect(newestToast()?.severity).toBe("warning");
+    // Attention, like every refusal: the spec's table gives three chirps to
+    // "failed, refused, or the tag will not accept the write; nothing changed".
+    // The word "Skipped" and the advice below carry "this tag read fine, it is the
+    // wrong one" — that was never the tone's job, and two chirps made it sound
+    // like a result that merely wants checking.
+    expect(newestToast()?.severity).toBe("error");
     expect(newestToast()?.message.startsWith("Skipped:")).toBe(true);
-    expect(heard.symbols).toEqual(["done", "done", "needs-you"]);
+    expect(heard.symbols).toEqual(["done", "done", "attention"]);
     expect(screen.getByText(/Skipped — the tag already carries this identity/)).toBeTruthy();
     expect(screen.queryByText(/nothing readable on the reader/)).toBeNull();
   });
@@ -270,7 +275,7 @@ describe("what the write came to", () => {
     await user.click(screen.getByRole("button", { name: ACTION }));
 
     await waitFor(() => expect(newestToast()?.kind).toBe("reader-wedged"));
-    expect(heard.symbols).toEqual(["done", "done", "needs-you"]);
+    expect(heard.symbols).toEqual(["done", "done", "attention"]);
     // The Reader's own failure, with the remedy the classification carries — and
     // never a claim that the write was refused.
     expect(screen.getByText("The Reader stopped responding")).toBeTruthy();

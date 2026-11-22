@@ -7,13 +7,18 @@ import { Field, Readout, Section } from "./Section";
 import { useLfPoller } from "../hooks/useReader";
 import { describeDeviceFailure } from "../lib/readerIdentity";
 import {
-  BLANK_OUTCOME_HINT,
-  blankCheckNotice,
-  blankConfirmation,
-  blankNotice,
+  RESET_ANOTHER_CONTROL,
+  RESET_OUTCOME_HINT,
+  RESET_PANEL_HINT,
+  RESET_PANEL_TITLE,
+  RESET_READ_CONTROL,
+  resetCheckNotice,
+  resetConfirmation,
+  resetNotice,
 } from "../lib/blankTag";
 import { outcomes, report } from "../lib/outcome";
-import { NOTICE_TONE_CLASS, type WriteNotice } from "../lib/writeOutcome";
+import { NOTICE_TONE_CLASS } from "../lib/noticeTone";
+import type { WriteNotice } from "../lib/writeOutcome";
 import type { BlankResult, LfCard } from "../types";
 
 type Step = "idle" | "await" | "confirm" | "writing" | "done";
@@ -25,17 +30,26 @@ interface BlankTagProps {
 }
 
 /**
- * Blank a Tag's Identity.
+ * Reset a Tag's Identity.
  *
  * Two deliberate steps: read the Tag, then confirm destroying the Identity that
  * was read. The confirmation names that Identity and is passed back into the
  * write, so the Rust guard can refuse if the Tag on the Reader is a different
  * one. A confirmation cannot be carried across to another Tag.
  *
- * The wording is blanking throughout — never a factory reset, never an unlock,
- * because neither is reachable over this protocol. The outcome is "blanked" and
- * not "verified": a blanked Tag reads as empty, and an empty reading is the
- * expected result rather than a failed check.
+ * The wording is **Reset** throughout, because that is the name of the operation
+ * in `lib/lfModes`, the mode pill and GLOSSARY.md. The word "blank" is not a verb
+ * here: it is the noun for a Tag that carries no Identity, and the panel does not
+ * need a paragraph denying a factory restore, since that fact is one of the
+ * Reader's capability limits and is stated there once. The wire value stays
+ * `blanked` (see `lib/blankTag.ts`). The outcome is "blanked" and not "verified":
+ * a Tag after a Reset reads as empty, and an empty reading is the expected result
+ * rather than a failed check.
+ *
+ * The file and the component keep the name `BlankTag`, because they mirror the
+ * Rust result they render (`BlankResult`, whose outcome is still `blanked`) and the
+ * command they call (`lf_blank`). Interface copy says Reset; the wire vocabulary is
+ * not interface copy.
  *
  * Reset is also the only writability test this Reader can offer, and the
  * confirmation says so before the write (ADR 0007). The component decides
@@ -79,7 +93,7 @@ export function BlankTag({ connected, onDeviceError }: BlankTagProps) {
     onDeviceError,
   );
 
-  const blank = useCallback(
+  const resetTag = useCallback(
     async (confirmed: LfCard) => {
       setStep("writing");
       setBusy(true);
@@ -90,7 +104,7 @@ export function BlankTag({ connected, onDeviceError }: BlankTagProps) {
           data32: confirmed.data32,
         });
         setResult(res);
-        setNotice(blankNotice(res));
+        setNotice(resetNotice(res));
         // One outcome for the whole attempt: the message and the sound both come
         // from the classification Rust returned, so a tag that read back its own
         // Identity reports "will not accept writes" and sounds the attention
@@ -116,7 +130,7 @@ export function BlankTag({ connected, onDeviceError }: BlankTagProps) {
       const read = await invoke<LfCard | null>("lf_poll");
       // A re-read that still finds an Identity is the same finding the write's own
       // read-back produces, so it is worded by the same module rather than here.
-      setCheck(blankCheckNotice(read));
+      setCheck(resetCheckNotice(read));
     } catch (e) {
       setCheck({ tone: "err", text: describeDeviceFailure(e) });
     } finally {
@@ -124,22 +138,19 @@ export function BlankTag({ connected, onDeviceError }: BlankTagProps) {
     }
   }, []);
 
-  const confirmation = card ? blankConfirmation(card.id) : null;
+  const confirmation = card ? resetConfirmation(card.id) : null;
 
   return (
-    <Section
-      title="Blank a tag"
-      hint="Overwrite a Tag's Identity with nothing, so the Tag carries no assigned value."
-    >
+    <Section title={RESET_PANEL_TITLE} hint={RESET_PANEL_HINT}>
       {step === "idle" && (
         <div className="flex flex-col gap-3">
+          {/* What Reset is, in Reset's own name. What it cannot do — write a factory
+              configuration back, or unlock a tag — is one of this Reader's limits and
+              is stated once, in Settings → Diagnostics → Capability limits, rather
+              than denied again here. */}
           <p className="max-w-prose text-sm leading-relaxed text-text-muted">
-            Blanking writes a neutral Identity over the tag on the reader. The tag keeps
-            working as a tag; it simply carries no assigned value any more.
-          </p>
-          <p className="max-w-prose text-xs leading-relaxed text-text-muted">
-            This is blanking only. It is not a factory reset and it does not unlock a tag:
-            neither can be reached over this protocol.
+            Reset writes a neutral Identity over the tag on the reader. The tag keeps working
+            as a tag; it simply carries no assigned value any more.
           </p>
           <div>
             <Button
@@ -147,7 +158,7 @@ export function BlankTag({ connected, onDeviceError }: BlankTagProps) {
               disabled={!connected}
               onClick={() => setStep("await")}
             >
-              <ScanLine size={13} /> Read the tag to blank
+              <ScanLine size={13} /> {RESET_READ_CONTROL}
             </Button>
           </div>
         </div>
@@ -156,7 +167,7 @@ export function BlankTag({ connected, onDeviceError }: BlankTagProps) {
       {step === "await" && (
         <div className="flex flex-col gap-3">
           <p className="text-sm text-text-muted">
-            Tap the tag you want to blank on the reader, flat and centred.
+            Tap the tag you want to reset on the reader, flat and centred.
           </p>
           <div>
             <Button variant="ghost" onClick={reset}>
@@ -187,13 +198,9 @@ export function BlankTag({ connected, onDeviceError }: BlankTagProps) {
             </ul>
           </Notice>
 
-          <p className="max-w-prose text-xs leading-relaxed text-text-muted">
-            {confirmation.notFactoryReset}
-          </p>
-
           <div className="flex flex-wrap items-center gap-2">
-            <Button variant="danger" onClick={() => void blank(card)}>
-              <Ban size={13} /> Blank this tag permanently
+            <Button variant="danger" onClick={() => void resetTag(card)}>
+              <Ban size={13} /> {confirmation.action}
             </Button>
             <Button variant="ghost" autoFocus onClick={reset}>
               Keep the tag as it is
@@ -204,7 +211,7 @@ export function BlankTag({ connected, onDeviceError }: BlankTagProps) {
 
       {step === "writing" && (
         <p className="text-sm text-text-muted">
-          Blanking <span className="font-mono text-text">{card?.id}</span>…
+          Resetting <span className="font-mono text-text">{card?.id}</span>…
         </p>
       )}
 
@@ -223,7 +230,7 @@ export function BlankTag({ connected, onDeviceError }: BlankTagProps) {
 
           {result?.blanked && (
             <p className="max-w-prose text-xs leading-relaxed text-text-muted">
-              {BLANK_OUTCOME_HINT}
+              {RESET_OUTCOME_HINT}
             </p>
           )}
 
@@ -245,7 +252,7 @@ export function BlankTag({ connected, onDeviceError }: BlankTagProps) {
               <ScanLine size={13} /> Read the tag now
             </Button>
             <Button variant="ghost" disabled={busy} onClick={reset}>
-              <RotateCcw size={13} /> Blank another tag
+              <RotateCcw size={13} /> {RESET_ANOTHER_CONTROL}
             </Button>
           </div>
         </div>

@@ -39,7 +39,7 @@ export const PAGES: readonly PageCopy[] = [
     label: "125 kHz",
     title: "125 kHz",
     subtitle:
-      "EM4100 tags. Read an Identity, Clone it onto a Blank, author one by hand, or blank a tag.",
+      "EM4100 tags. Read an Identity, Clone it onto a Blank, author one by hand, or Reset a tag.",
   },
   {
     id: "hf",

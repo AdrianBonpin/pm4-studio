@@ -108,10 +108,11 @@ Diagnostics" has exactly one destination.
 _Avoid_: tools, debug, advanced, inspect
 
 **Reset**:
-Blanking a Tag's Identity so it carries no assigned value. Reset does **not**
-restore a factory configuration, and does **not** unlock a locked Tag. It is also
-the only way to find out whether a Tag will accept a write: no cheaper test
-exists, so the first Reset is the test.
+Writing the neutral Identity over a Tag's own, so the Tag carries no assigned
+value. Reset does **not** restore a factory configuration, and does **not** unlock
+a locked Tag. It is also the only way to find out whether a Tag will accept a
+write: no cheaper test exists, so the first Reset is the test. The Tag it leaves
+carries no Identity, which is the **Blank** a Clone writes onto.
 _Avoid_: wipe, erase, format, factory reset, restore, blank (as a verb)
 
 **Erase**:
@@ -169,9 +170,9 @@ _Avoid_: phase, stage, milestone, epic
 - "badge" was used for both the user's building credential and any arbitrary tag.
   Resolved: the object is a **Tag**; "badge" is no longer used.
 - "reset" was used for three different operations — restoring a factory
-  configuration, blanking an identity, and unlocking a chip that refuses writes.
-  Resolved: **Reset** means blanking the Identity only. The other two are not
-  possible over this protocol.
+  configuration, overwriting an Identity with the neutral one, and unlocking a chip
+  that refuses writes. Resolved: **Reset** means the second only. The other two are
+  not possible over this protocol.
 - "record" was used for both a library entry and an NDEF record. Resolved: a
   library entry is a **Snapshot**; an NDEF record is a **Record**.
 - "clone" was used for both copying an Identity and copying an NDEF message.

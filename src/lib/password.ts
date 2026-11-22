@@ -23,7 +23,8 @@
  * wording here and that decision cannot drift apart into a working "set".
  */
 
-import type { NoticeTone, WriteNotice } from "./writeOutcome";
+import type { NoticeTone } from "./noticeTone";
+import type { WriteNotice } from "./writeOutcome";
 
 /** The verb this feature uses for itself, setting. */
 export const PASSWORD_ACTION_SET = "Set a password";

@@ -23,12 +23,16 @@
  * is not a distinction.
  *
  * The symbol is not chosen here: it comes from the outcome's severity in
- * `outcome.ts`, so a message and its sound cannot disagree (ADR 0008). What this
+ * `lib/severity`, so a message and its sound cannot disagree (ADR 0008). What this
  * module adds is only the translation from that symbol into what a player has to
  * do: this many chirps, this far apart, and whether the LED stays on afterwards.
+ *
+ * There is deliberately **no** outcome-in/sequence-out function here. `report` is
+ * the only way an outcome reaches the audible half, and a helper that turned an
+ * outcome into a sequence would be a second route in — one no operation uses, which
+ * is how it would stay unnoticed while it drifted from the seam.
  */
 
-import { signalOf, type Outcome } from "./outcome";
 import { type SignalSymbol } from "./signal";
 
 /**
@@ -99,18 +103,4 @@ export function chirpSequenceFor(symbol: SignalSymbol): ChirpSequence {
     gapMs: CHIRP_GAP_MS,
     holdLedMs: symbol === "attention" ? ATTENTION_LED_HOLD_MS : 0,
   };
-}
-
-/**
- * The sequence one outcome plays: the symbol its severity produced, and that
- * symbol's count.
- *
- * This is the seam's signal half in one function. An operation reports one
- * outcome; the outcome has one severity; the severity has one symbol; the symbol
- * has one count. So a failure cannot sound like a success, and a poll that
- * latched nothing cannot sound like a poll that latched a tag the decoder then
- * rejected.
- */
-export function chirpSequenceForOutcome(outcome: Outcome): ChirpSequence {
-  return chirpSequenceFor(signalOf(outcome));
 }

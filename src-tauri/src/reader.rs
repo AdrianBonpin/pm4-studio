@@ -601,7 +601,7 @@ impl Reader {
             // found nothing — ADR 0001's first case — so it carries the cause.
             Err(e) => {
                 return LfWriteAttempt::Refused {
-                    cause: write_guard::RefusalCause::when_unreadable(),
+                    cause: write_guard::RefusalCause::Unreadable,
                     message: e,
                 }
             }

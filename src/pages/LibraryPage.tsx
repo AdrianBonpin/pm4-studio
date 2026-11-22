@@ -27,10 +27,10 @@ import {
 } from "../lib/library";
 import {
   CONFIRMED_COPIES_HINT,
-  NOTICE_TONE_CLASS,
   confirmedCopiesLabel,
   writeNotice,
 } from "../lib/writeOutcome";
+import { NOTICE_TONE_CLASS } from "../lib/noticeTone";
 import { DraftsCollection } from "./DraftsCollection";
 import type { LibraryState } from "../hooks/useLibrary";
 import type { Snapshot, SnapshotDraft, SnapshotOrder } from "../lib/library";

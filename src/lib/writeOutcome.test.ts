@@ -160,9 +160,12 @@ describe("a refusal names which condition fired", () => {
 
   it("words a tag that already carries the Identity as skipped, not as a failure", () => {
     const notice = writeNotice(alreadyCarries());
-    // A warning, not an error: nothing failed and the Tag is perfectly good, it
-    // is simply the wrong Tag.
-    expect(notice.tone).toBe("warn");
+    // A refusal, so `err` like every other refusal: the spec's table gives
+    // "failed, refused, or the tag will not accept the write; nothing changed" to
+    // the attention symbol, and the seam sounds three chirps for this. The word
+    // "Skipped" and the tag that is perfectly good are what make it not a fault;
+    // the tone is not a second, softer classification.
+    expect(notice.tone).toBe("err");
     expect(notice.text).toContain("Skipped");
     expect(notice.text).toContain("55 00 84 82 12");
     expect(notice.text).toContain("2 confirmed copies");
@@ -170,14 +173,17 @@ describe("a refusal names which condition fired", () => {
   });
 
   it("does not word the two conditions the same way", () => {
-    // Two problems with two fixes must not look identical. Both the tone and the
-    // first word differ, so neither a glance nor a screen reader can confuse
-    // "seat a tag" with "swap the tag".
+    // Two problems with two fixes must not *read* identically. The first word and
+    // the sentence differ, so neither a glance nor a screen reader can confuse
+    // "seat a tag" with "swap the tag". The tone does not differ: both are
+    // refusals the seam sounds as attention, and a tone that disagreed with the
+    // sound was the defect this replaces.
     const a = writeNotice(unreadable());
     const b = writeNotice(alreadyCarries());
-    expect(a.tone).not.toBe(b.tone);
+    expect(a.tone).toBe(b.tone);
     expect(a.text).not.toBe(b.text);
-    expect(b.text.startsWith("Not written")).toBe(false);
+    expect(a.text.startsWith("Not written")).toBe(true);
+    expect(b.text.startsWith("Skipped")).toBe(true);
   });
 
   it("counts neither condition as a copy", () => {

@@ -15,7 +15,8 @@
  * prove, before the write is offered rather than after it.
  */
 
-import type { WriteNotice } from "./writeOutcome";
+import { copyWriteKind, severityOf, toneForSeverity } from "./severity";
+import { refusalCauseOf, type WriteNotice } from "./writeOutcome";
 import type { IdentityPreview, WriteResult } from "../types";
 
 /** The two ways an Identity can be entered. */
@@ -235,20 +236,25 @@ export function authorConfirmation(
  * carries this Identity" and "kept as a Snapshot" at once.
  */
 export function authorWriteNotice(result: WriteResult, targetId: string): WriteNotice {
+  // The severity is the seam's, so this notice cannot be drawn in a calmer
+  // tone than the sound the same write made (ADR 0008).
+  const tone = toneForSeverity(
+    severityOf(copyWriteKind(result.outcome, refusalCauseOf(result))),
+  );
   switch (result.outcome) {
     case "verified":
       return {
-        tone: "ok",
+        tone,
         text: `Written and verified — the tag reads ${result.readback?.id ?? targetId}.`,
       };
     case "refused":
       return {
-        tone: "err",
+        tone,
         text: `Not written: ${result.message ?? "the reader refused the write"}`,
       };
     case "unverified":
       return {
-        tone: "warn",
+        tone,
         text:
           `Unknown: the write was sent, but the tag could not be read back, so whether ` +
           `${targetId} is on it is not known. Read the tag on the reader to find out: if it ` +
@@ -256,14 +262,14 @@ export function authorWriteNotice(result: WriteResult, targetId: string): WriteN
       };
     case "failed":
       return {
-        tone: "err",
+        tone,
         text: `Not written: the write could not be sent${result.message ? ` (${result.message})` : ""}.`,
       };
     case "blanked":
       // A hand-authored write aims at an Identity, so this cannot happen. Naming
       // it is better than wording it as a result.
       return {
-        tone: "warn",
+        tone,
         text:
           "Unexpected outcome: this write reported a blanked tag, which authoring cannot do. " +
           "Nothing here counts it as written.",
@@ -273,7 +279,7 @@ export function authorWriteNotice(result: WriteResult, targetId: string): WriteN
       // `lib/eraseTag.ts`. An authoring write places an Identity, so this
       // cannot happen either, and naming it keeps it from being worded as one.
       return {
-        tone: "warn",
+        tone,
         text:
           "Unexpected outcome: this write reported an erased tag, which authoring cannot do. " +
           "Erasing NDEF content has its own notice; nothing here counts it as written.",

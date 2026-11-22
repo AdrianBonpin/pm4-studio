@@ -8,6 +8,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Button } from "./Button";
+import { NOTICE_TONE_CLASS, NOTICE_TONES, type NoticeTone } from "../../lib/noticeTone";
 
 /**
  * A notice: a condition the user is in, drawn as a box rather than as a bar.
@@ -49,37 +50,39 @@ import { Button } from "./Button";
  *     from `lib/`), so one condition cannot be two sentences on two pages.
  */
 
-/** How much attention a notice claims. The hue is derived; it is never the only carrier. */
-export type NoticeTone = "err" | "warn" | "ok" | "muted" | "pending";
-
-/** Every tone, in severity order. Exported for the tests and for documentation. */
-export const NOTICE_TONES: readonly NoticeTone[] = ["err", "warn", "ok", "muted", "pending"];
+/**
+ * The tone vocabulary and the ink per tone are `lib/noticeTone`'s, and this module
+ * re-exports them so a site draws a notice with one import. There is exactly one
+ * `NoticeTone` in the app: the type is defined once, and the class that realises
+ * each tone as text colour is `NOTICE_TONE_CLASS`, also once.
+ */
+export type { NoticeTone };
+export { NOTICE_TONES };
 
 interface ToneStyle {
   /** The whole box: border on four sides, and a tint of the same hue. */
   readonly frame: string;
-  /** The ink of the leading label. */
-  readonly ink: string;
   /** The shape, which is the channel that survives colour blindness. */
   readonly icon: LucideIcon;
 }
 
 /**
- * Tone → the design system's own classes.
+ * Tone → the box this app draws it in: the frame on four sides and the shape of
+ * the icon. The hue's *ink* is `lib/noticeTone`'s `NOTICE_TONE_CLASS`, so a tone's
+ * colour is named once for the whole app rather than once per surface; this table
+ * adds what only a box needs. Between them they are the only classes that name a
+ * notice hue, and a call site passes a tone, never a colour.
  *
- * The hues are `src/index.css`'s tokens, and this table is the only place in the
- * app that names one for a notice — so severity cannot be expressed by a call
- * site inventing a colour, and a palette change is one edit rather than a search.
  * The intensities follow the existing surfaces: `err`/`warn` at 50% of the hue on
  * the border and 10% on the fill, `ok` one step quieter because a confirmed
  * outcome should not shout, and `muted` in the world's own hairline.
  */
 const TONE: Record<NoticeTone, ToneStyle> = {
-  err: { frame: "border-err/50 bg-err/10", ink: "text-err", icon: OctagonAlert },
-  warn: { frame: "border-warn/50 bg-warn/10", ink: "text-warn", icon: AlertTriangle },
-  ok: { frame: "border-ok/40 bg-ok/10", ink: "text-ok", icon: Check },
-  muted: { frame: "border-border bg-surface-raised/40", ink: "text-text-muted", icon: Info },
-  pending: { frame: "border-accent/50 bg-accent/10", ink: "text-accent-muted", icon: Clock },
+  err: { frame: "border-err/50 bg-err/10", icon: OctagonAlert },
+  warn: { frame: "border-warn/50 bg-warn/10", icon: AlertTriangle },
+  ok: { frame: "border-ok/40 bg-ok/10", icon: Check },
+  muted: { frame: "border-border bg-surface-raised/40", icon: Info },
+  pending: { frame: "border-accent/50 bg-accent/10", icon: Clock },
 };
 
 interface NoticeProps {
@@ -118,6 +121,7 @@ export function Notice({
   className = "",
 }: NoticeProps) {
   const style = TONE[tone];
+  const ink = NOTICE_TONE_CLASS[tone];
   const Icon = style.icon;
 
   return (
@@ -132,7 +136,7 @@ export function Notice({
       aria-label={role ? label : undefined}
       className={`rounded-lg border px-3 py-2 ${style.frame} ${className}`}
     >
-      <p className={`flex items-start gap-1.5 text-sm font-medium ${style.ink}`}>
+      <p className={`flex items-start gap-1.5 text-sm font-medium ${ink}`}>
         <Icon size={14} aria-hidden className="mt-0.5 shrink-0" />
         {label}
       </p>

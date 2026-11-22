@@ -4,7 +4,7 @@
  * Four symbols, distinguished by count and by absence (ADR 0009): one chirp is
  * *done*, two are *needs you*, three are *attention*, and silence means nothing
  * happened — which is a symbol, not a failure to signal. The symbol is not chosen
- * by whoever reports; it is derived from the outcome's severity in `outcome.ts`,
+ * by whoever reports; it is derived from the outcome's severity in `lib/severity`,
  * so a message and the sound it makes cannot disagree.
  *
  * `report` is the only caller of `emitSignal` in the app. Nothing here reaches

@@ -5,8 +5,8 @@
  * `report`, which fans out to the visible message (the toast store) and to the
  * audible signal (`lib/signal`). Neither channel can be produced without the
  * other, and neither is reachable from a component: the factories below are the
- * only things that build the text, and the tables below are the only place a
- * severity is chosen (ADR 0008).
+ * only things that build the text, and the severity each kind carries is looked up
+ * in `lib/severity` rather than decided here or at a call site (ADR 0008).
  *
  * Three properties this module is built to keep:
  *
@@ -16,9 +16,11 @@
  *    write on, the new Reset refusal, the Reader's own failures, and a build
  *    refusal. A new kind is a deliberate edit here, not a sentence invented at a
  *    call site.
- * 2. **Severity belongs to the outcome.** `SEVERITY_OF` maps each discriminator
- *    to one severity; the signal is derived from that severity by `signalFor`. So
- *    a message cannot be styled as a warning while it sounds like a failure.
+ * 2. **Severity belongs to the outcome.** One table (`lib/severity`) maps each
+ *    discriminator to one severity; the signal and the tone are both derived from
+ *    that severity. So a message cannot be styled as a warning while it sounds
+ *    like a failure — and the wording modules, which draw a notice beside the
+ *    result, read the same table instead of choosing a severity of their own.
  * 3. **Conditions are not outcomes.** A library file that cannot be written to, a
  *    migration warning, an invalid Record, a pending confirmation: those are
  *    states the user is in, they stay inline, and they have no kind here. An
@@ -30,18 +32,28 @@
  */
 
 import type {
-  BatchAttemptOutcome,
   BatchAttemptResult,
   BlankResult,
   BuildRefusal,
   EraseResult,
-  RefusalCause,
-  WriteOutcome,
   WriteResult,
 } from "../types";
 import type { SaveResult } from "./library";
 import { attemptNotice } from "./batchClone";
-import { blankNotice, WILL_NOT_ACCEPT_WRITES } from "./blankTag";
+import {
+  ALL_OUTCOME_KINDS,
+  attemptKind,
+  blankKind,
+  copyWriteKind,
+  eraseKind,
+  ndefWriteKind,
+  severityOf,
+  signalFor,
+  toneForSeverity,
+  type OutcomeKind,
+  type Severity,
+} from "./severity";
+import { resetNotice, WILL_NOT_ACCEPT_WRITES } from "./blankTag";
 import { describeClearReport, type ClearReport } from "./clearData";
 import { BUILD_REFUSAL_DETAIL, BUILD_REFUSAL_LABEL } from "./consoleRefusal";
 import { eraseNotice } from "./eraseTag";
@@ -53,8 +65,10 @@ import { pushToast } from "./toastStore";
 import { refusalCauseOf, writeNotice } from "./writeOutcome";
 import type { SignalSymbol } from "./signal";
 
-/** How much attention one outcome deserves. Chosen by the kind, never by a caller. */
-export type Severity = "info" | "success" | "warning" | "error";
+// The discriminator set and the severity tables are re-exported from the one
+// module that holds them, so nothing imports a second copy: `lib/severity`.
+export { ALL_OUTCOME_KINDS, severityOf, signalFor, toneForSeverity };
+export type { OutcomeKind, Severity };
 
 /** The operation an outcome belongs to, so a later success can clear its error. */
 export type OutcomeOperation =
@@ -98,147 +112,6 @@ export const ALL_OUTCOME_OPERATIONS: readonly OutcomeOperation[] = [
   "preferences",
 ];
 
-/**
- * What an operation did, as a closed set.
- *
- * The first group is the write-outcome vocabulary the app already spoke; the
- * rest are the Reader's own failures, a refusal caused by the build rather than
- * the tag, and the one informational kind.
- */
-export type OutcomeKind =
-  /** A Tag was read; the read is the whole result. */
-  | "read"
-  /** A read that finished but whose result wants checking: it got part of what
-   *  it went for, and says why the rest is missing. Distinct from `read` because
-   *  the sound has to be (ADR 0009), and distinct from `failed` because something
-   *  was obtained and is on screen. */
-  | "read-incomplete"
-  /** There was no Tag in the field. Nothing happened, and that is not an error. */
-  | "nothing-latched"
-  /** A read was kept in the library: the Snapshot is on disk. */
-  | "saved"
-  /**
-   * The read was already in the library, so nothing was added. Informational
-   * and silent: a repeat read is not a fault, and it did not change anything.
-   * It is still said, because a save that vanishes without a word looks like a
-   * save that failed.
-   */
-  | "already-saved"
-  /** A write whose read-back proved it. */
-  | "verified"
-  /** A Reset that left no Identity on the Tag. */
-  | "blanked"
-  /** A readout's message became a Draft. About this machine's library, not the
-   *  Tag: a Draft is authored here and no Tag was written to. */
-  | "drafted"
-  /** An erase that cleared the Tag's NDEF content. */
-  | "erased"
-  /** Saved data was cleared from this machine, by the one action allowed to.
-   *  About this app's storage, never about a Tag: erasing a Tag is `erased`. */
-  | "data-cleared"
-  /** Sent, but the read-back could not confirm it. The Tag's state is unknown. */
-  | "unverified"
-  /** Stopped before anything was sent: the guard, the tag or the frame refused. */
-  | "refused"
-  /**
-   * Nothing was written because the Tag in the write position already presents
-   * the Identity being written. ADR 0001's second refusal, named for what it is:
-   * the Tag read perfectly well, so nothing failed and nowhere needs reseating —
-   * the answer is a *different* Tag, almost always the original taken off the
-   * Reader.
-   *
-   * It is therefore a warning and not an error (two chirps, not three). That is
-   * also what keeps it audible apart from a refusal: in a batch, "that fob
-   * worked", "the tag you left on already carries it" and "nothing could be
-   * read" are three different things to hear (ADR 0009).
-   */
-  | "skipped"
-  /**
-   * Nothing was written because nothing could be read in the write position.
-   * ADR 0001's first refusal, and its own outcome rather than the generic one:
-   * the fix is to seat a Tag that reads, which is not the fix for a Tag that
-   * reads fine and is the wrong Tag.
-   */
-  | "unreadable"
-  /** Attempted and did not work. */
-  | "failed"
-  /** A Reset this Tag will not accept writes for; nothing changed. */
-  | "reset-refused"
-  /** Refused because the running build sends only non-changing commands. */
-  | "refused-by-build"
-  /** No Reader attached. */
-  | "reader-absent"
-  /** Another process holds the Reader. */
-  | "reader-claimed"
-  /** The Reader stopped answering until it is physically replugged. */
-  | "reader-wedged"
-  /** The Reader failed in a way none of the above name. */
-  | "reader-failure"
-  /** A stored preference changed. Informational: says something, sounds nothing. */
-  | "announcement"
-  /**
-   * The beeper test was pressed in Settings. An operation the user started — it
-   * sounds, and it says what was sent rather than what was heard.
-   */
-  | "beep-test";
-
-/** Every discriminator, for the exhaustiveness tests and for documentation. */
-export const ALL_OUTCOME_KINDS: readonly OutcomeKind[] = [
-  "read",
-  "read-incomplete",
-  "nothing-latched",
-  "saved",
-  "already-saved",
-  "verified",
-  "blanked",
-  "drafted",
-  "erased",
-  "data-cleared",
-  "unverified",
-  "refused",
-  "failed",
-  "skipped",
-  "unreadable",
-  "reset-refused",
-  "refused-by-build",
-  "reader-absent",
-  "reader-claimed",
-  "reader-wedged",
-  "reader-failure",
-  "announcement",
-  "beep-test",
-];
-
-/**
- * The one table that decides severity. Changing a row moves every message of
- * that kind at once — which is the point: there is no call site to hunt down.
- */
-const SEVERITY_OF: Record<OutcomeKind, Severity> = {
-  read: "success",
-  "read-incomplete": "warning",
-  "nothing-latched": "info",
-  saved: "success",
-  "already-saved": "info",
-  verified: "success",
-  blanked: "success",
-  drafted: "success",
-  erased: "success",
-  "data-cleared": "success",
-  unverified: "warning",
-  refused: "error",
-  failed: "error",
-  skipped: "warning",
-  unreadable: "error",
-  "reset-refused": "error",
-  "refused-by-build": "error",
-  "reader-absent": "warning",
-  "reader-claimed": "error",
-  "reader-wedged": "warning",
-  "reader-failure": "error",
-  announcement: "info",
-  "beep-test": "success",
-};
-
 /** A control a message can offer: reconnect the Reader, and so on. */
 export interface OutcomeAction {
   /** The button's words. */
@@ -250,7 +123,7 @@ export interface OutcomeAction {
 export interface Outcome {
   readonly kind: OutcomeKind;
   readonly operation: OutcomeOperation;
-  /** Derived from `kind` by `SEVERITY_OF`; never passed in by a caller. */
+  /** Derived from `kind` by `lib/severity`'s table; never passed in by a caller. */
   readonly severity: Severity;
   readonly message: string;
   readonly detail?: string;
@@ -261,29 +134,6 @@ export interface Outcome {
    * standing in for, without the message owning that state.
    */
   readonly onDismiss?: () => void;
-}
-
-/** The severity of one discriminator. */
-export function severityOf(kind: OutcomeKind): Severity {
-  return SEVERITY_OF[kind];
-}
-
-/**
- * The symbol a severity produces. This is the whole mapping, and it is one-way:
- * a success is one chirp, a warning is two, an error is three, and only an
- * informational outcome is silent.
- */
-export function signalFor(severity: Severity): SignalSymbol {
-  switch (severity) {
-    case "success":
-      return "done";
-    case "warning":
-      return "needs-you";
-    case "error":
-      return "attention";
-    case "info":
-      return "silent";
-  }
 }
 
 /** The signal one outcome produces, derived from its severity alone. */
@@ -301,40 +151,7 @@ function make(
   message: string,
   rest: Omit<Partial<Outcome>, "kind" | "operation" | "severity" | "message"> = {},
 ): Outcome {
-  return { kind, operation, severity: SEVERITY_OF[kind], message, ...rest };
-}
-
-/**
- * The discriminator a refusal gets from the condition the guard reported.
- *
- * `null` — no cause established — stays on the generic refusal, which is an
- * error: so does a cause the app has never heard of, because softening an
- * unknown refusal into a skip would tell the user the wrong Tag is the only
- * problem when nobody established that.
- */
-function refusalKind(cause: RefusalCause | null): OutcomeKind {
-  if (cause === "already-carries") return "skipped";
-  if (cause === "unreadable") return "unreadable";
-  return "refused";
-}
-
-/**
- * The discriminator one batch attempt gets.
- *
- * The attempt's own vocabulary decides first, because `skipped` is the batch's
- * word for a Tag that already carries the Identity — the same condition the
- * single-clone guard learns only from the cause. A `refused` attempt is split by
- * its cause so an unreadable write position is named as one.
- */
-function attemptKind(result: BatchAttemptResult): OutcomeKind {
-  const byOutcome: Record<BatchAttemptOutcome, OutcomeKind> = {
-    verified: "verified",
-    skipped: "skipped",
-    unverified: "unverified",
-    failed: "failed",
-    refused: refusalKind(result.refusalCause),
-  };
-  return byOutcome[result.outcome];
+  return { kind, operation, severity: severityOf(kind), message, ...rest };
 }
 
 /**
@@ -417,15 +234,8 @@ export const outcomes = {
    * places no copy — so it is reported as a failure rather than as success.
    */
   write(operation: "write" | "clone" | "batch", result: WriteResult): Outcome {
-    const kind: Record<WriteResult["outcome"], OutcomeKind> = {
-      verified: "verified",
-      refused: refusalKind(refusalCauseOf(result)),
-      unverified: "unverified",
-      failed: "failed",
-      blanked: "failed",
-      erased: "failed",
-    };
-    return make(kind[result.outcome], operation, writeNotice(result).text);
+    const kind = copyWriteKind(result.outcome, refusalCauseOf(result));
+    return make(kind, operation, writeNotice(result).text);
   },
 
   /**
@@ -454,9 +264,10 @@ export const outcomes = {
    * nothing in the write position to write to.
    *
    * This is the condition the guard refuses a write on, caught at the read
-   * instead of at the write — so it is the same outcome kind and the same sound,
-   * and the remedy is the same one: take the original off, put the blank on.
-   * Nothing was sent, so nothing is counted.
+   * instead of at the write — so it is the same outcome kind and the same sound
+   * (attention: a refusal is three chirps, spec's alphabet table), and the remedy
+   * is the same one: take the original off, put the blank on. Nothing was sent,
+   * so nothing is counted.
    */
   cloneSourceStillInPlace(identity: string): Outcome {
     return make(
@@ -525,29 +336,16 @@ export const outcomes = {
   },
   /** What became of one Reset, in the blanking copy's own words. */
   blank(result: BlankResult): Outcome {
-    const kind: Record<BlankResult["outcome"], OutcomeKind> = {
-      blanked: "blanked",
-      refused: "refused",
-      unverified: "unverified",
-      failed: "failed",
-      // The tag read back its own Identity after the write: this tag will not
-      // accept writes. Not `failed` (which says the attempt is the problem) and
-      // not `unverified` (which says nothing is known) — the state of the tag is
-      // known, and it is the useful finding (ADR 0007).
-      willNotAcceptWrites: "reset-refused",
-    };
-    return make(kind[result.outcome], "reset", blankNotice(result).text);
+    // The tag that read back its own Identity after the write is `reset-refused`:
+    // not `failed` (which says the attempt is the problem) and not `unverified`
+    // (which says nothing is known) — the state of the tag is known, and it is
+    // the useful finding (ADR 0007). `blankKind` is the one place that says so.
+    return make(blankKind(result.outcome), "reset", resetNotice(result).text);
   },
 
   /** What became of one NDEF erase, in the erasing copy's own words. */
   erase(result: EraseResult): Outcome {
-    const kind: Record<EraseResult["outcome"], OutcomeKind> = {
-      erased: "erased",
-      refused: "refused",
-      unverified: "unverified",
-      failed: "failed",
-    };
-    return make(kind[result.outcome], "erase", eraseNotice(result).text);
+    return make(eraseKind(result.outcome), "erase", eraseNotice(result).text);
   },
 
   /**
@@ -561,15 +359,7 @@ export const outcomes = {
    * and is reported as a failure rather than as a success nobody would believe.
    */
   ndefWrite(result: NdefWriteResult): Outcome {
-    const kind: Record<WriteOutcome, OutcomeKind> = {
-      verified: "verified",
-      unverified: "unverified",
-      refused: "refused",
-      failed: "failed",
-      blanked: "failed",
-      erased: "failed",
-    };
-    return make(kind[result.outcome], "write", ndefWriteNotice(result).text);
+    return make(ndefWriteKind(result.outcome), "write", ndefWriteNotice(result).text);
   },
 
   /**
@@ -686,8 +476,10 @@ export const outcomes = {
   /**
    * The Reader itself failed. The classification decides the kind, so the
    * severity and the remedy come from the same answer: an unplugged Reader is a
-   * warning with the plug-in remedy, a Reader held by another process is an error
-   * telling you to close it.
+   * *state* — said on screen, silent, with the plug-in remedy; a Reader held by
+   * another process is an error telling you to close it; a Reader that stopped
+   * answering is attention, because it is present and broken and only a replug
+   * clears it.
    *
    * The shell used to render this as a strip that pushed the page down; it now
    * arrives here, carrying the reconnect action the strip offered.
@@ -743,7 +535,11 @@ export const outcomes = {
   dataCleared(report: ClearReport): Outcome {
     const notice = describeClearReport(report);
     const kind: OutcomeKind =
-      notice.tone === "ok" ? "data-cleared" : notice.tone === "info" ? "announcement" : "refused";
+      notice.tone === "ok"
+        ? "data-cleared"
+        : notice.tone === "muted"
+          ? "announcement"
+          : "refused";
     return make(kind, "preferences", notice.title, { detail: notice.detail });
   },
 
@@ -766,6 +562,26 @@ export const outcomes = {
       detail:
         "The same signal a completed operation makes. The firmware never confirms that " +
         "the buzzer sounded.",
+    });
+  },
+
+  /**
+   * The LED-off frame was sent: Settings → Diagnostics' second actuator.
+   *
+   * The same rule as the beeper test — the operation reports itself through the
+   * seam rather than setting a line of local state, so a success and a failure are
+   * two different results instead of one string — with one difference that is the
+   * point: `0x0055` is not a beep, so this outcome is silent. The message says
+   * which frame was sent, never what was seen; the firmware acknowledges neither.
+   *
+   * A failure is not this factory: a frame that could not be sent is
+   * `readerFailure`, because that is what went wrong.
+   */
+  ledOff(): Outcome {
+    return make("led-off", "preferences", "LED off sent.", {
+      detail:
+        "0x0055 releases the LED. It is the LED-off frame, not a beep: nothing chirped, " +
+        "and the firmware confirms neither frame.",
     });
   },
 
