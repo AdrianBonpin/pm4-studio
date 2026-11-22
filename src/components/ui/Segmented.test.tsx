@@ -24,6 +24,13 @@ import { renderUi } from "../../test/dom";
  * hand-rolled switcher is the failure this component exists to prevent, and a
  * look-alike that happens to satisfy the contract behaviourally still diverges
  * the first time the switch changes shape.
+ *
+ * One block after it scans for the pill for the same reason. The switch is a
+ * 4px chip and a button is a 6px rectangle (DESIGN.md, "Shapes"); neither number
+ * is asserted here, because a class string cannot honestly own a painted radius.
+ * What is asserted is only the thing a class string *can* own: that the fully
+ * rounded shape is not drawn by a control any more, so the next restyle has to
+ * argue with this file before it hands a switcher or a button the pill back.
  */
 
 /** A three-option switch, and the value it was last asked for. */
@@ -171,6 +178,44 @@ const NOT_A_SWITCHER: Record<string, string> = {
   "../WriteDraftMode.tsx":
     "a Draft row: the row is the saved thing, and choosing one opens it beside the list",
 };
+
+/**
+ * The only two places a fully rounded surface remains, and why each one holds.
+ *
+ * An exemption needs a reason and is checked like the design allow-list: an
+ * unexplained one is how this guard stops guarding. The Toggle is the one pill
+ * left in the interface because a switch is a physical affordance and reads as
+ * one — its track and its knob are the same shape for the same reason. The
+ * bullet dot is a marker on a line of prose: it carries no action, is eight
+ * pixels square and is not a control at all.
+ */
+const PILL: Record<string, string> = {
+  "./Toggle.tsx":
+    "the Toggle: a switch is a physical affordance, and its track and knob are the same pill",
+  "../ClearSavedData.tsx":
+    "a decorative bullet dot on a line of prose — a marker, not a control",
+};
+
+describe("the shape vocabulary", () => {
+  it("draws the pill for the Toggle and nothing else", () => {
+    for (const [file, source] of Object.entries(SOURCES)) {
+      if (file in PILL) continue;
+      expect(source, file).not.toContain("rounded-full");
+    }
+  });
+
+  it("still finds the pill where it is named, so the scan is not vacuous", () => {
+    for (const [file, reason] of Object.entries(PILL)) {
+      expect(SOURCES[file], file).toBeTruthy();
+      expect(reason.trim().length, file).toBeGreaterThan(0);
+      expect(SOURCES[file], file).toContain("rounded-full");
+    }
+
+    // A pill written some other way would pass this scan; it guards the utility
+    // the codebase draws pills with, not every possible pill.
+    expect(SOURCES[SWITCHER]).toBeTruthy();
+  });
+});
 
 describe("a second switcher", () => {
   it("does not exist: pressed options are reported by the switch and by nothing else", () => {

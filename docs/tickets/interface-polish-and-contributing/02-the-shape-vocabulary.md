@@ -20,12 +20,12 @@ old chip implementations survive.
   and padding values, which are not rules it encodes. The rendered result at both
   viewports is the evidence for the shape itself.
 
-- [ ] Every switcher sits on one row at 900×700 with every label on a single line, options 4px-cornered with 2px above and below the label.
-- [ ] Every action button has a 6px corner, and its four variants stay distinguishable by fill, border and ink rather than by corner.
-- [ ] The Toggle is the only fully rounded control in the app.
-- [ ] `DESIGN.md`'s radii, its buttons section and its Do's describe what the app does now, with no line left pinning buttons to a pill.
-- [ ] No allow-list entry is added to the design check to make the new classes pass.
-- [ ] `bun run design:check` and `bun run verify` pass.
+- [x] Every switcher sits on one row at 900×700 with every label on a single line, options 4px-cornered with 2px above and below the label.
+- [x] Every action button has a 6px corner, and its four variants stay distinguishable by fill, border and ink rather than by corner.
+- [x] The Toggle is the only fully rounded control in the app.
+- [x] `DESIGN.md`'s radii, its buttons section and its Do's describe what the app does now, with no line left pinning buttons to a pill.
+- [x] No allow-list entry is added to the design check to make the new classes pass.
+- [x] `bun run design:check` and `bun run verify` pass.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/38
-**Status:** ready
+**Status:** done
