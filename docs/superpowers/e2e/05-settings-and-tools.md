@@ -90,8 +90,10 @@ list that this pass cannot check is the phrase "verified on hardware": nothing i
 this directory is hardware evidence. The follow-up ticket
 `docs/tickets/studio-redesign-followups/the-capability-limits-contradict-the-app.md`
 is marked done, and this report now agrees with it instead of contradicting it.
-[08-findings.md](08-findings.md) still carries F1 as an open finding and is owned
-by another ticket; it was not edited here.
+[08-findings.md](08-findings.md) records F1 as **fixed** — its status table names
+`9189c35`, integrated in `2febeea` — so the two reports agree; 08 keeps the finding's
+original words as the record of what the verification saw, which is why its detail
+section still quotes the retired sentences.
 
 ## Tools
 
@@ -124,7 +126,10 @@ The seven buttons sum to 720.7 px of width; with the six 8 px gaps between them 
 single row would need about 769 px, which is why it wraps at both sizes. Every
 button is 29.7 px tall at both widths, so **no preset's own label wraps onto a
 second line** — the row reflows between buttons, and the minimum-size no-wrap
-criterion holds.
+criterion holds. [06-long-label-sweep.md](06-long-label-sweep.md) records the same
+row as 722 px of buttons and 770 px with the gaps; the 1–2 px difference is the
+method (summed `getBoundingClientRect` widths here, the row's own extents there),
+not a disagreement about the wrap.
 
 **Limitation of this verification, stated plainly:** this is a **development**
 build, and the raw console asks the backend what it is allowed to send
