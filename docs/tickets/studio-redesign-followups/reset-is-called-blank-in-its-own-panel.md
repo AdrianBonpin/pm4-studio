@@ -10,10 +10,10 @@
 
 **Tracker:** None
 
-**Status:** ready
+**Status:** done
 
-- [ ] The panel heading, its controls and its outcome words say **Reset**, and the verb "blank" as an action the user performs is gone from the 125 kHz page's copy. "Blank" as a *noun* — the Blank a Reset consumes, as the glossary defines it — stays: `Clone` and `Batch` write Identities onto Blanks and that word is correct there.
-- [ ] The page subtitle no longer ends "…or blank a tag".
-- [ ] The outcome that a successful Reset produces is still worded as *blanked* on the wire (`BlankResult.outcome`) — this is interface copy, not the wire vocabulary, and changing the wire value would break the library count rule for no gain.
-- [ ] The sentence denying a factory restore is not deleted, only moved or shortened: whether Reset can restore or unlock is stated once, in Settings → Diagnostics → Capability limits, which already says it.
-- [ ] A test asserts the mode's name and its panel's words agree, so the two cannot drift apart again.
+- [x] The panel heading, its controls and its outcome words say **Reset**, and the verb "blank" as an action the user performs is gone from the 125 kHz page's copy. "Blank" as a *noun* stays, in Clone and Batch. — `lib/blankTag`: `RESET_PANEL_TITLE` "Reset a tag", `RESET_READ_CONTROL` "Read the tag to reset", `RESET_ACTION_LABEL` "Reset this tag permanently", `RESET_ANOTHER_CONTROL` "Reset another tag", and `resetNotice` words the outcome "Reset — the tag no longer presents an Identity" / "Not reset: …".
+- [x] The page subtitle no longer ends "…or blank a tag". — `lib/pageCopy.ts`: "…author one by hand, or Reset a tag."
+- [x] The outcome that a successful Reset produces is still worded as *blanked* on the wire (`BlankResult.outcome`) — this is interface copy, not the wire vocabulary. — unchanged: `BlankResult`, `lf_blank` and `src-tauri/src/blank.rs` are untouched, and `reporting.test.tsx` still asserts `kind: "blanked"`.
+- [x] The sentence denying a factory restore is not deleted, only moved or shortened: whether Reset can restore or unlock is stated once, in Settings → Diagnostics → Capability limits. — the panel's paragraph is gone; `READER_CAPABILITY_LIMITS`' *Factory restore and unlock* entry carries the fact ("Not possible. … cannot be recovered"), and `lib/blankTag.test.ts` → "leaves the factory-restore denial where the limits are stated once" fails if that entry loses it.
+- [x] A test asserts the mode's name and its panel's words agree. — `lib/blankTag.test.ts` → "the mode and its panel say the same word": the pill's label comes from `lib/lfModes`, and `RESET_PANEL_TITLE`, `RESET_ACTION_LABEL`, `RESET_ANOTHER_CONTROL`, the confirmation's title and `RESET_READ_CONTROL` must all carry it, plus "never uses 'blank' as the verb for what the user does" over the panel's whole copy.

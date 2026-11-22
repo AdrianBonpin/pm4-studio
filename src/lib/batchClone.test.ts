@@ -167,7 +167,11 @@ describe("the identical-tag hazard", () => {
 
   it("says a skip is not a copy, and is not a failure to seat a tag", () => {
     const notice = attemptNotice(skipped());
-    expect(notice.tone).toBe("warn");
+    // A skip is the guard refusing a write, so it is drawn and sounded as a
+    // refusal (err / attention). It was `warn` here, which made a refusal look
+    // like "completed, result needs checking" — and meant the inline line was
+    // calmer than the three chirps the same attempt made.
+    expect(notice.tone).toBe("err");
     expect(notice.text).toContain("55 00 84 82 12");
     expect(notice.text).toContain("nothing was written");
     expect(notice.text).toContain("Not counted as another copy");
@@ -212,7 +216,9 @@ describe("each attempt reports itself", () => {
     };
 
     expect(notices.verified.tone).toBe("ok");
-    expect(notices.skipped.tone).toBe("warn");
+    // skipped and refused are both refusals, so both are `err`; only "unknown"
+    // is a warning, because only it is a result that completed and needs a look.
+    expect(notices.skipped.tone).toBe("err");
     expect(notices.unverified.tone).toBe("warn");
     expect(notices.refused.tone).toBe("err");
     expect(notices.failed.tone).toBe("err");

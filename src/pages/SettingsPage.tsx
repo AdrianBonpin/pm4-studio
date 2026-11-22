@@ -487,12 +487,13 @@ function AboutGroup({ reader }: { reader: ReaderSummary }) {
 /**
  * Diagnostics: what this Reader can be made to do, and what it never will.
  *
- * The indicator test drives the two actuators the firmware exposes. The beep goes
- * through the seam like every other sound, because a component that reaches the
- * beeper directly is the defect ADR 0008 exists to prevent; so the press reports
- * what actually happened — including when the quiet level declined to play it.
- * The LED-off frame is not a beeper call, so it is sent directly and the page says
- * which frame it sent rather than claiming what was seen.
+ * The indicator test drives the two actuators the firmware exposes, and both
+ * report through the seam: a component that reaches the hardware and puts the
+ * result in its own state is the defect ADR 0008 exists to prevent, whether or not
+ * the result makes a sound. The beep reports what actually happened, including
+ * when the quiet level declined to play it. The LED-off frame is not a beep, so
+ * its outcome is silent by kind (`led-off`), and it says which frame was sent
+ * rather than claiming what was seen.
  *
  * The capability limits are rendered here and nowhere else — `ReaderLimits` — so a
  * limitation is stated once instead of against every Tag that trips over it.
@@ -504,15 +505,17 @@ function DiagnosticsGroup({
   connected: boolean;
   quietLevel: QuietLevel;
 }) {
-  const [note, setNote] = useState<string | null>(null);
-
   const ledOff = async () => {
-    setNote(null);
     try {
       await invoke("led_off");
-      setNote("LED off sent. 0x0055 is the LED-off frame, not a beep.");
+      // Through the seam like the beep test beside it: one outcome, so a sent
+      // frame and a failed one are two different results rather than two strings
+      // in local state. It is silent because `0x0055` is not a beep.
+      report(outcomes.ledOff());
     } catch (e) {
-      setNote(String(e));
+      // The frame did not go. That is the Reader's failure, with its own remedy —
+      // never an "LED off sent" that was not sent.
+      report(outcomes.readerFailure(e));
     }
   };
 
@@ -538,7 +541,6 @@ function DiagnosticsGroup({
             LED off <span className="font-mono text-[11px] opacity-70">0x55</span>
           </Button>
         </div>
-        {note && <p className="mt-3 text-xs leading-relaxed text-text-muted">{note}</p>}
         <p className="mt-3 max-w-prose text-xs leading-relaxed text-text-muted">
           No LED-on-only command has been identified — 0x0053 is the only thing seen to
           light it, and it always chirps first.

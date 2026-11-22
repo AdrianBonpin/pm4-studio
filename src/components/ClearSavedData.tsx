@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
-import { Notice, type NoticeTone } from "./ui/Notice";
+import { Notice } from "./ui/Notice";
 import { Section } from "./Section";
 import {
   CLEAR_GATE_WORD,
@@ -138,13 +138,6 @@ function ClearTarget({ children }: { children: string }) {
   );
 }
 
-/** The tone per notice, in the notice treatment's own vocabulary. */
-const NOTICE_TONE: Record<ClearNotice["tone"], NoticeTone> = {
-  ok: "ok",
-  err: "err",
-  info: "muted",
-};
-
 /**
  * What the action did, exactly.
  *
@@ -156,7 +149,7 @@ const NOTICE_TONE: Record<ClearNotice["tone"], NoticeTone> = {
  */
 function ClearResult({ notice, report }: { notice: ClearNotice; report: ClearReport }) {
   return (
-    <Notice tone={NOTICE_TONE[notice.tone]} role="status" label={notice.title}>
+    <Notice tone={notice.tone} role="status" label={notice.title}>
       <p className="max-w-prose text-xs leading-relaxed text-text-muted">{notice.detail}</p>
       {report.removed.length > 0 && (
         <ul className="flex flex-col gap-1">

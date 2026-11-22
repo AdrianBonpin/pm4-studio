@@ -11,14 +11,14 @@ import {
   type OutcomeKind,
   type Severity,
 } from "./outcome";
-import { ATTENTION_LED_HOLD_MS, chirpSequenceForOutcome } from "./chirpSequence";
+import { ATTENTION_LED_HOLD_MS, chirpSequenceFor } from "./chirpSequence";
 import { subscribeSignals, type SignalSymbol } from "./signal";
 import { toastStore } from "./toastStore";
 import type { NdefWriteResult } from "./tagWrite";
 import { BUILD_REFUSAL_LABEL } from "./consoleRefusal";
 import { writeNotice } from "./writeOutcome";
 import { attemptNotice } from "./batchClone";
-import { blankNotice } from "./blankTag";
+import { resetNotice } from "./blankTag";
 import { eraseNotice } from "./eraseTag";
 import type { BatchAttemptResult, BlankResult, EraseResult, WriteResult } from "../types";
 import type { LibraryView, SaveResult, Snapshot } from "./library";
@@ -57,15 +57,17 @@ const EXPECTED_SEVERITY: Record<OutcomeKind, Severity> = {
   unverified: "warning",
   refused: "error",
   failed: "error",
-  skipped: "warning",
+  skipped: "error",
   unreadable: "error",
   "reset-refused": "error",
   "refused-by-build": "error",
-  "reader-absent": "warning",
+  "reader-absent": "info",
   "reader-claimed": "error",
-  "reader-wedged": "warning",
+  "reader-wedged": "error",
   "reader-failure": "error",
   announcement: "info",
+  // The LED-off frame is not a beep: said on screen, nothing sounded.
+  "led-off": "info",
 };
 
 /** The symbol each severity must produce. Silent is a symbol, not a fallback. */
@@ -203,6 +205,7 @@ describe("the discriminator set", () => {
         "drafted",
         "erased",
         "failed",
+        "led-off",
         "nothing-latched",
         "read",
         "read-incomplete",
@@ -287,6 +290,7 @@ describe("report", () => {
       outcomes.write("write", writeResult("failed")),
       outcomes.nothingLatched("read"),
       outcomes.announcement("Feedback preferences saved."),
+      outcomes.ledOff(),
     ]) {
       expect(outcome.severity).toBe(severityOf(outcome.kind));
     }
@@ -403,7 +407,7 @@ describe("an outcome built from the write-outcome vocabulary", () => {
   it("words blanking with the blanking copy, and calls it Reset", () => {
     const outcome = outcomes.blank(BLANK);
     expect(outcome.kind).toBe("blanked");
-    expect(outcome.message).toBe(blankNotice(BLANK).text);
+    expect(outcome.message).toBe(resetNotice(BLANK).text);
     expect(outcome.operation).toBe("reset");
   });
 
@@ -446,7 +450,7 @@ describe("a Reset the tag would not accept", () => {
   });
 
   it("keeps the blanking copy's words rather than inventing its own", () => {
-    expect(outcomes.blank(WILL_NOT_ACCEPT).message).toBe(blankNotice(WILL_NOT_ACCEPT).text);
+    expect(outcomes.blank(WILL_NOT_ACCEPT).message).toBe(resetNotice(WILL_NOT_ACCEPT).text);
     expect(outcomes.blank(WILL_NOT_ACCEPT).message).toContain("will not accept writes");
     expect(outcomes.blank(WILL_NOT_ACCEPT).message).toMatch(/already (been )?written/i);
     expect(outcomes.blank(WILL_NOT_ACCEPT).message).toMatch(/never writable/i);
@@ -457,7 +461,7 @@ describe("a Reset the tag would not accept", () => {
     const outcome = outcomes.blank(WILL_NOT_ACCEPT);
     expect(signalOf(outcome)).toBe("attention");
 
-    const sequence = chirpSequenceForOutcome(outcome);
+    const sequence = chirpSequenceFor(signalOf(outcome));
     expect(sequence.chirps).toBe(3);
     expect(sequence.holdLedMs).toBe(ATTENTION_LED_HOLD_MS);
     expect(sequence.holdLedMs).toBe(2_000);
@@ -515,8 +519,12 @@ describe("a device failure", () => {
       action: { label: "Reconnect", run: reconnect },
     });
 
+    // A wedged Reader is present and broken: every operation attempted meanwhile
+    // fails and only a physical replug clears it, which is the alphabet's
+    // "failed, nothing changed" — attention, three chirps.
     expect(outcome.kind).toBe("reader-wedged");
-    expect(outcome.severity).toBe("warning");
+    expect(outcome.severity).toBe("error");
+    expect(signalOf(outcome)).toBe("attention");
     expect(outcome.operation).toBe("reader");
     expect(outcome.message).toBe("The Reader stopped responding");
     expect(outcome.detail).toContain("Unplug the Reader");
@@ -533,10 +541,17 @@ describe("a device failure", () => {
     expect(outcome.severity).toBe("error");
   });
 
-  it("is a warning when no Reader is attached, and keeps the plug-in remedy", () => {
+  it("is a silent state when no Reader is attached, and keeps the plug-in remedy", () => {
+    // An unplugged Reader is a normal state, not a fault — `hooks/useReader` says
+    // so, and `deviceFailureNotice("absent")` has always had the quiet tone. So it
+    // is said on screen and it does not sound: the spec's silent symbol is
+    // "nothing happened, nothing to act on, not an error", and the beeper that
+    // would have to sound it is on the Reader that is not there. Reported as a
+    // warning it chirped twice on every launch, which is not news.
     const outcome = outcomes.readerFailure("no such device: failed to open the Reader");
     expect(outcome.kind).toBe("reader-absent");
-    expect(outcome.severity).toBe("warning");
+    expect(outcome.severity).toBe("info");
+    expect(signalOf(outcome)).toBe("silent");
     expect(outcome.detail).toContain("Plug the NFC-PM4 Reader");
   });
 
@@ -572,15 +587,20 @@ describe("the two conditions a write can be refused on", () => {
     expect(a.message).not.toBe(b.message);
   });
 
-  it("sound different, because the fixes are different", () => {
+  it("both sound attention, because both are refusals", () => {
     // "seat a tag that reads" and "this is the original, swap it" are two
-    // different errands. One is an error; the other is a skip, which needs you
-    // but means nothing failed.
-    const unreadableSignal = signalOf(outcomes.write("clone", unreadable()));
-    const skipSignal = signalOf(outcomes.write("clone", alreadyCarries()));
-    expect(unreadableSignal).toBe("attention");
-    expect(skipSignal).toBe("needs-you");
-    expect(unreadableSignal).not.toBe(skipSignal);
+    // different errands, and their *words* stay apart. Their *sound* does not:
+    // the spec's table gives three chirps to "failed, refused, or the tag will
+    // not accept the write; nothing changed", and a skip is the guard refusing.
+    // It used to be two chirps here, on the reasoning that the wrong tag is
+    // friendlier than a failure — which made a refusal sound like "completed,
+    // result needs checking", the one thing a refusal is not, and contradicted
+    // `outcomes.write`'s own promise that a refusal cannot sound like a success.
+    const unreadableOutcome = outcomes.write("clone", unreadable());
+    const skipOutcome = outcomes.write("clone", alreadyCarries());
+    expect(signalOf(unreadableOutcome)).toBe("attention");
+    expect(signalOf(skipOutcome)).toBe("attention");
+    expect(unreadableOutcome.message).not.toBe(skipOutcome.message);
   });
 
   it("is still a plain refusal when no cause was reported", () => {
@@ -625,11 +645,12 @@ describe("the reads a clone is made of", () => {
 
     expect(outcome.kind).toBe("skipped");
     expect(outcome.operation).toBe("clone");
-    expect(outcome.severity).toBe("warning");
+    // A skip is the guard's refusal, so it is attention like every other refusal.
+    expect(outcome.severity).toBe("error");
     expect(outcome.message).toContain("55 00 84 82 12");
     expect(outcome.message).toMatch(/original/i);
     expect(outcome.detail).toMatch(/nothing was written/i);
-    expect(signalOf(outcome)).toBe("needs-you");
+    expect(signalOf(outcome)).toBe("attention");
   });
 });
 
@@ -658,11 +679,15 @@ describe("one batch attempt", () => {
     const results = [verified, skipped, refused].map((r) => outcomes.batchAttempt(r));
 
     expect(results.map((o) => o.kind)).toEqual(["verified", "skipped", "unreadable"]);
-    // Three different messages...
+    // Three different messages, and the verified one is the only one that sounds
+    // "done" — so which fob worked is audible.
     expect(new Set(results.map((o) => o.message)).size).toBe(3);
-    // ...and three different sounds, so which fob worked is audible.
-    expect(results.map((o) => signalOf(o))).toEqual(["done", "needs-you", "attention"]);
-    expect(new Set(results.map((o) => signalOf(o))).size).toBe(3);
+    expect(results.map((o) => signalOf(o))).toEqual(["done", "attention", "attention"]);
+    // The two refusals sound the same on purpose: the alphabet has one symbol for
+    // "refused, nothing changed" (spec's table), and the ledger, not the beeper,
+    // is what tells "already carries it" from "nothing readable". A fifth sound
+    // was the alternative, and a distinction that cannot be heard is not one.
+    expect(results[1]!.kind).not.toBe(results[2]!.kind);
   });
 
   it("never lets a skip or a refusal be heard as a copy", () => {
@@ -702,7 +727,10 @@ describe("the beeper test", () => {
     expect(outcome.kind).toBe("reader-absent");
     expect(outcome.operation).toBe("preferences");
     expect(outcome.message).toBe("No signal was sent.");
-    expect(outcome.severity).toBe("warning");
+    // No Reader is a state, not a fault, so the press says so and stays silent:
+    // there is nothing to sound on, and no chip to have chirped.
+    expect(outcome.severity).toBe("info");
+    expect(signalOf(outcome)).toBe("silent");
     expect(`${outcome.message} ${outcome.detail}`).not.toMatch(/heard|sounded/i);
   });
 
@@ -760,6 +788,7 @@ describe("every outcome the vocabulary can build", () => {
     outcomes.librarySaved(savedResult("refused")),
     outcomes.librarySaveFailed("the library file could not be reached"),
     outcomes.beepTest(),
+    outcomes.ledOff(),
     outcomes.beepTestNoReader(),
     outcomes.beepTestMuted("errors-and-warnings"),
     outcomes.draftedFromRead("04 43 8A 01 22 09 03", 2),

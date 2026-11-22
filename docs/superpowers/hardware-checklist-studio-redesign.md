@@ -307,8 +307,9 @@ minutes.
    looking at the screen.
 5. Then judge the **gap**: are two chirps unambiguously two, or does a fast double
    blur into one longer sound? If it blurs, the constant to change is
-   `CHIRP_GAP_MS` in `src/lib/chirpSequence.ts` (**currently 120 ms**, nominal, per
-   the spec's open question), and the value that works is what this item records.
+   `CHIRP_GAP_MS` in `src/lib/chirpSequence.ts` (**120 ms when this runbook was
+   written**, and changed here to what this item recorded), and the value that
+   works is what this item records.
 
 **Expected observation**
 

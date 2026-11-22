@@ -21,10 +21,10 @@
 //! to tell which half.
 //!
 //! The webview's own storage — the legacy saved-reads store and the preference
-//! keys — is not reachable from this process, so [`crate::clear_data`]'s
-//! counterpart `src/lib/clearData.ts` removes those and joins them to this
-//! report. The two halves are one action in the interface, but only this half
-//! touches the filesystem.
+//! keys — is not reachable from this process, so the webview half of the same
+//! action, `src/lib/clearData.ts`, removes those and joins them to this report.
+//! The two halves are one action in the interface, but only this half touches the
+//! filesystem.
 //!
 //! Why deleting here is not a second write path
 //! ---------------------------------------------

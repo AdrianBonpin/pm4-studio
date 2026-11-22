@@ -56,8 +56,20 @@ tag settle.
 **Status:** ready
 
 - [ ] A second Reset of a freshly blanked T5577 reports *refused — nothing to
-      blank* (1 chirp, no LED hold), distinctly from *will not accept writes*:
-      nothing was transmitted, so no claim about the chip is made.
+      blank* **as a refusal: three chirps and the two-second LED hold**, and
+      distinctly from *will not accept writes*: nothing was transmitted, so no
+      claim about the chip is made.
+      *Corrected: this criterion said "1 chirp, no LED hold". That was wrong twice
+      over. The spec's alphabet table gives three chirps and the LED hold to
+      "failed, refused, or the tag will not accept the write; nothing changed", and
+      the spec's hardware item 11 already says *nothing to blank* is three chirps;
+      and a refusal that sounds like *done* is the exact defect the audible
+      alphabet exists to remove. What makes this outcome its own is its words and
+      its kind (`refused`, with "nothing to blank" in the reason), not a quieter
+      sound. Verified in the tree: `BlankResult.outcome === "refused"` →
+      `blankKind` → kind `refused` → severity `error` → `attention` → 3 chirps +
+      `ATTENTION_LED_HOLD_MS` (`src/lib/severity.ts`, `src/lib/blankTag.ts`,
+      `src/lib/chirpSequence.ts`).*
 - [ ] A blanking write that **was** sent to a chip that keeps its Identity reports
       *will not accept writes*: three chirps, the LED held for two seconds, no
       copy counted.

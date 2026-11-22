@@ -170,7 +170,11 @@ describe("the confirmation", () => {
     const facts = confirmation.facts.map((fact) => `${fact.title} ${fact.detail}`).join(" ");
     expect(facts).toContain("The tag stays a tag");
     expect(facts).toContain("does not destroy the tag or change its format");
-    expect(facts).toContain("Pages 0 to 3");
+    // "Pages 0 to 3 are never written" is a fact about the erase's *extent*, so it
+    // moved into `where` with the rest of the extent when the third fact that
+    // restated it was cut. The claim is still made, once, before the button.
+    expect(confirmation.where).toContain("Pages 0 to 3");
+    expect(confirmation.where).toContain("never written");
     // No fact may claim the tag cannot be written afterwards.
     expect(facts).not.toContain("read-only");
   });

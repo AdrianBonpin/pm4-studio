@@ -19,10 +19,10 @@ Nothing else in the app puts its own action buttons into the overflow: every oth
 
 **Tracker:** None
 
-**Status:** ready
+**Status:** done
 
-- [ ] The confirmation's own buttons are inside the content viewport at 900×700, with the copy that remains above them.
-- [ ] The copy says what the erase destroys, that the tag stays a tag, and that only the message area is written — and nothing else. The paragraphs that restate the same point (that an erased tag is still a tag, that pages 0–3 are untouched, that locking is not possible, that password protection is not removed) are candidates for one sentence each or for the capability limits, which already state the locking and password facts once.
-- [ ] Every fact the current copy carries that is not stated anywhere else in the app stays somewhere: the check is that removing a paragraph does not remove a fact the user needs before consenting.
-- [ ] The copy is judged against the spec's "too much text" complaint, not merely shortened until it fits.
-- [ ] A gate catches the class rather than this instance: either the visual sweep asserts that every confirmation's action row is within the viewport at 900×700, or the reason it cannot is recorded in the sweep's own report.
+- [x] The confirmation's own buttons are inside the content viewport at 900×700, with the copy that remains above them. — measured with the dev fixture at 900×700: the confirm button's box is y=644–678 and the panel ends at 687 in a 700 px window. It was 743–777.
+- [x] The copy says what the erase destroys, that the tag stays a tag, and that only the message area is written — and nothing else. — five blocks: the sentence naming the Records that go, `eraseWhere` (pages, bytes, and "Pages 0 to 3 … are never written"), two facts (*The content is gone*, *The tag stays a tag*), and one paragraph of two limit sentences.
+- [x] Every fact the current copy carries that is not stated anywhere else in the app stays somewhere. — the third fact restated the second's "pages 0 to 3" clause and is folded into `eraseWhere`; `password protection` and `locking` stay in the confirmation because the capability limits state them about the *Reader*, not about what this erase does to the tag in front of the user; the byte count moved from the mono summary line into `eraseWhere`, and *keep the tag on the Reader* moved into the action row.
+- [x] The copy is judged against the spec's "too much text" complaint, not merely shortened until it fits. — eight explanatory blocks became five, and the two denial paragraphs became one sentence each in one paragraph; nothing was cut to a stub.
+- [x] A gate catches the class rather than this instance. — recorded in `docs/superpowers/e2e/08-findings.md` (F3): jsdom has no layout, so the gate for "a confirmation's action row is in the viewport at 900×700" is the visual sweep, and the reason it cannot be a unit test is written there rather than implied.

@@ -38,7 +38,15 @@ Four symbols, distinguished by count and by absence.
 | three chirps | **Attention** — failed, refused, or nothing was changed |
 | silence | **Nothing happened** — no tag latched, nothing to act on; not an error |
 
-Gaps are a tuned constant, nominal 120 ms. On Attention the LED is held on for two
+The gap between chirps is a tuned constant: **400 ms**, measured by ear on the
+hardware. It was written here as a nominal 120 ms before anything had been
+listened to, and 120 ms was wrong — at that spacing two chirps ran together into
+one longer beep, so *needs you* was indistinguishable from *done* and the two-symbol
+half of the alphabet did not exist in practice. At 400 ms one, two and three
+chirps are each countable, the LED's two-second hold after an attention signal is
+legible in a loud room, and a twenty-attempt batch is still intelligible as it
+runs. The constant is `CHIRP_GAP_MS` in `src/lib/chirpSequence.ts`, and every
+producer and player reads it from there. On Attention the LED is held on for two
 seconds so the signal survives a loud room or headphones. Signals are serialised
 through a bounded queue so concurrent operations cannot interleave into noise, and
 identical adjacent outcomes coalesce.
@@ -61,8 +69,11 @@ is not a distinction.
 - The alphabet is a learned convention. Changing it later is a breaking change to
   how the app feels, which is why it is written down here rather than left to be
   edited as copy.
-- The chirp duration and the gap constant are empirical and must be tuned on
-  hardware. The spec records them as open until that happens, because a guessed
-  cadence that turns three chirps into one is the whole vocabulary failing.
+- The chirp duration and the gap constant are empirical. The duration is the
+  firmware's and unknown to the host; the gap was tuned on hardware and is 400 ms,
+  not the 120 ms first guessed here. The guess was not a harmless one: it collapsed
+  *needs you* into *done*, which is half the alphabet. Any later change to that
+  constant is a change to how the app sounds and needs to be listened to before it
+  is recorded here.
 - Because the firmware never acknowledges the frame, the app must never state that
   a beep was heard. It states what it sent.

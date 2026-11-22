@@ -10,10 +10,12 @@
 
 **Tracker:** None
 
-**Status:** ready
+**Status:** done
 
-- [ ] The *NDEF messages* entry describes NDEF as available, naming what is read and written and what remains unavailable: the message and its Records are read and written through the Type 2 TLV; password protection, APDU passthrough and MIFARE Classic sectors stay listed as unavailable in their own entries.
-- [ ] The *7- and 10-byte UIDs* entry no longer claims a longer UID is raw. It states that 4-, 7- and 10-byte widths are decoded from the reply's own length byte, and that a 10-byte width has a decoder but no hardware confirmation until a 10-byte tag is tried — the spec's open question, stated as an open question rather than as a limit.
-- [ ] No entry claims a capability is absent while a page in the same build offers it.
-- [ ] A test fails if a limit's claim disagrees with the surface that implements it: the narrow version is a test over the limits list asserting the exact entries that must not exist (a "not readable or writable" NDEF claim, a "raw" claim for 7- and 10-byte UIDs), so the words cannot come back by accident.
-- [ ] Nothing else in the list changes: MIFARE Classic sectors, APDU passthrough, password protection, factory restore and 125 kHz writability stay as they are, because each is still true.
+- [x] The *NDEF messages* entry describes NDEF as available, naming what is read and written and what remains unavailable: the message and its Records are read and written through the Type 2 TLV; password protection, APDU passthrough and MIFARE Classic sectors stay listed as unavailable in their own entries. — `src/lib/readerIdentity.ts`, `READER_CAPABILITY_LIMITS`, entry `ndef`: "Available through the Type 2 TLV. A Type 2 Tag's message is read and listed as Records, written back from a Draft, and erased", and it names the three entries that still stay unavailable.
+- [x] The *7- and 10-byte UIDs* entry no longer claims a longer UID is raw. It states 4-, 7- and 10-byte widths decode from the reply's own length byte, and that 10 bytes has a decoder but no hardware confirmation — the spec's open question, stated as an open question rather than as a limit. — same list, entry `uid-width`, plus `readerIdentity.test.ts` → "states which UID widths decode, and that 10 bytes is unconfirmed on hardware".
+- [x] No entry claims a capability is absent while a page in the same build offers it. — `readerIdentity.test.ts` → "does not deny a capability the app implements", which reads the limits against the modules that implement them.
+- [x] A test fails if a limit's claim disagrees with the surface that implements it. — `readerIdentity.test.ts` → "the capability limits cannot contradict a capability the app ships": each guarded entry has a `claim` pattern (`/not readable or writable|never answered|raw payload only/i` and `/\braw bytes?\b|not decoded|only 4-byte/i`) that must not reappear, and "refutes the NDEF claim with the codec that reads and writes a message" and "refutes the UID claim with the decoder that splits a 7-byte UID" drive the surfaces themselves.
+- [x] Nothing else in the list changes: MIFARE Classic sectors, APDU passthrough, password protection, factory restore and 125 kHz writability stay as they are, because each is still true. — the same five entries are present in `READER_CAPABILITY_LIMITS` with their original labels and claims.
+
+**Closed by:** a fresh review's Standards/Spec pass on the integration SHA, which found the entries already corrected and the guard already in place; this file was the last thing still saying otherwise.

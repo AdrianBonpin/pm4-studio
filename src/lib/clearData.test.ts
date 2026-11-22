@@ -141,7 +141,9 @@ describe("clearing everything this app saved", () => {
 
     expect(report).toEqual({ cleared: true, removed: [], blocked: null });
     expect(describeClearReport(report)).toEqual({
-      tone: "info",
+      // The notice vocabulary's own word for "said, and not news": the report's
+      // tone is not a third spelling of the tone scale.
+      tone: "muted",
       title: "There was nothing saved to clear.",
       detail:
         "No library file, temporary file or stored preference was found. Nothing was removed.",

@@ -12,11 +12,13 @@
 
 **Tracker:** None
 
-**Status:** ready
+**Status:** done
 
-- [ ] A destination that is readable and holds no Records is a **proceed**, not a refusal: the confirmation says there is nothing to replace instead of naming a message, and the copy runs.
-- [ ] *Could not be read* stays a refusal, worded as it is now, for a tag whose memory or poll reply genuinely failed. The two conditions are distinguishable in the value the guard receives, not by matching the sentence.
-- [ ] An unformatted destination is handled by whichever rule the slice lands on — refuse with "this tag is not NDEF formatted, so it cannot take a message" (if formatting is out of scope) or proceed as empty — and the choice is stated in the pull request rather than left implicit. Refusing it as *unreadable* is not an acceptable answer either way.
-- [ ] The destination's capacity is still weighed, so "empty and too small" refuses for the size and not for the emptiness.
-- [ ] A test asserts, through the guard, that a destination read as `empty` or `notFormatted` reaches the confirmation, and that one read as `unreadable` does not.
-- [ ] No message is written before the confirmation, and the source-removal step is unchanged: this is a value the guard was already handed, not a new path into the write.
+- [x] A destination that is readable and holds no Records is a **proceed**, not a refusal: the confirmation says there is nothing to replace instead of naming a message, and the copy runs. — `src/lib/hfCopy.ts`, `copyDestination`: `holds` carries `empty` separately from `unreadable`, and `copyDecision` proceeds on it. `hfCopy.test.ts` → "takes 'holds nothing' from the read model rather than calling an empty Tag unreadable" and "asks for the acknowledgement on an empty destination whose capacity is unknown, and proceeds once it has it".
+- [x] *Could not be read* stays a refusal, worded as it is now, for a tag whose memory or poll reply genuinely failed. The two conditions are distinguishable in the value the guard receives, not by matching the sentence. — `refusal.condition` is `destination-unreadable` for that read, and the messages differ; `hfCopy.test.ts` → "refuses a destination whose message could not be read, quoting the reason".
+- [x] An unformatted destination is handled by whichever rule the slice lands on, and the choice is stated rather than left implicit. **The rule that landed: refuse it, named as formatting.** `copyDecision` refuses with `condition: "destination-not-formatted"` and *"Not copied: this tag is not NDEF formatted, so it cannot take a message"* — formatting is out of scope for this build, and it is not refused as unreadable. Stated here because the sentence that had to carry it was a pull-request note on a branch that has since been integrated (`73b385e`'s predecessor), and this file is where the next reader looks.
+- [x] The destination's capacity is still weighed, so "empty and too small" refuses for the size and not for the emptiness. — `hfCopy.test.ts` → "refuses an empty destination that is too small for the size, not for the emptiness".
+- [x] A test asserts, through the guard, that a destination read as `empty` or `notFormatted` reaches the confirmation, and that one read as `unreadable` does not. — `hfCopy.test.ts` → "takes a Tag with no NDEF TLV as holds-nothing too, not as a failed read" and "keeps a Tag that is not NDEF formatted a distinct refusal, and a failed read a refusal", which asserts both `refusal.condition` values.
+- [x] No message is written before the confirmation, and the source-removal step is unchanged. — the guard still decides from values it is handed; nothing in `copyDestination` writes, and the source-removal tests ("the source-removal guard") are untouched.
+
+**Closed by:** a fresh review's Standards/Spec pass on the integration SHA, which found the fix shipped with its tests.

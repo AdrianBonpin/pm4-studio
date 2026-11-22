@@ -26,6 +26,8 @@ import type { DeviceInfo } from "../types";
  *     preference is stored locally and has nothing to do with the hardware;
  *   - the beep test reports what it actually did: a signal was sent, or nothing
  *     was, and never that a chirp was heard;
+ *   - both indicator actuators report through the seam, so a sent frame and a
+ *     failed one are two different results;
  *   - the message corner is chosen here and is remembered;
  *   - About states the version, the credits, the repository, the licence and the
  *     Reader's own identity, including when there is no Reader;
@@ -199,7 +201,10 @@ describe("Feedback", () => {
     // Nothing was sent, so nothing may be claimed: not a chirp, and not even the
     // frame that the connected case sends.
     expect(toast?.message).toBe("No signal was sent.");
-    expect(toast?.severity).toBe("warning");
+    // An unplugged Reader is a state, not a fault, so this is informational and
+    // silent: there is no chip to have chirped, and two chirps on every launch is
+    // not news.
+    expect(toast?.severity).toBe("info");
     expect(toast?.detail ?? "").toMatch(/Reader attached/);
     expect(`${toast?.message} ${toast?.detail}`).not.toMatch(/heard|sounded/i);
   });
@@ -256,7 +261,7 @@ describe("About", () => {
 });
 
 describe("Diagnostics", () => {
-  it("holds the indicator test, and sends the LED-off frame it names", async () => {
+  it("holds the indicator test, and reports the LED-off frame through the seam", async () => {
     const { backend, ui } = mount();
     await ui.user.click(within(groupSwitch()).getByRole("button", { name: "Diagnostics" }));
 
@@ -265,8 +270,36 @@ describe("Diagnostics", () => {
     await waitFor(() => {
       expect(backend.callsTo("led_off")).toHaveLength(1);
     });
+    // Both actuators report the same way: one outcome through the seam, so the
+    // result is not a line of the page's own state (ADR 0008).
+    const [toast] = toastStore.getState().toasts;
+    expect(toast?.kind).toBe("led-off");
     // What was sent, not what was seen: the frames are fire-and-forget.
-    expect(screen.getByText(/LED off sent/)).toBeTruthy();
+    expect(toast?.message).toBe("LED off sent.");
+    expect(toast?.detail ?? "").toMatch(/not a beep/);
+    // And silent: 0x0055 is the LED-off frame, so it must not chirp.
+    expect(toast?.severity).toBe("info");
+  });
+
+  it("reports an LED-off frame that could not be sent as a failure, never as sent", async () => {
+    // The old version of this test could not tell these two apart: both were a
+    // string in local state.
+    const { ui } = mount({
+      answers: {
+        led_off: () => {
+          throw new Error("I/O Timeout: the reader stopped answering");
+        },
+      },
+    });
+    await ui.user.click(within(groupSwitch()).getByRole("button", { name: "Diagnostics" }));
+
+    await ui.user.click(screen.getByRole("button", { name: /LED off/ }));
+
+    await waitFor(() => expect(toastStore.getState().toasts).toHaveLength(1));
+    const [toast] = toastStore.getState().toasts;
+    expect(toast?.kind).toBe("reader-wedged");
+    expect(toast?.message).toBe("The Reader stopped responding");
+    expect(screen.queryByText(/LED off sent/)).toBeNull();
   });
 
   it("states the capability limits once, in the one place that owns them", async () => {

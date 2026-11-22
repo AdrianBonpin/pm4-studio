@@ -2,6 +2,8 @@ import { useSyncExternalStore } from "react";
 import { AlertTriangle, Check, Info, OctagonAlert, X } from "lucide-react";
 import { useToastCorner } from "../hooks/useToastCorner";
 import { toastCornerClasses } from "../lib/toastCorner";
+import { NOTICE_TONE_CLASS } from "../lib/noticeTone";
+import { toneForSeverity } from "../lib/severity";
 import { toastStore, visibleToasts, type Toast, type ToastStore } from "../lib/toastStore";
 
 /**
@@ -21,12 +23,19 @@ import { toastStore, visibleToasts, type Toast, type ToastStore } from "../lib/t
  * the store holds.
  */
 
-/** Icon and frame per severity, in the design system's own tokens. */
+/**
+ * Icon and frame per severity, in the design system's own tokens.
+ *
+ * The *colour* is not here: a message is drawn in the ink its tone owns, read from
+ * `lib/noticeTone` through `toneForSeverity`, so the ink is named once for the whole
+ * app and a message cannot be a different colour from the notice beside it. This
+ * table adds what only a corner card needs.
+ */
 const TONE = {
-  success: { icon: Check, colour: "text-ok", frame: "border-ok/40" },
-  warning: { icon: AlertTriangle, colour: "text-warn", frame: "border-warn/50" },
-  error: { icon: OctagonAlert, colour: "text-err", frame: "border-err/60" },
-  info: { icon: Info, colour: "text-text-muted", frame: "border-border" },
+  success: { icon: Check, frame: "border-ok/40" },
+  warning: { icon: AlertTriangle, frame: "border-warn/50" },
+  error: { icon: OctagonAlert, frame: "border-err/60" },
+  info: { icon: Info, frame: "border-border" },
 } as const;
 
 interface ToastViewportProps {
@@ -62,6 +71,7 @@ export function ToastViewport({ store = toastStore }: ToastViewportProps) {
 
 function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   const tone = TONE[toast.severity];
+  const ink = NOTICE_TONE_CLASS[toneForSeverity(toast.severity)];
   const Icon = tone.icon;
 
   return (
@@ -70,7 +80,7 @@ function ToastCard({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       aria-live="polite"
       className={`flex items-start gap-2 rounded-lg border bg-surface/95 px-3 py-2.5 backdrop-blur ${tone.frame}`}
     >
-      <Icon size={14} aria-hidden className={`mt-0.5 shrink-0 ${tone.colour}`} />
+      <Icon size={14} aria-hidden className={`mt-0.5 shrink-0 ${ink}`} />
       <div className="min-w-0 flex-1">
         <p className="text-sm leading-snug text-text">
           {toast.message}

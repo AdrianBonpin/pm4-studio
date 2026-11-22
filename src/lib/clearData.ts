@@ -275,9 +275,15 @@ export async function clearAllSavedData(
   return { cleared: true, removed: [...removedFiles, ...sweep.removed], blocked: null };
 }
 
-/** A sentence and a tone for the report's header. */
+/**
+ * A sentence and a tone for the report's header.
+ *
+ * The tone is the notice vocabulary's own (`lib/noticeTone`), not a third spelling
+ * of it: `muted` is what "there was nothing saved to clear" is drawn in, which is
+ * the same ink the rest of the app uses for "said, and not news".
+ */
 export interface ClearNotice {
-  readonly tone: "ok" | "err" | "info";
+  readonly tone: "ok" | "err" | "muted";
   readonly title: string;
   readonly detail: string;
 }
@@ -293,7 +299,7 @@ export function describeClearReport(report: ClearReport): ClearNotice {
   if (report.cleared) {
     return report.removed.length === 0
       ? {
-          tone: "info",
+          tone: "muted",
           title: "There was nothing saved to clear.",
           detail: "No library file, temporary file or stored preference was found. Nothing was removed.",
         }
