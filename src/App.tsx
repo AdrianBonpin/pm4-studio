@@ -10,6 +10,7 @@ import { handOffDraft } from "./lib/draftHandoff";
 import { outcomes, report } from "./lib/outcome";
 import { formatFirmwareRevision } from "./lib/readerIdentity";
 import { isMacOS, isTauri } from "./lib/platform";
+import { PAGE_INSET } from "./lib/uiConstants";
 import { PAGES, type PageId } from "./lib/pageCopy";
 import type { HfMode } from "./lib/hfWorkspace";
 import { HfPage } from "./pages/HfPage";
@@ -183,8 +184,8 @@ export default function App() {
         </aside>
 
         <main className="flex min-w-0 flex-1 flex-col">
-          <div className="flex-1 overflow-y-auto overscroll-contain px-8 py-6">
-            <div className="mx-auto flex max-w-3xl flex-col gap-6">
+          <div className={`flex-1 overflow-y-auto overscroll-contain py-6 ${PAGE_INSET}`}>
+            <div className="flex flex-col gap-6">
               <header className="flex flex-col gap-1">
                 <h1 className="font-heading text-xl text-text">{current.title}</h1>
                 <p className="text-sm text-text-muted">{current.subtitle}</p>

@@ -17,12 +17,12 @@ aligned with that body's content.
 - The design check — catches a rule violated by the new classes; misses whether a rule
   actually reaches an edge.
 
-- [ ] No page is capped in a centred column: at a maximised window the content uses the pane.
-- [ ] The rules between sections reach both edges of the content area, and the text they separate sits at one inset from those edges.
-- [ ] A divider inside a section body lines up with that section's content, not with the window.
-- [ ] A form group and a prose block keep a readable measure instead of stretching to a wide window.
-- [ ] At 900×700 every page's primary action is still reachable without scrolling, as before.
-- [ ] `bun run verify` passes.
+- [x] No page is capped in a centred column: at a maximised window the content uses the pane.
+- [x] The rules between sections reach both edges of the content area, and the text they separate sits at one inset from those edges.
+- [x] A divider inside a section body lines up with that section's content, not with the window.
+- [x] A form group and a prose block keep a readable measure instead of stretching to a wide window.
+- [x] At 900×700 every page's primary action is still reachable without scrolling, as before.
+- [x] `bun run verify` passes.
 
 **Tracker:** https://github.com/AdrianBonpin/pm4-studio/issues/34
-**Status:** ready
+**Status:** done

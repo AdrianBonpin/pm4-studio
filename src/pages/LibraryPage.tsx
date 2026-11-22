@@ -427,7 +427,7 @@ function SnapshotDetail({
       ) : (
         <>
           <div className="flex flex-col gap-3 border-t border-border pt-4">
-            <label className="flex flex-col gap-1">
+            <label className="flex max-w-2xl flex-col gap-1">
               <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">Name</span>
               <Input
                 value={draft.name}
@@ -444,7 +444,7 @@ function SnapshotDetail({
                 disabled={locked}
               />
             </label>
-            <label className="flex flex-col gap-1">
+            <label className="flex max-w-2xl flex-col gap-1">
               <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">Note</span>
               <textarea
                 value={draft.note}
@@ -472,7 +472,7 @@ function SnapshotDetail({
           <div className="flex flex-col gap-3 border-t border-border pt-4">
             {snapshot.identity ? (
               <>
-                <p className="text-xs leading-relaxed text-text-muted">
+                <p className="max-w-prose text-xs leading-relaxed text-text-muted">
                   Put a <strong className="text-text">blank</strong> Tag on the reader — not the
                   original. The write is permanent.
                 </p>

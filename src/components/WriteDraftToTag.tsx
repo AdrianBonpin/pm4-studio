@@ -179,7 +179,7 @@ export function WriteDraftToTag({
         )}
 
         {holdsNothing && (
-          <p className="text-xs leading-relaxed text-text-muted">
+          <p className="max-w-prose text-xs leading-relaxed text-text-muted">
             This {subject} holds no Records, so there is no message to write. A write of nothing
             is refused rather than sent.
           </p>
@@ -233,7 +233,7 @@ export function WriteDraftToTag({
                 Cancel
               </Button>
             </div>
-            <p className="text-[11px] leading-relaxed text-text-muted">
+            <p className="max-w-prose text-[11px] leading-relaxed text-text-muted">
               Keep the tag on the Reader until the result appears. Polling is suspended while
               the write runs.
             </p>
