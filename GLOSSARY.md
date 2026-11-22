@@ -92,6 +92,21 @@ _Avoid_: notification, alert, banner, snackbar, popup
 The three-way audible-feedback preference: off, errors and warnings only, all.
 _Avoid_: beep toggle, mute, volume
 
+**Switcher**:
+The interface's one control for choosing exactly one of a handful of options in place:
+band modes, Collections, Settings groups, Quiet level, the Toast corner. It is a group
+of toggle buttons carrying `aria-pressed`, and it is deliberately **not** a tab strip —
+it owns no panel, hides nothing from find-in-page, and needs no arrow-key roving focus.
+_Avoid_: chip, tab, tab strip, segmented control, pill
+
+**Search**:
+The affordance that narrows a list by what the user types: a case-insensitive substring
+over the fact text of each item, with whitespace compacted before comparing, and the
+list returned untouched when nothing is typed. One rule serves both of Library's
+Collections; a Snapshot's facts and a Draft's facts differ, the comparison does not.
+It is a plain substring, not a fuzzy or ranked match, and it never reorders.
+_Avoid_: filter, query, find, quick-find, fuzzy search, ranking
+
 **Writability**:
 Whether a 125 kHz Tag will accept a write. Not observable by reading and not
 exposed by the protocol; discoverable only by attempting a write.
@@ -202,6 +217,9 @@ _Avoid_: phase, stage, milestone, epic
 - An **Outcome** reports one operation and produces exactly one **Toast** and at most one **Signal**
 - A **Signal** is made of one to three chirps
 - A **Quiet level** governs which **Signals** are emitted
+- A **Switcher** holds a fixed set of options and exactly one is current
+- A **Switcher** chooses a mode, a Collection, a group or a corner; a button performs an operation and is never dressed as one
+- A **Search** narrows **Snapshots** or **Drafts** and never reorders them
 
 ## Flagged ambiguities
 
@@ -232,6 +250,11 @@ _Avoid_: phase, stage, milestone, epic
   byte offsets had never been measured. Resolved: the offsets are now measured
   against two tag families, so the interface no longer claims provisionality and
   the word must not be reused for a claim that is still a guess.
+- "chip" named three different things: the control that switches a band page between
+  Read, Write, Clear, Clone and Batch, the two-way pair that chooses how an Identity is
+  entered, and the row of console presets. Resolved: the control is a **Switcher**; the
+  console presets are buttons that fill a field and are drawn as buttons; the Identity
+  pair is the same **Switcher** as everywhere else. "Chip" no longer names any of them.
 - a **UID** was previously taken at a fixed width that padded a short UID with
   zeros, which made a MIFARE Classic 1K read as a seven-byte NTAG215. Resolved:
   the reply states its own **UID length**, and no surface names a family it has

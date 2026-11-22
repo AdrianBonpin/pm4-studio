@@ -7,6 +7,7 @@ import {
   capacityNote,
   draftDetail,
   draftTitle,
+  filterDrafts,
   formatUpdatedAt,
   newBluetoothRecord,
   newContactRecord,
@@ -171,5 +172,138 @@ describe("size against a target", () => {
     const note = capacityNote(100, null);
     expect(note).toMatch(/not known/i);
     expect(note).not.toMatch(/\d+ of \d+/);
+  });
+});
+
+/**
+ * The Draft Search, at the seam the spec names (S1).
+ *
+ * A Draft and a query in, a list out. The filter searches the Draft's own facts —
+ * its name, its id, and the values authored inside its Records — through the one
+ * comparison rule Snapshots already use. These tests say what a user would type,
+ * not how the comparison is implemented.
+ */
+describe("filterDrafts", () => {
+  const updatedAt = "2026-11-21T11:05:00.000Z";
+
+  const DOOR: Draft = {
+    id: "draft-door",
+    name: "Front door",
+    updatedAt,
+    records: [newTextRecord("en", "Ring the bell")],
+  };
+
+  const GUEST: Draft = {
+    id: "draft-guest",
+    name: "Visitor wifi",
+    updatedAt,
+    records: [newWifiRecord({ ssid: "Harbour Guest", networkKey: "tidewater77" })],
+  };
+
+  const OFFICE: Draft = {
+    id: "draft-office",
+    name: "Site office",
+    updatedAt,
+    records: [
+      newContactRecord({
+        name: "Ada Okafor",
+        organization: "Harbour Works",
+        phone: "+4489012345",
+        email: "ada@dockyard.example",
+      }),
+    ],
+  };
+
+  /** A Draft whose only Record cannot be encoded: it has no measurable size. */
+  const BROKEN: Draft = {
+    id: "draft-rooftop",
+    name: "Rooftop camera",
+    updatedAt,
+    records: [newWifiRecord({ ssid: "" })],
+  };
+
+  const all = [DOOR, GUEST, OFFICE, BROKEN];
+
+  it("keeps everything when nothing has been typed, and hands back the same array", () => {
+    expect(filterDrafts(all, "")).toBe(all);
+    expect(filterDrafts(all, "   ")).toBe(all);
+  });
+
+  it("matches a Draft's name, whatever the case", () => {
+    expect(filterDrafts(all, "front")).toEqual([DOOR]);
+    expect(filterDrafts(all, "FRONT DOOR")).toEqual([DOOR]);
+  });
+
+  it("matches a Draft's id", () => {
+    expect(filterDrafts(all, "draft-office")).toEqual([OFFICE]);
+    expect(filterDrafts(all, "draft-guest")).toEqual([GUEST]);
+  });
+
+  it("matches text authored inside a Record", () => {
+    expect(filterDrafts(all, "ring the bell")).toEqual([DOOR]);
+  });
+
+  it("matches a URL, a phone number and an email address authored inside a Record", () => {
+    const url: Draft = {
+      id: "draft-1",
+      name: "Workshop",
+      updatedAt,
+      records: [newUrlRecord("https://dockyard.example/workshop")],
+    };
+    const phone: Draft = {
+      id: "draft-2",
+      name: "Gate line",
+      updatedAt,
+      records: [newPhoneRecord("+4489012399")],
+    };
+    const email: Draft = {
+      id: "draft-3",
+      name: "Enquiries",
+      updatedAt,
+      records: [newEmailRecord("enquiries@dockyard.example")],
+    };
+    const drafts = [url, phone, email];
+
+    expect(filterDrafts(drafts, "dockyard.example/workshop")).toEqual([url]);
+    expect(filterDrafts(drafts, "89012399")).toEqual([phone]);
+    expect(filterDrafts(drafts, "enquiries@")).toEqual([email]);
+  });
+
+  it("matches a contact's name and their organisation", () => {
+    expect(filterDrafts(all, "ada okafor")).toEqual([OFFICE]);
+    expect(filterDrafts(all, "harbour works")).toEqual([OFFICE]);
+  });
+
+  it("matches a Wi-Fi SSID and the network key", () => {
+    expect(filterDrafts(all, "harbour guest")).toEqual([GUEST]);
+    expect(filterDrafts(all, "tidewater77")).toEqual([GUEST]);
+  });
+
+  it("ignores the spacing a user types", () => {
+    expect(filterDrafts(all, "harbour   works")).toEqual([OFFICE]);
+    expect(filterDrafts(all, "ringthebell")).toEqual([DOOR]);
+  });
+
+  it("is empty when nothing matches", () => {
+    expect(filterDrafts(all, "zzzz")).toEqual([]);
+  });
+
+  it("lists a Draft whose Record cannot be encoded, and searches it by name and id", () => {
+    expect(filterDrafts(all, "")).toContain(BROKEN);
+    expect(filterDrafts(all, "rooftop")).toEqual([BROKEN]);
+    expect(filterDrafts(all, "draft-rooftop")).toEqual([BROKEN]);
+  });
+
+  it("hands back the very same Drafts rather than rebuilt copies, in the order given", () => {
+    const filtered = filterDrafts(all, "harbour");
+    expect(filtered.map((draft) => draft.id)).toEqual([GUEST.id, OFFICE.id]);
+    expect(filtered[0]).toBe(GUEST);
+    expect(filtered[1]).toBe(OFFICE);
+  });
+
+  it("does not reorder and does not touch the array it was given", () => {
+    const original = [...all];
+    filterDrafts(all, "front");
+    expect(all).toEqual(original);
   });
 });

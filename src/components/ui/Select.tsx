@@ -24,11 +24,17 @@ interface SelectProps {
 /**
  * A native select, styled from the palette.
  *
- * Native because both lists it serves can grow — the Records a Draft is built
- * from, and the Drafts a Tag can receive — and the platform's own menu is the one
- * the user already knows how to drive with a keyboard. Every other control in the
- * shell is drawn; this is the one exception, and it is the same exception in both
- * places.
+ * Native because every list it still serves is a short, fixed enumeration: the
+ * Record type a Draft's next entry should be, and Wi-Fi authentication and
+ * encryption. A platform menu is the control a user already knows how to drive
+ * with a keyboard, and none of these sets grows.
+ *
+ * That is the rule, not a habit (ADR 0010): **a list that grows is an in-app list
+ * with a search field over it**, because a platform menu cannot be typed at, so
+ * finding one item by name in several hundred is a scroll. The Drafts a Tag can
+ * receive were the list that outgrew this control, and they are chosen from the
+ * list in `WriteDraftMode` instead. A picker of a growing list added here as a
+ * `<select>` again would be ignoring that decision.
  */
 export function Select({
   label,

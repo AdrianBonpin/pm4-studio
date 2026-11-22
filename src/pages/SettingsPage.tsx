@@ -26,6 +26,7 @@ import {
   type QuietLevel,
 } from "../lib/quietLevel";
 import { formatFirmwareRevision } from "../lib/readerIdentity";
+import { PAGE_RULE } from "../lib/uiConstants";
 import { TOAST_CORNER_LABEL, type ToastCorner } from "../lib/toastCorner";
 import type { LibraryState } from "../hooks/useLibrary";
 import type { DeviceInfo } from "../types";
@@ -187,7 +188,7 @@ function FeedbackGroup({
   const { corner, setCorner } = useToastCorner();
 
   return (
-    <div className="flex flex-col gap-6 border-t border-border pt-6">
+    <div className={`flex flex-col gap-6 border-t border-border pt-6 ${PAGE_RULE}`}>
       <div className="flex flex-col gap-2">
         <p className="text-sm text-text">Quiet level</p>
         <Segmented
@@ -370,13 +371,13 @@ function DataGroup({ library }: { library: LibraryState }) {
 
           {importPreview && importPath && (
             <Notice tone="pending" label="Pending">
-              <p className="text-sm leading-relaxed text-text">
+              <p className="max-w-prose text-sm leading-relaxed text-text">
                 {describeImportPreview(importPreview)}
               </p>
               <code className="select-text break-all font-mono text-[11px] text-text-muted">
                 {importPath}
               </code>
-              <p className="text-xs leading-relaxed text-text-muted">
+              <p className="max-w-prose text-xs leading-relaxed text-text-muted">
                 Nothing has been written yet. Add to library applies the import; Cancel leaves the
                 library exactly as it is.
               </p>

@@ -14,8 +14,13 @@ export function Button({ variant = "primary", className = "", children, ...rest 
   // The border colour belongs to the variant, not to the base: a danger button
   // needs its own, and two border-colour utilities on one element would make the
   // result depend on stylesheet order rather than on this object.
+  //
+  // The corner is 6px (`rounded-md`), the small-control radius, and it is the
+  // same for all four variants: they are told apart by fill, border and ink, so
+  // the shape never has to carry a meaning it cannot carry. A button is not a
+  // pill and not a switcher — see `DESIGN.md`, "Shapes".
   const base =
-    "inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-medium transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border";
+    "inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-all cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed border";
   const styles = {
     primary:
       "border-border hover:border-border-hover bg-accent text-white hover:bg-accent-hover shadow-none",

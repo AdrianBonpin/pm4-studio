@@ -151,7 +151,7 @@ export function BatchClone({ source, connected, onExit }: BatchCloneProps) {
 
       <p className="max-w-prose text-xs leading-relaxed text-text-muted">{FRESH_TAG_PER_ATTEMPT}</p>
 
-      <p className="text-xs text-text-muted">
+      <p className="max-w-prose text-xs text-text-muted">
         Polls are paused for the length of this run, so the reader answers attempts and nothing
         else.
       </p>

@@ -2,7 +2,7 @@
  * The 125 kHz page's modes, in the order the work is done.
  *
  * The page is a workspace, not a column of every panel: one mode is visible at a
- * time, chosen from the segmented switch. The order is the spec's and is the
+ * time, chosen from the switcher. The order is the spec's and is the
  * order the pills are in — Read first, because it is both the base capability and
  * the precondition every write depends on.
  *

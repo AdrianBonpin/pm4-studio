@@ -45,8 +45,10 @@ Source: `src/lib/readerIdentity.ts`, `READER_CAPABILITY_LIMITS`, entries `ndef` 
 was revised by 19's sweep, which is source-pattern based and cannot see a
 sentence that has become untrue.
 
-Evidence: `screenshots/settings-diagnostics-limits-980.png` beside
-`screenshots/hf-read-decoded-980.png`.
+Evidence: `screenshots/settings-diagnostics-limits-before-980.png` beside
+`screenshots/hf-read-decoded-before-980.png` — the pair as it stood when the finding
+was raised. The live reports now show the corrected entries, so the `-before-`
+images are the record of what was wrong.
 
 Why it matters more than a stale string: the spec's honesty constraint makes
 Diagnostics *the* place a limitation is stated once. A false limitation there
@@ -109,8 +111,9 @@ sizes. The copy is also the clearest remaining instance of the "too much text"
 complaint the redesign was commissioned to answer: seven explanatory paragraphs for
 one destructive action whose outcome is a single sentence.
 
-Evidence: `screenshots/hf-erase-confirmation-980.png`,
-`screenshots/hf-erase-confirmation-900.png`.
+Evidence: `screenshots/hf-erase-confirmation-before-980.png`,
+`screenshots/hf-erase-confirmation-before-900.png` — the confirmation as it stood
+when the finding was raised.
 
 Ticket: `docs/tickets/studio-redesign-followups/the-erase-confirmation-is-taller-than-the-window.md`
 
@@ -132,8 +135,10 @@ Ticket: `docs/tickets/studio-redesign-followups/the-erase-confirmation-is-taller
 > Erase confirmation open. At 900×700 *Erase the tag's content* measures y=644–678 and
 > *Keep the content* the same — both fully inside the 700 px viewport and neither
 > clipped — and with *keep the tag on the Reader* they fit on the one action row; the
-> panel ends at 687. The two screenshots above (`hf-erase-confirmation-900.png`,
-> `-980.png`) are kept as the pre-fix record.
+> panel ends at 687. The two screenshots above (`hf-erase-confirmation-before-900.png`,
+> `-before-980.png`) hold the pre-fix pixels. The current confirmation is captured
+> in [03-13-56-mhz.md](03-13-56-mhz.md) as `hf-erase-confirmation-900.png` and
+> `-980.png`, which were re-taken from this branch and now show the fixed panel.
 
 ### F4 — Reset is called "Blank" in its own panel
 
@@ -148,12 +153,21 @@ Evidence: `screenshots/lf-reset-confirmation-980.png`,
 
 Ticket: `docs/tickets/studio-redesign-followups/reset-is-called-blank-in-its-own-panel.md`
 
-> **Fixed.** The mode's name and the panel's words are one name now: `lib/lfModes`
-> owns "Reset" for the pill, `lib/blankTag` owns the panel's heading, its controls and
-> its outcome words, and `lib/blankTag.test.ts` binds the two so they cannot drift
-> apart again. The factory-restore denial left the panel — it is one of the Reader's
-> capability limits and is stated there once — and the page subtitle no longer ends
-> "…or blank a tag". "Blank" survives as the noun it is, in Clone and Batch.
+> **Fixed.** The mode's name and the panel's words are one name now, and the name
+> is **Clear**: `lib/lfModes` owns "Clear" for the switcher's option, `lib/clearTag`
+> owns the panel's heading ("Clear a tag"), its controls and its outcome words, and
+> `lib/clearTag.test.ts` binds the two so they cannot drift apart again. The
+> destructive write is no longer the routine one: **Destroy** is a separate entry
+> point on the panel's first screen, with its own read, its own confirmation and
+> its own danger button. The factory-restore denial left the panel — it is one of
+> the Reader's capability limits (`Factory restore and unlock`, "Not possible.") and
+> is stated there once — and the page subtitle no longer ends "…or blank a tag".
+> "Blank" survives as the noun it is, in Clone and Batch.
+>
+> The two images above are the **pre-fix record** of the panel as F4 saw it, and are
+> kept for that reason. The panel as it ships now is captured in
+> [02-125-khz.md](02-125-khz.md) as `lf-clear-panel-{980,900}.png`,
+> `lf-clear-confirmation-{980,900}.png` and `lf-destroy-confirmation-{980,900}.png`.
 
 ## Observations — recorded, no ticket
 
@@ -170,7 +184,8 @@ future pass may want the viewport to reserve the chosen corner's strip.
 `04 9A 2B 3C 4D 5E 60` after `5E`, and the read timestamp wraps after `2026-11-`.
 These are `<dd>` values, not controls, so the no-wrap criterion is untouched; it
 reads as sloppy rather than as broken. Recorded for a future polish pass
-(`hf-memory-dump-980.png`).
+(`hf-memory-dump-before-980.png`, the frame this observation was raised from; the
+current dump is in [03-13-56-mhz.md](03-13-56-mhz.md) as `hf-memory-dump-980.png`).
 
 **O3 — The viewport does not reserve a strip for messages.** Related to O1: the
 content column fills the window, so any corner overlaps content by construction.

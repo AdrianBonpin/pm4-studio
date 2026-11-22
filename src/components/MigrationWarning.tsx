@@ -40,7 +40,7 @@ export function MigrationWarning({ detail }: MigrationWarningProps) {
       title="This library was upgraded from an older version"
       className="mb-4"
     >
-      <p className="text-xs leading-relaxed text-text-muted">
+      <p className="max-w-prose text-xs leading-relaxed text-text-muted">
         {detail} Saving is still on: a save writes the upgraded library and corrects the version
         the file claims.
       </p>

@@ -188,7 +188,7 @@ export function CloneWizard({ connected, onSaved, onDeviceError }: CloneWizardPr
   if (step === "idle") {
     return (
       <div className="flex flex-col gap-3">
-        <p className="text-sm leading-relaxed text-text-muted">
+        <p className="max-w-prose text-sm leading-relaxed text-text-muted">
           Copies a tag's identity onto a blank tag. You will tap the original first, then a
           blank, and the result is read back to prove it matches.
         </p>

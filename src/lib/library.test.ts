@@ -5,6 +5,7 @@ import {
   filterSnapshots,
   formatCapturedAt,
   hex,
+  searchMatches,
   snapshotDetail,
   snapshotTitle,
   sortSnapshots,
@@ -173,6 +174,29 @@ function snapshot(index: number): Snapshot {
     },
   };
 }
+
+/**
+ * The shared comparison. Snapshots and Drafts each own their fact text; this is
+ * the only place the matching rule is written, so a Draft is found by exactly the
+ * rule a Snapshot is found by.
+ */
+describe("searchMatches", () => {
+  it("is a case-insensitive substring of one item's facts", () => {
+    expect(searchMatches("Front door", "front")).toBe(true);
+    expect(searchMatches("Front door", "FRONT DOOR")).toBe(true);
+    expect(searchMatches("Front door", "back")).toBe(false);
+  });
+
+  it("matches again with the whitespace compacted out of both sides", () => {
+    expect(searchMatches("55 00 84 82 12", "5500848212")).toBe(true);
+    expect(searchMatches("Harbour Works", "harbour   works")).toBe(true);
+  });
+
+  it("matches everything when nothing has been typed", () => {
+    expect(searchMatches("Front door", "")).toBe(true);
+    expect(searchMatches("Front door", "   ")).toBe(true);
+  });
+});
 
 describe("filterSnapshots", () => {
   const library = [LF_SNAPSHOT, HF_SNAPSHOT];

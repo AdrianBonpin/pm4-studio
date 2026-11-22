@@ -1,5 +1,4 @@
 import { useCallback, useState } from "react";
-import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   AlertTriangle,
@@ -14,6 +13,7 @@ import {
 import { Button } from "./ui/Button";
 import { Input } from "./ui/Input";
 import { Notice } from "./ui/Notice";
+import { Segmented, type SegmentedOption } from "./ui/Segmented";
 import { Toggle } from "./ui/Toggle";
 import { Field, Readout, Section } from "./Section";
 import {
@@ -49,6 +49,18 @@ import type { LibraryState } from "../hooks/useLibrary";
 import type { IdentityPreview, LfCard, WriteResult } from "../types";
 
 type Phase = "entry" | "confirm" | "reading" | "replacing" | "writing" | "done";
+
+/**
+ * The two ways to enter an Identity, in the order the switch offers them.
+ *
+ * They are a switch rather than a pair of buttons because they are the same
+ * decision the band pages ask — exactly one of a handful of options, chosen in
+ * place — so they are the same control, and a user learns it once.
+ */
+const ENTRY_OPTIONS: readonly SegmentedOption<AuthorMode>[] = [
+  { value: "parts", label: "Customer, facility, card" },
+  { value: "hex", label: "Five-byte hex" },
+];
 
 /** What a Snapshot save did. A repeat is neither a fault nor a success. */
 type LibraryNote = { tone: NoticeTone; text: string };
@@ -260,17 +272,15 @@ export function AuthorIdentity({ connected, library, onDeviceError }: AuthorIden
     >
       {phase === "entry" && (
         <div className="flex flex-col gap-5">
-          <div className="flex flex-wrap items-center gap-2">
-            <ModeTab active={mode === "parts"} onClick={() => setMode("parts")}>
-              Customer, facility, card
-            </ModeTab>
-            <ModeTab active={mode === "hex"} onClick={() => setMode("hex")}>
-              Five-byte hex
-            </ModeTab>
-          </div>
+          <Segmented
+            label="Identity entry"
+            value={mode}
+            options={ENTRY_OPTIONS}
+            onChange={setMode}
+          />
 
           {mode === "parts" ? (
-            <div className="grid gap-4 sm:grid-cols-3">
+            <div className="grid max-w-2xl gap-4 sm:grid-cols-3">
               {PART_FIELDS.map((field) => (
                 <label key={field.id} className="flex flex-col gap-1.5">
                   <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">
@@ -287,7 +297,7 @@ export function AuthorIdentity({ connected, library, onDeviceError }: AuthorIden
               ))}
             </div>
           ) : (
-            <label className="flex flex-col gap-1.5">
+            <label className="flex max-w-sm flex-col gap-1.5">
               <span className="text-[11px] uppercase tracking-[0.12em] text-text-muted">
                 Five-byte Identity
               </span>
@@ -485,31 +495,5 @@ export function AuthorIdentity({ connected, library, onDeviceError }: AuthorIden
         </div>
       )}
     </Section>
-  );
-}
-
-/** One of the two ways to enter an Identity. A tab, not a toggle: it is a mode. */
-function ModeTab({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs transition-colors ${
-        active
-          ? "border-accent/50 bg-accent/10 text-text"
-          : "border-border text-text-muted hover:border-border-hover hover:text-text"
-      }`}
-    >
-      {children}
-    </button>
   );
 }

@@ -2,7 +2,7 @@
 
 **What to build:** Settings → Diagnostics → Capability limits tells the user that this build cannot do two things it does. The *NDEF messages* entry says NDEF is "not readable or writable today" and that "the NTAG commands that carry NDEF have never answered on this Reader"; the *7- and 10-byte UIDs* entry says "only 4-byte UIDs are split out; a longer UID is shown as raw bytes". Since slices 06, 08 and 15 the build reads a tag's message and lists it as Records, writes a Draft to a tag, copies a whole message between two tags, erases one, and decodes a 7-byte UID without a raw fallback. Both entries predate the work that made them false, and 19's sweep could not catch them because it matches source patterns rather than checking whether a sentence is still true.
 
-**Blocked by:** None. The evidence is in this branch: `docs/superpowers/e2e/05-settings-and-tools.md` and `docs/superpowers/e2e/08-findings.md` (finding F1), with `screenshots/settings-diagnostics-limits-980.png` beside `screenshots/hf-read-decoded-980.png`.
+**Blocked by:** None. The evidence is in this branch: `docs/superpowers/e2e/05-settings-and-tools.md` and `docs/superpowers/e2e/08-findings.md` (finding F1), with `screenshots/settings-diagnostics-limits-before-980.png` beside `screenshots/hf-read-decoded-before-980.png` — the pair as it stood when the contradiction was raised.
 
 **Seams:**
 - Reader capability limits (existing, `src/lib/readerIdentity.ts`) — catches an entry that contradicts a capability the app ships; misses nothing within its own scope, since the list is the only place these limits are stated.

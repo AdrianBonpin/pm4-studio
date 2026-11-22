@@ -10,6 +10,7 @@
  * needs. The encoded size comes from `./ndef`, which owns the codec.
  */
 
+import { searchMatches } from "./library";
 import { recordsByteLength } from "./ndef";
 
 /** The fields one Text Record carries. */
@@ -179,6 +180,76 @@ export interface DraftHandoff {
 export function draftNameFromRead(identity: string): string {
   const named = identity.trim();
   return named === "" ? "Read tag" : named;
+}
+
+/**
+ * The Draft's own fact text: its name, its id, and the values authored inside
+ * its Records.
+ *
+ * A Draft and a Snapshot hold different facts, so each owns the string its
+ * Search reads. The comparison itself is not here — `searchMatches` in
+ * `./library` is the one rule, and calling it is what keeps this from being a
+ * second copy of it.
+ *
+ * A Record this build cannot encode still contributes the fields it has, so a
+ * Draft with a broken Record is still findable by everything that is whole.
+ */
+function searchableText(draft: Draft): string {
+  const parts: string[] = [draft.name, draft.id];
+  for (const record of draft.records) parts.push(...authoredValues(record));
+  return parts.join(" ");
+}
+
+/** The values the user typed into one Record. */
+function authoredValues(record: DraftRecord): string[] {
+  switch (record.kind) {
+    case "text":
+      return [record.fields.text];
+    case "url":
+      return [record.fields.url];
+    case "phone":
+      return [record.fields.number];
+    case "email":
+      return [record.fields.address];
+    case "contact":
+      return [
+        record.fields.name,
+        record.fields.organization,
+        record.fields.phone,
+        record.fields.email,
+      ];
+    case "sms":
+      return [record.fields.number, record.fields.message];
+    case "location":
+      return [record.fields.latitude, record.fields.longitude];
+    case "wifi":
+      return [record.fields.ssid, record.fields.networkKey];
+    case "bluetooth":
+      return [record.fields.address];
+    case "mime":
+    case "external":
+      return [record.fields.type];
+    default:
+      // A Draft written by a newer build may hold a kind this one cannot read,
+      // and an unknown Record must not make the Draft unfindable.
+      return [];
+  }
+}
+
+/**
+ * Whether a Draft answers the query: its name, its id, or anything authored
+ * inside its Records.
+ */
+export function draftMatches(draft: Draft, query: string): boolean {
+  return searchMatches(searchableText(draft), query);
+}
+
+/** The Drafts that answer the query, in the order they were given. */
+export function filterDrafts(drafts: readonly Draft[], query: string): Draft[] {
+  // Nothing typed: hand back the very array the mode holds, so an empty search
+  // costs nothing at all — and nothing is reordered by having been searched.
+  if (query.trim().length === 0) return drafts as Draft[];
+  return drafts.filter((draft) => draftMatches(draft, query));
 }
 
 export interface DraftsView {

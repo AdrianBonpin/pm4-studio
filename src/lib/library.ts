@@ -168,9 +168,30 @@ export function formatCapturedAt(iso: string, now: number = Date.now()): string 
  * one pass per keystroke over entries that are reused, never rebuilt. The
  * library file is only read again when it changes on disk, so typing in the
  * search field costs nothing but comparisons.
+ *
+ * The comparison is only here once. `searchMatches` is the app's one Search
+ * rule, and a module whose items hold different facts — the Drafts filter, which
+ * searches a Draft by its name, its id and the values authored inside its
+ * Records — owns only its fact text and calls this.
  * ------------------------------------------------------------------------- */
 
 const WHITESPACE = /\s+/g;
+
+/**
+ * Whether one item's fact text answers the query.
+ *
+ * A case-insensitive substring, and again with the whitespace compacted out of
+ * both sides, so bytes written without their spaces still match. The caller owns
+ * the facts; this owns the comparison, and there is no second copy of it.
+ */
+export function searchMatches(factText: string, query: string): boolean {
+  const needle = query.trim().toLowerCase();
+  if (needle.length === 0) return true;
+  const text = factText.toLowerCase();
+  if (text.includes(needle)) return true;
+  const compact = needle.replace(WHITESPACE, "");
+  return compact.length > 0 && text.replace(WHITESPACE, "").includes(compact);
+}
 
 /** Everything about a Snapshot the user may be typing at, in one string. */
 function searchableText(snapshot: Snapshot): string {
@@ -188,7 +209,7 @@ function searchableText(snapshot: Snapshot): string {
     );
   }
   if (snapshot.hf) parts.push(snapshot.hf.uid, snapshot.hf.raw);
-  return parts.join(" ").toLowerCase();
+  return parts.join(" ");
 }
 
 /**
@@ -197,12 +218,7 @@ function searchableText(snapshot: Snapshot): string {
  * the spaces between them.
  */
 export function snapshotMatches(snapshot: Snapshot, query: string): boolean {
-  const needle = query.trim().toLowerCase();
-  if (needle.length === 0) return true;
-  const text = searchableText(snapshot);
-  if (text.includes(needle)) return true;
-  const compact = needle.replace(WHITESPACE, "");
-  return compact.length > 0 && text.replace(WHITESPACE, "").includes(compact);
+  return searchMatches(searchableText(snapshot), query);
 }
 
 /** The Snapshots that answer the query, in the order they were given. */
